@@ -85,6 +85,13 @@ jobs:
         if: needs.check-changes.outputs.db_changed == 'true' || github.event.inputs.run_migrations == 'true'
         uses: Swatinem/rust-cache@v2
 
+      - name: Install PostgreSQL client library
+        if: needs.check-changes.outputs.db_changed == 'true' || github.event.inputs.run_migrations == 'true'
+        run: |
+          echo "📦 Installing libpq-dev..."
+          sudo apt-get update
+          sudo apt-get install -y libpq-dev
+
       - name: Run Database Migrations
         if: needs.check-changes.outputs.db_changed == 'true' || github.event.inputs.run_migrations == 'true'
         run: |
