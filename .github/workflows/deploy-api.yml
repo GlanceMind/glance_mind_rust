@@ -1,0 +1,77 @@
+name: Deploy API
+
+on:
+  # Manual trigger
+  workflow_dispatch:
+
+  # Auto trigger on push to release branches
+  push:
+    branches:
+      - "release**"
+    tags:
+      - "release**"
+    # Only trigger when api or db changes
+    paths:
+      - "crates/api/**"
+      - "crates/db/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+jobs:
+  deploy:
+    name: Deploy to Prod
+    runs-on: [self-hosted, prod]
+    environment: prod
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create .env file
+        working-directory: crates/api
+        run: |
+          echo "PORT=${{ vars.PORT }}" >> .env
+          echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> .env
+          echo "JWT_TTL_IN_MINUTES=${{ vars.JWT_TTL_IN_MINUTES }}" >> .env
+          echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" >> .env
+          echo "AGENT_API_KEY=${{ secrets.AGENT_API_KEY }}" >> .env
+          echo "AGENT_BASE_URL=${{ secrets.AGENT_BASE_URL }}" >> .env
+          echo "LAOZHANG_API_KEY=${{ secrets.LAOZHANG_API_KEY }}" >> .env
+          echo "TIKHUB_API_KEY=${{ secrets.TIKHUB_API_KEY }}" >> .env
+          echo "TIKHUB_BASE_URL=${{ secrets.TIKHUB_BASE_URL }}" >> .env
+          echo "RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}" >> .env
+          echo "TURNSTILE_SECRET_KEY=${{ secrets.TURNSTILE_SECRET_KEY }}" >> .env
+          echo "RUN_MIGRATIONS=false" >> .env
+
+      - name: Deploy with Docker Compose (optimized for minimal downtime)
+        working-directory: crates/api
+        run: |
+          # Try to use docker-compose (v1/standalone) or fall back to docker compose (v2 plugin)
+          if command -v docker-compose &> /dev/null; then
+            COMPOSE_CMD="docker-compose"
+          else
+            COMPOSE_CMD="docker compose"
+          fi
+
+          echo "Using compose command: $COMPOSE_CMD"
+
+          # Export buildx builder for docker-compose
+          export DOCKER_BUILDKIT=1
+          export COMPOSE_DOCKER_CLI_BUILD=1
+
+          # Step 1: Build the new image first (while old service is still running)
+          echo "🔨 Building new Docker image..."
+          $COMPOSE_CMD -f docker-compose.prod.yml build --build-arg BUILDKIT_INLINE_CACHE=1
+
+          # Step 2: Stop and remove old containers (quick operation)
+          echo "🛑 Stopping old containers..."
+          $COMPOSE_CMD -f docker-compose.prod.yml down
+
+          # Step 3: Start new containers immediately with the pre-built image
+          echo "🚀 Starting new containers..."
+          $COMPOSE_CMD -f docker-compose.prod.yml up -d
+
+          echo "✅ Deployment complete!"

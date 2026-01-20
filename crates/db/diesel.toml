@@ -1,0 +1,8 @@
+# Diesel CLI configuration
+# See https://diesel.rs/guides/configuring-diesel-cli
+
+[print_schema]
+file = "src/schema.rs"
+
+[migrations_directory]
+dir = "migrations"

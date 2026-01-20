@@ -1,0 +1,1 @@
+-- This migration is idempotent, no need to revert

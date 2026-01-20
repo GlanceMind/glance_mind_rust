@@ -1,0 +1,130 @@
+name: Database Migration
+
+on:
+  push:
+    branches:
+      - main
+      - release/*
+    paths:
+      - 'migrations/**'
+      - 'src/schema.rs'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'migrations/**'
+      - 'src/schema.rs'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Validate migrations can be compiled
+  validate:
+    name: Validate Migrations
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+      
+      - name: Install diesel_cli
+        run: cargo install diesel_cli --no-default-features --features postgres
+      
+      - name: Run migrations on test database
+        env:
+          DATABASE_URL: postgres://test:test@localhost:5432/test_db
+        run: |
+          diesel setup
+          diesel migration run
+          echo "✓ All migrations applied successfully"
+      
+      - name: Validate schema
+        env:
+          DATABASE_URL: postgres://test:test@localhost:5432/test_db
+        run: |
+          diesel print-schema > /tmp/db_schema.rs
+          if diff -q src/schema.rs /tmp/db_schema.rs > /dev/null; then
+            echo "✓ Schema is in sync"
+          else
+            echo "✗ Schema mismatch! Run 'diesel print-schema > src/schema.rs' and commit"
+            diff src/schema.rs /tmp/db_schema.rs || true
+            exit 1
+          fi
+
+  # Deploy to staging
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.ref == 'refs/heads/main' || github.event.inputs.environment == 'staging'
+    environment: staging
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+      
+      - name: Install diesel_cli
+        run: cargo install diesel_cli --no-default-features --features postgres
+      
+      - name: Run migrations on staging
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+        run: |
+          echo "Running migrations on staging..."
+          diesel migration run
+          echo "✓ Staging migrations completed"
+
+  # Deploy to production (manual trigger or release branch)
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: validate
+    if: startsWith(github.ref, 'refs/heads/release/') || github.event.inputs.environment == 'production'
+    environment: production
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+      
+      - name: Install diesel_cli
+        run: cargo install diesel_cli --no-default-features --features postgres
+      
+      - name: Run migrations on production
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        run: |
+          echo "Running migrations on production..."
+          diesel migration run
+          echo "✓ Production migrations completed"

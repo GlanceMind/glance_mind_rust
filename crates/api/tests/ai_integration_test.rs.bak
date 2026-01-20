@@ -1,0 +1,137 @@
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
+use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
+use glance_mind_api::app;
+use glance_mind_api::config::database::Database;
+use serde_json::Value;
+use std::sync::{Arc, Once};
+use tower::ServiceExt;
+
+static INIT: Once = Once::new();
+
+pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
+
+fn run_migrations(conn: &mut impl MigrationHarness<diesel::pg::Pg>) {
+    INIT.call_once(|| {
+        conn.run_pending_migrations(MIGRATIONS)
+            .expect("Failed to run migrations");
+    });
+}
+
+#[tokio::test]
+async fn test_ai_generate_endpoint() {
+    // Load environment variables
+    dotenv::dotenv().ok();
+
+    // Ensure we have some API key set for the singleton to initialize without panic
+    // If .env is loaded these will be overwritten/ignored if set using std::env::set_var potentially,
+    // but the singleton initializes lazily.
+    // If real keys are in .env, they will be used. If not, we set dummy ones to avoid startup panic,
+    // though the request might fail if the dummy key is invalid for a real URL.
+    if std::env::var("AGENT_API_KEY").is_err() {
+        std::env::set_var("AGENT_API_KEY", "dummy_key");
+        // Use a non-routable IP to fail fast if we are just testing interface,
+        // OR rely on the fact that we might want real connectivity if the user provided keys.
+        // Given the previous task was "test connectivity", let's assume if keys are present we strive for success,
+        // otherwise we expect failure or handle it.
+        // PROCEEDING ASSUMPTION: User has keys in .env as per previous context.
+    }
+
+    let db = Arc::new(Database::new());
+    let pool = &db.pool;
+    let mut conn = pool.get().expect("Failed to get DB connection");
+    run_migrations(&mut conn);
+
+    let app = app(db);
+
+    // 1. Auth: Register + Login
+    let email = format!("ai_test_{}@example.com", uuid::Uuid::new_v4());
+    let username = format!(
+        "ai_{}",
+        &uuid::Uuid::new_v4().to_string().replace("-", "")[..10]
+    );
+    let password = "TestPassword123!";
+
+    // Register
+    let reg_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/auth/register")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "email": email,
+                "username": username,
+                "password": password
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let _ = app.clone().oneshot(reg_req).await.unwrap();
+
+    // Login
+    let login_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/auth/auth")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "identifier": email,
+                "password": password
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let login_res = app.clone().oneshot(login_req).await.unwrap();
+    let body_bytes = hyper::body::to_bytes(login_res.into_body()).await.unwrap();
+    let token_json: Value = serde_json::from_slice(&body_bytes).unwrap();
+    let token = token_json["token"].as_str().unwrap();
+    let auth_header = format!("Bearer {}", token);
+
+    // 2. Call AI Generate Endpoint
+    // We use "PERSONA" type which constructs a specific prompt
+    let payload = serde_json::json!({
+        "platform": "Twitter",
+        "region": "US",
+        "product_description": "A new AI tool",
+        "generation_type": "PERSONA"
+    });
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/ai/generate")
+        .header("content-type", "application/json")
+        .header("Authorization", &auth_header)
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+
+    let res = app.clone().oneshot(req).await.unwrap();
+    let status = res.status();
+
+    if status == StatusCode::OK {
+        // Verification success
+        let body_bytes = hyper::body::to_bytes(res.into_body()).await.unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        println!("AI Response: {:?}", json);
+        assert!(json["content"].is_string());
+    } else {
+        // If it fails (e.g. key invalid, network issue), print payload for debugging
+        // This makes the test robust: it asserts the *endpoint* is reachable and handles the request,
+        // even if the upstream AI provider errors out (which returns 500 INTERNAL_SERVER_ERROR currently).
+        // Ideally we should distinguish between "App Logic Error" vs "Upstream Error".
+        // The handler currently maps errors to 500.
+        let body_bytes = hyper::body::to_bytes(res.into_body()).await.unwrap();
+        println!(
+            "Request failed with status: {} \nBody: {:?}",
+            status,
+            String::from_utf8_lossy(&body_bytes)
+        );
+
+        // Failing the test if it's not a success is likely desired behavior for "integration test"
+        // IF the environment is correctly set up.
+        // Assuming the user's environment IS set up (since they just ran a connectivity test),
+        // we assert OK.
+        assert_eq!(status, StatusCode::OK, "AI Endpoint should return 200 OK");
+    }
+}

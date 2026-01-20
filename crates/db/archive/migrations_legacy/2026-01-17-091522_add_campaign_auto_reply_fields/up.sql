@@ -1,0 +1,2 @@
+ALTER TABLE gm_campaigns ADD COLUMN auto_reply_comments BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE gm_campaigns ADD COLUMN auto_reply_post BOOLEAN NOT NULL DEFAULT TRUE;

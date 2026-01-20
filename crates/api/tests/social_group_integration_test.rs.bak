@@ -1,0 +1,113 @@
+use axum::{body::Body, http::Request};
+use glance_mind_api::app;
+use glance_mind_api::config::database::Database;
+use glance_mind_api::config::parameter;
+// Remove unused imports
+use serde_json::{json, Value};
+use std::sync::Arc;
+use tower::ServiceExt;
+
+#[tokio::test]
+async fn test_social_groups_lifecycle() {
+    parameter::init();
+    let db = Arc::new(Database::new());
+    let app = app(db.clone());
+
+    // 1. Create a user and get token (Mocking this part or using a helper if available,
+    //    but for now we might need to rely on existing auth flows or mock auth)
+    //    Since setting up full auth in test is complex without helpers,
+    //    I'll assume we can use a known user or skip auth if possible,
+    //    BUT the routes are protected.
+    //    Let's check if we can register a user.
+
+    let email = format!("test_group_{}@example.com", uuid::Uuid::new_v4());
+    let username = format!("group_{}", &uuid::Uuid::new_v4().to_string().replace("-", "")[..10]);
+    let register_payload = json!({
+        "email": email,
+        "username": username,
+        "password": "password123"
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/auth/register")
+                .method("POST")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&register_payload).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        response.status().is_success(),
+        "Register failed: {}",
+        response.status()
+    );
+
+    // 2. Login to get token
+    let login_payload = json!({
+        "identifier": email,
+        "password": "password123"
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/auth/auth")
+                .method("POST")
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_string(&login_payload).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        response.status().is_success(),
+        "Login failed: {}",
+        response.status()
+    );
+    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let token_res: Value = serde_json::from_slice(&body).unwrap();
+    let token = token_res["token"]
+        .as_str()
+        .expect("Token not found in login response")
+        .to_string();
+    let auth_header = format!("Bearer {}", token);
+
+    // 3. Create Group using /api/v1/social-groups
+    let create_payload = json!({
+        "platform_id": 1,
+        "group_name": "Integration Test Group"
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/social-groups")
+                .method("POST")
+                .header("Content-Type", "application/json")
+                .header("Authorization", &auth_header)
+                .body(Body::from(serde_json::to_string(&create_payload).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        response.status().is_success(),
+        "Create Group failed: {}",
+        response.status()
+    );
+    println!(
+        "SUCCESS: /api/v1/social-groups responded with {}",
+        response.status()
+    );
+}

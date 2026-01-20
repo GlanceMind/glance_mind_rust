@@ -1,0 +1,56 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test
+    runs-on: self-hosted
+    services:
+      db:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: aihub_user
+          POSTGRES_PASSWORD: aihub_password
+          POSTGRES_DB: aihub_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    environment: ci-env
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check Formatting
+        run: cargo fmt -- --check
+
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+
+      - name: Run Tests
+        run: cargo test --verbose
+        env:
+          DATABASE_URL: postgres://aihub_user:aihub_password@localhost:5432/aihub_db
+          RUST_BACKTRACE: 1
+          JWT_SECRET: ${{ vars.JWT_SECRET }}
+          JWT_TTL_IN_MINUTES: ${{ vars.JWT_TTL_IN_MINUTES }}
+          PORT: ${{ vars.PORT }}

@@ -1,0 +1,45 @@
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: aihub_db
+    restart: always
+    environment:
+      POSTGRES_USER: aihub_user
+      POSTGRES_PASSWORD: aihub_password
+      POSTGRES_DB: aihub_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations/db_schema.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aihub_user -d aihub_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aihub_backend
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgres://aihub_user:aihub_password@db:5432/aihub_db
+      PORT: 8000
+      JWT_SECRET: your_jwt_secret_key
+      # LaoZhang API Configuration (required for video generation)
+      LAOZHANG_BASE_URL: ${LAOZHANG_BASE_URL:-https://api.laozhang.ai}
+      LAOZHANG_API_KEY: ${LAOZHANG_API_KEY}
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY}
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

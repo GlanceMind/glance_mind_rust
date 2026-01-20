@@ -1,0 +1,86 @@
+/**
+ * 视频生成集成测试
+ *
+ * 注意：由于已迁移到 LaoZhang API，完整的集成测试需要通过 API 端点进行
+ * 这里只包含基本的文档和手动测试指南
+ *
+ * 完整的端到端测试应该通过 HTTP 客户端调用实际的 API 端点
+ */
+#[cfg(test)]
+mod video_integration_tests {
+    use glance_mind_api::dto::video_dto::{CreateVideoRequest, VideoOrientation};
+
+    #[test]
+    fn test_create_video_request_structure() {
+        // 测试 CreateVideoRequest 结构是否正确
+        let request = CreateVideoRequest {
+            title: Some("测试视频".to_string()),
+            orientation: VideoOrientation::Landscape,
+            seconds: "10".to_string(),
+            size: "1280x720".to_string(),
+            ai_model_id: Some(1),
+            prompt: Some("一只猫在玩球".to_string()),
+        };
+
+        assert_eq!(request.seconds, "10");
+        assert_eq!(request.size, "1280x720");
+        match request.orientation {
+            VideoOrientation::Landscape => {}
+            _ => panic!("Expected Landscape orientation"),
+        }
+    }
+}
+
+/*
+ * 手动端到端测试步骤：
+ *
+ * 1. 设置环境变量：
+ *    export LAOZHANG_API_KEY="your_token_here"
+ *    export LAOZHANG_BASE_URL="https://api.laozhang.ai"
+ *    export DATABASE_URL="postgres://user:password@localhost:5432/dbname"
+ *
+ * 2. 启动后端服务：
+ *    cargo run
+ *
+ * 3. 使用 curl 或 Postman 测试 API 端点：
+ *
+ *    3.1 创建视频任务（文生视频）:
+ *    curl -X POST http://localhost:8000/api/v1/video/generate \
+ *      -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+ *      -H "Content-Type: application/json" \
+ *      -d '{
+ *        "title": "测试视频",
+ *        "prompt": "一只可爱的猫咪在阳光明媚的花园里玩球",
+ *        "orientation": "landscape",
+ *        "seconds": "10",
+ *        "size": "1280x720",
+ *        "ai_model_id": 1
+ *      }'
+ *
+ *    3.2 创建视频任务（图生视频）:
+ *    curl -X POST http://localhost:8000/api/v1/video/generate \
+ *      -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+ *      -F "title=测试视频" \
+ *      -F "prompt=让这张图片动起来" \
+ *      -F "orientation=landscape" \
+ *      -F "seconds=10" \
+ *      -F "size=1280x720" \
+ *      -F "ai_model_id=1" \
+ *      -F "image=@/path/to/image.jpg"
+ *
+ *    3.3 查询用户任务:
+ *    curl -X GET "http://localhost:8000/api/v1/video/tasks?page=1&page_size=10" \
+ *      -H "Authorization: Bearer YOUR_JWT_TOKEN"
+ *
+ * 4. 启动 Scheduler 观察任务处理：
+ *    cd glance_mind_worker/glance_mind_scheduler
+ *    RUST_LOG=info cargo run
+ *
+ * 5. 观察任务状态更新（每5秒检查一次活跃任务）
+ *
+ * 注意：
+ * - 确保 .env 文件包含正确的 LAOZHANG_API_KEY 和 LAOZHANG_BASE_URL
+ * - 确保数据库已运行并且迁移已执行
+ * - 确保用户钱包有足够的积分
+ * - LaoZhang API 使用异步任务模式：创建任务 -> 查询状态 -> 获取视频
+ */

@@ -1,0 +1,27 @@
+[package]
+name = "glance_mind_db"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Centralized database schema and migration management for GlanceMind"
+
+[dependencies]
+diesel.workspace = true
+diesel_migrations.workspace = true
+dotenvy.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+bigdecimal.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[[bin]]
+name = "db-migrate"
+path = "src/bin/migrate.rs"
+
+[[bin]]
+name = "db-schema"
+path = "src/bin/schema.rs"

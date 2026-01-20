@@ -1,0 +1,73 @@
+[package]
+name = "glance_mind_api"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "GlanceMind API Service"
+
+[dependencies]
+# Internal crates
+glance_mind_db.workspace = true
+
+# Web Framework
+axum.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+
+# Database
+diesel.workspace = true
+r2d2 = "0.8.10"
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Date/Time & UUID
+chrono.workspace = true
+uuid.workspace = true
+bigdecimal.workspace = true
+
+# Environment & Config
+dotenv.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+# Async
+async-trait.workspace = true
+
+# Auth & Security
+jsonwebtoken = "8.3.0"
+bcrypt = "0.14.0"
+rand = "0.9.2"
+base64 = "0.21"
+
+# Validation
+validator = { version = "0.16.1", features = ["derive"] }
+
+# Testing
+mockall = "0.11.4"
+
+# Redis
+redis = "1.0.2"
+
+# HTTP Client
+reqwest = { version = "0.11.22", features = ["json", "multipart"] }
+
+# AI
+rig-core = "0.27.0"
+
+# Utilities
+once_cell = "1.18.0"
+rust_xlsxwriter = "0.82.0"
+resend-rs = "0.20.0-rc.1"
+
+[dev-dependencies]
+tower.workspace = true
+hyper = { version = "0.14", features = ["full"] }
+mime = "0.3.16"
