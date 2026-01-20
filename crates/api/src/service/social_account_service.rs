@@ -2,9 +2,9 @@ use crate::config::database::Database;
 use crate::dto::social_account_dto::{
     CreateSocialAccountDto, SocialAccountDto, UpdateSocialAccountDto,
 };
-use glance_mind_db::entity::social_account::{NewSocialAccount, SocialAccount};
 use crate::error::{api_error::ApiError, business_error::BusinessError};
 use crate::repository::social_account_repository::SocialAccountRepository;
+use glance_mind_db::entity::social_account::{NewSocialAccount, SocialAccount};
 use std::sync::Arc;
 
 #[derive(Clone)]

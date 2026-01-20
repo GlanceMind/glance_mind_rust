@@ -1,8 +1,8 @@
 use crate::api_ok;
-use glance_mind_db::entity::user::User;
 use crate::error::api_error::ApiError;
 use crate::state::user_state::UserState;
 use axum::{extract::Query, response::IntoResponse, Extension};
+use glance_mind_db::entity::user::User;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]

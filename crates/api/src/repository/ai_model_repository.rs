@@ -1,8 +1,8 @@
 use crate::config::database::DBPool;
-use glance_mind_db::entity::ai_model::AiModel;
-use glance_mind_db::schema::gm_ai_models as ai_models;
 use diesel::prelude::*;
 use diesel::result::Error as DieselError;
+use glance_mind_db::entity::ai_model::AiModel;
+use glance_mind_db::schema::gm_ai_models as ai_models;
 
 #[derive(Clone)]
 pub struct AiModelRepository {

@@ -1,8 +1,8 @@
 use crate::config::database::Database;
 use crate::dto::social_account_dto::{CreateSocialGroupDto, SocialGroupDto, UpdateSocialGroupDto};
-use glance_mind_db::entity::social_group::{NewSocialGroup, SocialGroup};
 use crate::error::{api_error::ApiError, business_error::BusinessError};
 use crate::repository::social_group_repository::SocialGroupRepository;
+use glance_mind_db::entity::social_group::{NewSocialGroup, SocialGroup};
 use std::sync::Arc;
 
 #[derive(Clone)]

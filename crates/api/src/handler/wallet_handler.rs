@@ -1,10 +1,10 @@
 use crate::dto::wallet_dto::TopUpRequestDto;
-use glance_mind_db::entity::user::User;
 use crate::error::api_error::ApiError;
 use crate::state::user_state::UserState;
 use crate::{api_result, response::ApiResult};
 use axum::extract::{Path, Query};
 use axum::Extension;
+use glance_mind_db::entity::user::User;
 
 pub async fn get_wallet_balance(
     Extension(user): Extension<User>,

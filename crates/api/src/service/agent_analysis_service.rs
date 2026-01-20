@@ -1,6 +1,4 @@
 use crate::dto::agent_analysis_dto::*;
-use glance_mind_db::entity::campaign::Campaign;
-use glance_mind_db::entity::template::CampaignTemplate;
 use crate::error::{
     api_error::ApiError, business_error::BusinessError, infrastructure_error::InfrastructureError,
 };
@@ -9,6 +7,8 @@ use crate::repository::template_repository::TemplateRepository;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::result::Error as DieselError;
+use glance_mind_db::entity::campaign::Campaign;
+use glance_mind_db::entity::template::CampaignTemplate;
 use once_cell::sync::Lazy;
 use rig::client::CompletionClient;
 use rig::completion::Prompt;

@@ -1,13 +1,13 @@
 use crate::api_ok;
 use crate::dto::google_auth_dto::{GoogleAuthDto, GoogleTokenPayload};
 use crate::dto::user_dto::UserLoginDto;
-use glance_mind_db::entity::login_log::NewLoginLog;
 use crate::error::{api_error::ApiError, request_error::ValidatedRequest, user_error::UserError};
 use crate::repository::login_log_repository::LoginLogRepositoryTrait;
 use crate::repository::user_repository::UserRepositoryTrait;
 use crate::state::auth_state::AuthState;
 use axum::http::HeaderMap;
 use axum::{extract::State, response::IntoResponse};
+use glance_mind_db::entity::login_log::NewLoginLog;
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 
 /// User login endpoint

@@ -1,6 +1,5 @@
 use crate::api_ok;
 use crate::dto::upload_task_dto::{CreateUploadTaskDto, DeviceTaskQueryDto};
-use glance_mind_db::entity::user::User;
 use crate::error::api_error::ApiError;
 use crate::error::request_error::ValidatedRequest;
 use crate::state::user_state::UserState;
@@ -9,6 +8,7 @@ use axum::{
     response::IntoResponse,
     Extension, Json,
 };
+use glance_mind_db::entity::user::User;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]

@@ -1,10 +1,10 @@
 use crate::dto::promo_code_dto::RedeemPromoCodeRequest;
-use glance_mind_db::entity::user::User;
 use crate::error::api_error::ApiError;
 use crate::service::promo_code_service::PromoCodeService;
 use crate::{api_result, response::ApiResult};
 use axum::extract::State;
 use axum::Extension;
+use glance_mind_db::entity::user::User;
 use std::sync::Arc;
 
 /// Redeem promo code

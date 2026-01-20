@@ -1,7 +1,7 @@
-use glance_mind_db::entity::upload_task::{NewUploadTask, UpdateUploadTask, UploadTask};
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::result::Error as DieselError;
+use glance_mind_db::entity::upload_task::{NewUploadTask, UpdateUploadTask, UploadTask};
 
 #[derive(Clone)]
 pub struct UploadTaskRepository {

@@ -1,9 +1,9 @@
 use crate::config::database::DBPool;
-use glance_mind_db::entity::pricing_rule::PricingRule;
-use glance_mind_db::schema::gm_pricing_rules as pricing_rules;
 use diesel::prelude::*;
 use diesel::result::Error as DieselError;
 use diesel::SelectableHelper;
+use glance_mind_db::entity::pricing_rule::PricingRule;
+use glance_mind_db::schema::gm_pricing_rules as pricing_rules;
 
 #[derive(Clone)]
 pub struct PricingRepository {

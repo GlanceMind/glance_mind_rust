@@ -1,15 +1,15 @@
 use crate::config::database::DBPool;
-use glance_mind_db::entity::user_wallet::UserWallet;
-use glance_mind_db::entity::wallet_transaction::{NewWalletTransaction, WalletTransaction};
-use glance_mind_db::schema::{
-    gm_user_wallets as user_wallets, gm_wallet_transactions as wallet_transactions,
-};
 use bigdecimal::BigDecimal;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, PooledConnection};
 use diesel::result::Error as DieselError;
 use diesel::PgConnection as DieselPgConnection;
 use diesel::SelectableHelper;
+use glance_mind_db::entity::user_wallet::UserWallet;
+use glance_mind_db::entity::wallet_transaction::{NewWalletTransaction, WalletTransaction};
+use glance_mind_db::schema::{
+    gm_user_wallets as user_wallets, gm_wallet_transactions as wallet_transactions,
+};
 
 pub type PgConnection = PooledConnection<ConnectionManager<DieselPgConnection>>;
 

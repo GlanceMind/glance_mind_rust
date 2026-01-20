@@ -2,9 +2,9 @@ use crate::config::database::Database;
 use crate::dto::wallet_dto::{
     TopUpRequestDto, TopUpResponseDto, WalletBalanceDto, WalletTransactionDto,
 };
-use glance_mind_db::entity::wallet_transaction::{NewWalletTransaction, WalletTransaction};
 use crate::error::api_error::ApiError;
 use crate::repository::wallet_repository::WalletRepository;
+use glance_mind_db::entity::wallet_transaction::{NewWalletTransaction, WalletTransaction};
 use std::sync::Arc;
 
 #[derive(Clone)]

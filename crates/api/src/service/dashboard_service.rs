@@ -1,10 +1,10 @@
 use crate::config::database::Database;
 use crate::dto::wallet_dto::{OverviewStatsDto, PerformanceDataDto};
 use crate::error::api_error::ApiError;
-use glance_mind_db::schema::{gm_agent_comments, gm_campaigns};
 use bigdecimal::BigDecimal;
 use diesel::dsl::sum;
 use diesel::prelude::*;
+use glance_mind_db::schema::{gm_agent_comments, gm_campaigns};
 use std::sync::Arc;
 
 #[derive(Clone)]

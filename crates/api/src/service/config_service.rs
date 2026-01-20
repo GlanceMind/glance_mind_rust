@@ -1,9 +1,9 @@
 use crate::config::database::Database;
-use glance_mind_db::entity::ai_model::AiModel;
-use glance_mind_db::entity::pricing_rule::PricingRule;
 use crate::repository::ai_model_repository::AiModelRepository;
 use crate::repository::pricing_repository::PricingRepository;
 use diesel::result::Error as DieselError;
+use glance_mind_db::entity::ai_model::AiModel;
+use glance_mind_db::entity::pricing_rule::PricingRule;
 use std::sync::Arc;
 
 #[derive(Clone)]

@@ -1,7 +1,7 @@
-use glance_mind_db::entity::social_group::{NewSocialGroup, SocialGroup};
-use glance_mind_db::schema::gm_social_groups as social_groups;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
+use glance_mind_db::entity::social_group::{NewSocialGroup, SocialGroup};
+use glance_mind_db::schema::gm_social_groups as social_groups;
 
 #[derive(Clone)]
 pub struct SocialGroupRepository {

@@ -1,6 +1,5 @@
 use crate::api_ok;
 use crate::dto::social_account_dto::{CreateSocialAccountDto, UpdateSocialAccountDto};
-use glance_mind_db::entity::user::User;
 use crate::error::api_error::ApiError;
 use crate::state::user_state::UserState;
 use axum::{
@@ -8,6 +7,7 @@ use axum::{
     response::IntoResponse,
     Extension, Json,
 };
+use glance_mind_db::entity::user::User;
 
 pub async fn list_accounts(
     Extension(user): Extension<User>,

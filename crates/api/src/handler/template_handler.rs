@@ -1,10 +1,10 @@
 use crate::dto::template_dto::{TemplateCreateDto, TemplateUpdateDto};
-use glance_mind_db::entity::user::User;
 use crate::error::api_error::ApiError;
 use crate::error::request_error::ValidatedRequest;
 use crate::state::user_state::UserState;
 use crate::{api_result, response::ApiResult};
 use axum::extract::{Extension, Path, Query, State};
+use glance_mind_db::entity::user::User;
 
 pub async fn list_templates(
     State(state): State<UserState>,

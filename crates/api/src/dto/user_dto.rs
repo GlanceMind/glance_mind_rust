@@ -1,5 +1,5 @@
-use glance_mind_db::entity::user::User;
 use chrono::{DateTime, Utc};
+use glance_mind_db::entity::user::User;
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 

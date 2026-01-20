@@ -6,13 +6,13 @@ use crate::dto::laozhang_dto::{CreateVideoFromImageRequest, CreateVideoFromTextR
 use crate::dto::video_dto::{
     CreateVideoRequest, CreateVideoResponse, VideoTaskListResponse, VideoTaskResponse,
 };
-use glance_mind_db::entity::ai_model::AiModel;
-use glance_mind_db::entity::video::NewVideoGenerationTask;
 use crate::error::{api_error::ApiError, business_error::BusinessError};
 use crate::repository::video_repository::VideoRepository;
 use crate::repository::wallet_repository::WalletRepository;
 use crate::service::config_service::ConfigService;
 use crate::service::laozhang_client::LaoZhangClient;
+use glance_mind_db::entity::ai_model::AiModel;
+use glance_mind_db::entity::video::NewVideoGenerationTask;
 
 #[derive(Clone)]
 pub struct VideoService {
@@ -76,8 +76,8 @@ impl VideoService {
         // Validate and get model info
         let ai_model_info = if let Some(model_id) = request.ai_model_id {
             // Validate model ID exists
-            use glance_mind_db::schema::gm_ai_models::dsl::*;
             use diesel::prelude::*;
+            use glance_mind_db::schema::gm_ai_models::dsl::*;
 
             let mut conn = self.db_pool.get().map_err(|_| {
                 ApiError::InternalServerError("Database connection failed".to_string())
@@ -218,8 +218,8 @@ impl VideoService {
         // Calculate actual cost: pricing_rules.VIDEO_GENERATE * ai_models.cost_multiplier
         // This needs to be consistent with charging_middleware
         use crate::middleware::charging::ActionType;
-        use glance_mind_db::schema::gm_pricing_rules::dsl::*;
         use diesel::prelude::*;
+        use glance_mind_db::schema::gm_pricing_rules::dsl::*;
 
         // Query VIDEO_GENERATE base price
         let base_cost = gm_pricing_rules

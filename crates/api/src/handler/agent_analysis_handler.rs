@@ -1,9 +1,9 @@
 use crate::api_ok;
 use crate::dto::agent_analysis_dto::AgentAnalysisRequest;
-use glance_mind_db::entity::user::User;
 use crate::error::api_error::ApiError;
 use crate::state::user_state::UserState;
 use axum::{extract::State, response::IntoResponse, Extension, Json};
+use glance_mind_db::entity::user::User;
 use validator::Validate;
 
 /// Agent comment analysis endpoint

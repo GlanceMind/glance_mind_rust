@@ -5,13 +5,13 @@ on:
   workflow_dispatch:
     inputs:
       run_migrations:
-        description: 'Run database migrations'
+        description: "Run database migrations"
         required: false
-        default: 'false'
+        default: "false"
         type: choice
         options:
-          - 'false'
-          - 'true'
+          - "false"
+          - "true"
 
   # Auto trigger on push to release branches
   push:
@@ -80,17 +80,17 @@ jobs:
         if: needs.check-changes.outputs.db_changed == 'true' || github.event.inputs.run_migrations == 'true'
         run: |
           echo "🗄️ Running database migrations..."
-          
+
           # Install diesel CLI if not available
           if ! command -v diesel &> /dev/null; then
             echo "Installing diesel_cli..."
             cargo install diesel_cli --no-default-features --features postgres
           fi
-          
+
           # Run migrations
           cd crates/db
           DATABASE_URL="${{ secrets.DATABASE_URL }}" diesel migration run
-          
+
           echo "✅ Migrations completed!"
 
       - name: Deploy with Docker Compose (optimized for minimal downtime)

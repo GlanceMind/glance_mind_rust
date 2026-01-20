@@ -1,9 +1,9 @@
 use crate::dto::user_dto::{UserReadDto, UserUpdatePasswordDto, UserUpdateProfileDto};
-use glance_mind_db::entity::user::User;
 use crate::error::api_error::ApiError;
 use crate::state::user_state::UserState;
 use crate::{api_result, response::ApiResult};
 use axum::Extension;
+use glance_mind_db::entity::user::User;
 use validator::Validate;
 
 pub async fn me(Extension(current_user): Extension<User>) -> ApiResult<impl serde::Serialize> {

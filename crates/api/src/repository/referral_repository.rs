@@ -1,11 +1,11 @@
 use crate::config::database::DBPool;
 use crate::dto::referral_dto::ReferralStatsDto;
-use glance_mind_db::entity::referral::{NewReferral, Referral};
-use glance_mind_db::entity::user::User;
-use glance_mind_db::schema::{gm_referrals, gm_users};
 use bigdecimal::BigDecimal;
 use diesel::prelude::*;
 use diesel::result::Error as DieselError;
+use glance_mind_db::entity::referral::{NewReferral, Referral};
+use glance_mind_db::entity::user::User;
+use glance_mind_db::schema::{gm_referrals, gm_users};
 use std::str::FromStr;
 
 #[derive(Clone)]

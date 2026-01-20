@@ -1,9 +1,9 @@
 use crate::config::database::DBPool;
-use glance_mind_db::entity::login_log::{LoginLog, NewLoginLog};
-use glance_mind_db::schema::gm_login_logs;
 use async_trait::async_trait;
 use diesel::prelude::*;
 use diesel::SelectableHelper;
+use glance_mind_db::entity::login_log::{LoginLog, NewLoginLog};
+use glance_mind_db::schema::gm_login_logs;
 use tokio::task;
 
 #[cfg_attr(test, mockall::automock)]

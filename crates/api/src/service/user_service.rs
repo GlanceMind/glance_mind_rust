@@ -3,7 +3,6 @@ use crate::config::parameter;
 use crate::dto::user_dto::{
     TokenClaimsDto, TokenReadDto, UserAuthResponseDto, UserReadDto, UserRegisterDto,
 };
-use glance_mind_db::entity::user::User;
 use crate::error::db_error::DbError;
 use crate::error::token_error::TokenError;
 use crate::error::user_error::UserError;
@@ -12,6 +11,7 @@ use crate::repository::user_repository::UserRepositoryTrait;
 use crate::repository::wallet_repository::WalletRepository;
 use bigdecimal::BigDecimal;
 use diesel::result::Error as DieselError;
+use glance_mind_db::entity::user::User;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, TokenData, Validation};
 use rand::{distr::Alphanumeric, Rng};
 use std::sync::Arc;
@@ -42,9 +42,9 @@ impl<R: UserRepositoryTrait> UserService<R> {
         payload.validate().map_err(ApiError::BadRequest)?;
 
         // Check if email is verified
+        use diesel::prelude::*;
         use glance_mind_db::entity::email_verification::EmailVerification;
         use glance_mind_db::schema::gm_email_verifications;
-        use diesel::prelude::*;
 
         let mut conn = db
             .pool

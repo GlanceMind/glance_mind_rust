@@ -2,11 +2,11 @@ use crate::config::database::Database;
 use crate::dto::campaign_dto::{
     CampaignCreateDto, CampaignLogDto, CampaignReadDto, CampaignUpdateDto,
 };
-use glance_mind_db::entity::campaign::{Campaign, NewCampaign};
 use crate::error::{api_error::ApiError, business_error::BusinessError};
 use crate::repository::campaign_repository::CampaignRepository;
 use crate::repository::wallet_repository::WalletRepository;
 use diesel::result::Error as DieselError;
+use glance_mind_db::entity::campaign::{Campaign, NewCampaign};
 use std::sync::Arc;
 
 #[derive(Clone)]

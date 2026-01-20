@@ -1,12 +1,12 @@
 use crate::config::database::Database;
 use crate::dto::promo_code_dto::{RedeemPromoCodeRequest, RedeemPromoCodeResponse};
-use glance_mind_db::entity::promo_code::PromoCode;
 use crate::error::api_error::ApiError;
 use crate::repository::wallet_repository::WalletRepository;
-use glance_mind_db::schema::gm_promo_codes;
 use bigdecimal::BigDecimal;
 use chrono::Utc;
 use diesel::prelude::*;
+use glance_mind_db::entity::promo_code::PromoCode;
+use glance_mind_db::schema::gm_promo_codes;
 use std::sync::Arc;
 
 #[derive(Clone)]

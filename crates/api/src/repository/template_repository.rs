@@ -1,8 +1,8 @@
 use crate::config::database::DBPool;
-use glance_mind_db::entity::template::{CampaignTemplate, NewCampaignTemplate};
-use glance_mind_db::schema::gm_campaign_templates as campaign_templates;
 use diesel::prelude::*;
 use diesel::result::Error as DieselError;
+use glance_mind_db::entity::template::{CampaignTemplate, NewCampaignTemplate};
+use glance_mind_db::schema::gm_campaign_templates as campaign_templates;
 
 #[derive(Clone)]
 pub struct TemplateRepository {

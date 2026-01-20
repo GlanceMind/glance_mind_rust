@@ -15,9 +15,9 @@ use axum::{
     Extension,
 };
 
-use glance_mind_db::entity::user::User;
 use crate::error::api_error::ApiError;
 use crate::state::user_state::UserState;
+use glance_mind_db::entity::user::User;
 
 #[derive(Clone, Debug)]
 pub struct ChargingUser {

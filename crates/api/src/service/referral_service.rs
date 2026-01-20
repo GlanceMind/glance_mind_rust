@@ -1,8 +1,8 @@
 use crate::config::database::DBPool;
 use crate::dto::referral_dto::ReferralStatsDto;
-use glance_mind_db::entity::referral::NewReferral;
 use crate::repository::referral_repository::ReferralRepository;
 use bigdecimal::BigDecimal;
+use glance_mind_db::entity::referral::NewReferral;
 use std::str::FromStr;
 
 #[derive(Clone)]

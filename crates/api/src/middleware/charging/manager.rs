@@ -1,10 +1,10 @@
 use super::types::ActionType;
-use glance_mind_db::entity::wallet_transaction::WalletTransaction;
 use crate::error::api_error::ApiError;
 use crate::repository::ai_model_repository::AiModelRepository;
 use crate::repository::pricing_repository::PricingRepository;
 use crate::repository::wallet_repository::WalletRepository;
 use bigdecimal::BigDecimal;
+use glance_mind_db::entity::wallet_transaction::WalletTransaction;
 
 #[derive(Clone)]
 pub struct ChargingManager {

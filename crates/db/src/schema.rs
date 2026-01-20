@@ -1,6 +1,26 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
+    gm_admin_users (id) {
+        id -> Int4,
+        #[max_length = 50]
+        username -> Varchar,
+        #[max_length = 255]
+        email -> Varchar,
+        #[max_length = 255]
+        password_hash -> Varchar,
+        #[max_length = 255]
+        full_name -> Varchar,
+        #[max_length = 20]
+        role -> Varchar,
+        is_active -> Bool,
+        last_login_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
     gm_agent_comments (id) {
         id -> Int4,
         video_db_id -> Int4,
@@ -353,6 +373,36 @@ diesel::table! {
 }
 
 diesel::table! {
+    gm_ai_video_models (id) {
+        id -> Int4,
+        #[max_length = 100]
+        model_key -> Varchar,
+        #[max_length = 255]
+        model_name -> Varchar,
+        #[max_length = 100]
+        provider -> Varchar,
+        description -> Nullable<Text>,
+        features -> Nullable<Jsonb>,
+        cost_per_generation -> Numeric,
+        cost_per_upload -> Nullable<Numeric>,
+        #[max_length = 500]
+        api_endpoint -> Nullable<Varchar>,
+        #[max_length = 50]
+        model_version -> Nullable<Varchar>,
+        max_prompt_length -> Nullable<Int4>,
+        supported_formats -> Nullable<Jsonb>,
+        max_image_size_mb -> Nullable<Int4>,
+        estimated_time_minutes -> Nullable<Int4>,
+        daily_limit -> Nullable<Int4>,
+        is_active -> Bool,
+        is_default -> Bool,
+        sort_order -> Int4,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
     gm_campaign_accounts (id) {
         id -> Int4,
         campaign_id -> Int4,
@@ -429,6 +479,7 @@ diesel::table! {
         author_name -> Nullable<Varchar>,
         processed -> Bool,
         replied -> Bool,
+        like_count -> Nullable<Int4>,
     }
 }
 
@@ -748,6 +799,7 @@ diesel::joinable!(gm_video_generation_tasks -> gm_wallet_transactions (wallet_tr
 diesel::joinable!(gm_wallet_transactions -> gm_users (user_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
+    gm_admin_users,
     gm_agent_comments,
     gm_agent_facebook_comments,
     gm_agent_facebook_posts,
@@ -759,6 +811,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     gm_agent_twitter_tweets,
     gm_agent_videos,
     gm_ai_models,
+    gm_ai_video_models,
     gm_campaign_accounts,
     gm_campaign_templates,
     gm_campaigns,

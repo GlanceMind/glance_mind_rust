@@ -21,7 +21,8 @@ pub use entity::*;
 pub type DbPool = r2d2::Pool<ConnectionManager<PgConnection>>;
 
 /// Embed migrations at compile time
-pub const MIGRATIONS: diesel_migrations::EmbeddedMigrations = diesel_migrations::embed_migrations!();
+pub const MIGRATIONS: diesel_migrations::EmbeddedMigrations =
+    diesel_migrations::embed_migrations!();
 
 /// Establish a single database connection
 pub fn establish_connection() -> PgConnection {
@@ -41,7 +42,9 @@ pub fn create_pool() -> DbPool {
 }
 
 /// Run pending migrations
-pub fn run_migrations(conn: &mut PgConnection) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+pub fn run_migrations(
+    conn: &mut PgConnection,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     use diesel_migrations::MigrationHarness;
     conn.run_pending_migrations(MIGRATIONS)?;
     Ok(())

@@ -1,9 +1,11 @@
 use crate::config::database::DBPool;
-use glance_mind_db::entity::social_account::{NewSocialAccount, SocialAccount, UpdateSocialAccount};
-use glance_mind_db::schema::gm_social_accounts as social_accounts;
 use diesel::prelude::*;
 use diesel::result::Error as DieselError;
 use diesel::SelectableHelper;
+use glance_mind_db::entity::social_account::{
+    NewSocialAccount, SocialAccount, UpdateSocialAccount,
+};
+use glance_mind_db::schema::gm_social_accounts as social_accounts;
 
 #[derive(Clone)]
 pub struct SocialAccountRepository {

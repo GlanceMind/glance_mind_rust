@@ -1,9 +1,9 @@
 use crate::dto::agent_dto::AgentCommentDto;
 use crate::dto::common::PageResponse;
-use glance_mind_db::entity::agent::AgentComment;
-use glance_mind_db::schema::gm_agent_comments;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
+use glance_mind_db::entity::agent::AgentComment;
+use glance_mind_db::schema::gm_agent_comments;
 
 #[derive(Clone)]
 pub struct AgentRepository {

@@ -1,8 +1,8 @@
 use crate::config::database::Database;
-use glance_mind_db::entity::platform::Platform;
-use glance_mind_db::entity::region::Region;
 use crate::repository::platform_repository::PlatformRepository;
 use diesel::result::Error as DieselError;
+use glance_mind_db::entity::platform::Platform;
+use glance_mind_db::entity::region::Region;
 use std::sync::Arc;
 
 #[derive(Clone)]

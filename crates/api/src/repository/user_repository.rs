@@ -1,9 +1,9 @@
 use crate::config::database::DBPool;
-use glance_mind_db::entity::user::User;
-use glance_mind_db::schema::gm_users as users;
 use async_trait::async_trait;
 use diesel::prelude::*;
 use diesel::SelectableHelper;
+use glance_mind_db::entity::user::User;
+use glance_mind_db::schema::gm_users as users;
 // use std::sync::Arc;
 use tokio::task;
 

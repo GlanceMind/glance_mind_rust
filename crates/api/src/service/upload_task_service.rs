@@ -3,13 +3,13 @@ use crate::dto::common::PageResponse;
 use crate::dto::upload_task_dto::{
     CreateUploadTaskDto, DeviceTaskQueryDto, DeviceTaskResponseDto, UploadTaskResponseDto,
 };
-use glance_mind_db::entity::upload_task::{NewUploadTask, UpdateUploadTask};
 use crate::error::db_error::DbError;
 use crate::error::{api_error::ApiError, business_error::BusinessError};
 use crate::repository::social_account_repository::SocialAccountRepository;
 use crate::repository::upload_task_repository::UploadTaskRepository;
 use chrono::Utc;
 use diesel::result::Error as DieselError;
+use glance_mind_db::entity::upload_task::{NewUploadTask, UpdateUploadTask};
 use serde_json::json;
 use std::sync::Arc;
 

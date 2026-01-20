@@ -4,13 +4,13 @@ use crate::dto::email_verification_dto::{
     SendVerificationCodeRequest, SendVerificationCodeResponse, VerifyCodeRequest,
     VerifyCodeResponse,
 };
-use glance_mind_db::entity::email_verification::{EmailVerification, NewEmailVerification};
 use crate::error::{
     api_error::ApiError, business_error::BusinessError, infrastructure_error::InfrastructureError,
 };
-use glance_mind_db::schema::{gm_email_verifications, gm_users};
 use chrono::{Duration, Utc};
 use diesel::prelude::*;
+use glance_mind_db::entity::email_verification::{EmailVerification, NewEmailVerification};
+use glance_mind_db::schema::{gm_email_verifications, gm_users};
 use rand::Rng;
 use resend_rs::types::{CreateEmailBaseOptions, EmailTemplate};
 use resend_rs::Resend;

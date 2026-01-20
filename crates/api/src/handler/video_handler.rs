@@ -7,10 +7,10 @@ use serde::{Deserialize, Serialize};
 use crate::dto::video_dto::{
     CreateVideoRequest, CreateVideoResponse, VideoOrientation, VideoTaskListResponse,
 };
-use glance_mind_db::entity::user::User;
 use crate::error::{api_error::ApiError, business_error::BusinessError};
 use crate::response::api_result::ApiResult;
 use crate::state::user_state::UserState;
+use glance_mind_db::entity::user::User;
 
 #[derive(Debug, Deserialize)]
 pub struct PaginationParams {

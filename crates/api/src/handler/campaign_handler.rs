@@ -1,6 +1,5 @@
 use crate::api_result;
 use crate::dto::campaign_dto::{CampaignCreateDto, CampaignStatusUpdateDto, CampaignUpdateDto};
-use glance_mind_db::entity::user::User;
 use crate::error::api_error::ApiError;
 use crate::response::ApiResult;
 use crate::service::campaign_service::CampaignService;
@@ -8,6 +7,7 @@ use axum::{
     extract::{Path, Query},
     Extension, Json,
 };
+use glance_mind_db::entity::user::User;
 
 pub async fn create_campaign(
     Extension(user): Extension<User>,

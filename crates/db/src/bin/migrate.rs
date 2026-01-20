@@ -17,13 +17,13 @@ fn main() {
     dotenvy::dotenv().ok();
 
     let args: Vec<String> = env::args().collect();
-    
+
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     println!("Connecting to database...");
-    
+
     let mut conn = PgConnection::establish(&database_url)
         .unwrap_or_else(|e| panic!("Error connecting to {}: {}", database_url, e));
-    
+
     println!("Connected successfully!\n");
 
     if args.len() > 1 {
@@ -45,20 +45,22 @@ fn main() {
 
 fn run_migrations(conn: &mut PgConnection) {
     println!("Running pending migrations...\n");
-    
-    let pending = conn.pending_migrations(MIGRATIONS).expect("Failed to get pending migrations");
-    
+
+    let pending = conn
+        .pending_migrations(MIGRATIONS)
+        .expect("Failed to get pending migrations");
+
     if pending.is_empty() {
         println!("No pending migrations. Database is up to date.");
         return;
     }
-    
+
     println!("Pending migrations ({}):", pending.len());
     for migration in &pending {
         println!("  - {}", migration.name());
     }
     println!();
-    
+
     match conn.run_pending_migrations(MIGRATIONS) {
         Ok(applied) => {
             println!("Successfully applied {} migration(s):", applied.len());
@@ -74,26 +76,35 @@ fn run_migrations(conn: &mut PgConnection) {
 }
 
 fn show_status(conn: &mut PgConnection) {
-    let applied = conn.applied_migrations().expect("Failed to get applied migrations");
-    let pending = conn.pending_migrations(MIGRATIONS).expect("Failed to get pending migrations");
-    
+    let applied = conn
+        .applied_migrations()
+        .expect("Failed to get applied migrations");
+    let pending = conn
+        .pending_migrations(MIGRATIONS)
+        .expect("Failed to get pending migrations");
+
     println!("=== Database Migration Status ===\n");
     println!("Applied migrations: {}", applied.len());
     println!("Pending migrations: {}", pending.len());
     println!();
-    
+
     if pending.is_empty() {
         println!("Database schema is up to date!");
     } else {
-        println!("There are {} pending migration(s). Run 'db-migrate' to apply.", pending.len());
+        println!(
+            "There are {} pending migration(s). Run 'db-migrate' to apply.",
+            pending.len()
+        );
     }
 }
 
 fn show_pending(conn: &mut PgConnection) {
-    let pending = conn.pending_migrations(MIGRATIONS).expect("Failed to get pending migrations");
-    
+    let pending = conn
+        .pending_migrations(MIGRATIONS)
+        .expect("Failed to get pending migrations");
+
     println!("=== Pending Migrations ===\n");
-    
+
     if pending.is_empty() {
         println!("No pending migrations.");
     } else {
@@ -104,10 +115,12 @@ fn show_pending(conn: &mut PgConnection) {
 }
 
 fn show_applied(conn: &mut PgConnection) {
-    let applied = conn.applied_migrations().expect("Failed to get applied migrations");
-    
+    let applied = conn
+        .applied_migrations()
+        .expect("Failed to get applied migrations");
+
     println!("=== Applied Migrations ===\n");
-    
+
     if applied.is_empty() {
         println!("No migrations have been applied.");
     } else {

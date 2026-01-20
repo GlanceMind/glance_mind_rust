@@ -1,10 +1,10 @@
 use crate::config::database::DBPool;
-use glance_mind_db::entity::platform::Platform;
-use glance_mind_db::entity::region::Region;
-use glance_mind_db::schema::{gm_platforms as platforms, gm_regions as regions};
 use diesel::prelude::*;
 use diesel::result::Error as DieselError;
 use diesel::SelectableHelper;
+use glance_mind_db::entity::platform::Platform;
+use glance_mind_db::entity::region::Region;
+use glance_mind_db::schema::{gm_platforms as platforms, gm_regions as regions};
 
 #[derive(Clone)]
 pub struct PlatformRepository {

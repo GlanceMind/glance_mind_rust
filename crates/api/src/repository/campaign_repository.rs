@@ -1,9 +1,9 @@
 use crate::config::database::DBPool;
-use glance_mind_db::entity::campaign::{Campaign, NewCampaign};
-use glance_mind_db::schema::gm_campaigns as campaigns;
 use diesel::prelude::*;
 use diesel::result::Error as DieselError;
 use diesel::SelectableHelper;
+use glance_mind_db::entity::campaign::{Campaign, NewCampaign};
+use glance_mind_db::schema::gm_campaigns as campaigns;
 
 #[derive(Clone)]
 pub struct CampaignRepository {
@@ -120,7 +120,9 @@ impl CampaignRepository {
 
     // Get count of videos (total scans) for a campaign
     pub async fn get_total_scans(&self, campaign_id: i32) -> Result<i64, DieselError> {
-        use glance_mind_db::schema::{gm_agent_videos as agent_videos, gm_crawler_tasks as crawler_tasks};
+        use glance_mind_db::schema::{
+            gm_agent_videos as agent_videos, gm_crawler_tasks as crawler_tasks,
+        };
 
         let mut conn = self.pool.get().expect("Connection error");
 
