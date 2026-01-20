@@ -58,7 +58,7 @@ impl UploadTaskStatus {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "init" => Some(UploadTaskStatus::Init),
             "processing" => Some(UploadTaskStatus::Processing),

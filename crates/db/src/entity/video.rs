@@ -97,7 +97,7 @@ impl VideoTaskStatus {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "pending" => Some(VideoTaskStatus::Pending),
             "queued" => Some(VideoTaskStatus::Queued),
