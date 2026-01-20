@@ -3,6 +3,15 @@ name: Deploy API
 on:
   # Manual trigger
   workflow_dispatch:
+    inputs:
+      run_migrations:
+        description: 'Run database migrations'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
   # Auto trigger on push to release branches
   push:
@@ -18,10 +27,32 @@ on:
       - "Cargo.lock"
 
 jobs:
+  # Check if migrations directory changed
+  check-changes:
+    name: Check for DB changes
+    runs-on: ubuntu-latest
+    outputs:
+      db_changed: ${{ steps.check.outputs.db_changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Check for db changes
+        id: check
+        run: |
+          if git diff --name-only HEAD~1 HEAD | grep -q "^crates/db/migrations/"; then
+            echo "db_changed=true" >> $GITHUB_OUTPUT
+            echo "Database migrations changed"
+          else
+            echo "db_changed=false" >> $GITHUB_OUTPUT
+            echo "No database migration changes"
+          fi
+
   deploy:
     name: Deploy to Prod
     runs-on: [self-hosted, prod]
     environment: prod
+    needs: check-changes
 
     steps:
       - name: Checkout Code
@@ -44,7 +75,23 @@ jobs:
           echo "TIKHUB_BASE_URL=${{ secrets.TIKHUB_BASE_URL }}" >> .env
           echo "RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}" >> .env
           echo "TURNSTILE_SECRET_KEY=${{ secrets.TURNSTILE_SECRET_KEY }}" >> .env
-          echo "RUN_MIGRATIONS=false" >> .env
+
+      - name: Run Database Migrations
+        if: needs.check-changes.outputs.db_changed == 'true' || github.event.inputs.run_migrations == 'true'
+        run: |
+          echo "🗄️ Running database migrations..."
+          
+          # Install diesel CLI if not available
+          if ! command -v diesel &> /dev/null; then
+            echo "Installing diesel_cli..."
+            cargo install diesel_cli --no-default-features --features postgres
+          fi
+          
+          # Run migrations
+          cd crates/db
+          DATABASE_URL="${{ secrets.DATABASE_URL }}" diesel migration run
+          
+          echo "✅ Migrations completed!"
 
       - name: Deploy with Docker Compose (optimized for minimal downtime)
         working-directory: crates/api
