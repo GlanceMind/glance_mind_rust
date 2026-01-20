@@ -16,9 +16,10 @@ on:
   # Auto trigger on push to release branches
   push:
     branches:
-      - "release**"
+      - "release/**"
+      - "main"
     tags:
-      - "release**"
+      - "release/**"
     # Only trigger when api or db changes
     paths:
       - "crates/api/**"
