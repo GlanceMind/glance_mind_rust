@@ -7,6 +7,7 @@ pub mod crawler_service;
 pub(crate) mod dashboard_service;
 pub mod email_verification_service;
 pub mod laozhang_client;
+pub mod notification_service;
 pub mod platform_service;
 pub mod promo_code_service;
 pub mod referral_service;

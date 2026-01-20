@@ -752,6 +752,42 @@ diesel::table! {
 }
 
 diesel::joinable!(gm_agent_comments -> gm_agent_videos (video_db_id));
+diesel::table! {
+    gm_notifications (id) {
+        id -> Int4,
+        #[max_length = 20]
+        notification_type -> Varchar,
+        #[max_length = 255]
+        title -> Varchar,
+        #[max_length = 255]
+        title_zh -> Nullable<Varchar>,
+        description -> Nullable<Text>,
+        description_zh -> Nullable<Text>,
+        #[max_length = 500]
+        link -> Nullable<Varchar>,
+        #[max_length = 100]
+        link_text -> Nullable<Varchar>,
+        #[max_length = 100]
+        link_text_zh -> Nullable<Varchar>,
+        important -> Nullable<Bool>,
+        published_at -> Nullable<Timestamptz>,
+        expires_at -> Nullable<Timestamptz>,
+        created_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    gm_user_notification_reads (id) {
+        id -> Int4,
+        user_id -> Int4,
+        notification_id -> Int4,
+        read_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::joinable!(gm_user_notification_reads -> gm_users (user_id));
+diesel::joinable!(gm_user_notification_reads -> gm_notifications (notification_id));
+
 diesel::joinable!(gm_agent_comments -> gm_campaigns (campaign_id));
 diesel::joinable!(gm_agent_facebook_comments -> gm_agent_facebook_posts (post_db_id));
 diesel::joinable!(gm_agent_facebook_comments -> gm_campaigns (campaign_id));
@@ -820,6 +856,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     gm_crawler_tasks,
     gm_email_verifications,
     gm_login_logs,
+    gm_notifications,
     gm_platforms,
     gm_pricing_rules,
     gm_promo_codes,
@@ -829,6 +866,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     gm_social_accounts,
     gm_social_groups,
     gm_upload_tasks,
+    gm_user_notification_reads,
     gm_user_wallets,
     gm_users,
     gm_video_generation_tasks,

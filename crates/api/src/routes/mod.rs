@@ -7,6 +7,7 @@ pub(crate) mod config;
 pub(crate) mod crawler;
 pub(crate) mod dashboard;
 pub(crate) mod email_verification;
+pub mod notification;
 pub(crate) mod promo_code;
 pub mod public;
 pub(crate) mod register;

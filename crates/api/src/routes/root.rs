@@ -247,6 +247,18 @@ pub fn routes(db_conn: Arc<Database>) -> Router {
                     )
                     .with_state(user_state.clone()),
             )
+            .nest(
+                "/notifications",
+                crate::routes::notification::notification_routes(db_conn.clone())
+                    .layer(
+                        ServiceBuilder::new()
+                            .layer(middleware::from_fn_with_state(
+                                user_state.clone(),
+                                auth_middleware::auth,
+                            ))
+                            .layer(axum::Extension(user_state.clone())),
+                    ),
+            )
             .merge(Router::new().route("/health", get(|| async { "Healthy..." })))
     };
 
