@@ -5,7 +5,8 @@
 .PHONY: help db-up db-down db-restart db-logs db-shell \
         migrate migrate-new migrate-status schema-sync schema-export \
         build test check clippy fmt clean \
-        dev api-up api-down api-logs \
+        dev dev-down dev-restart dev-logs \
+        api-up api-down api-logs \
         setup all
 
 # Default target
@@ -43,7 +44,7 @@ help: ## Show this help message
 	@grep -E '^api-[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(CYAN)%-20s$(RESET) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(GREEN)Development Commands:$(RESET)"
-	@grep -E '^(dev|setup|all):.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(CYAN)%-20s$(RESET) %s\n", $$1, $$2}'
+	@grep -E '^(dev|dev-[a-zA-Z_-]+|setup|all):.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(CYAN)%-20s$(RESET) %s\n", $$1, $$2}'
 
 # ============================================================================
 # Database Commands
@@ -184,14 +185,47 @@ api-run: ## Run API locally (without docker)
 # Development Commands
 # ============================================================================
 
-dev: db-up migrate ## Start development environment (database + migrations)
-	@echo "$(GREEN)Development environment ready!$(RESET)"
+dev: ## Start full development environment (database + backend + migrations)
+	@echo "$(GREEN)Starting development environment...$(RESET)"
+	cd crates/api && docker-compose up -d
+	@echo "$(GREEN)Waiting for database to be healthy...$(RESET)"
+	@until docker exec $(DB_CONTAINER) pg_isready -U aihub_user -d aihub_db > /dev/null 2>&1; do \
+		sleep 1; \
+	done
+	@echo "$(GREEN)Running migrations...$(RESET)"
+	cd crates/db && DATABASE_URL=$(DATABASE_URL) diesel migration run || true
+	@echo ""
+	@echo "$(GREEN)========================================$(RESET)"
+	@echo "$(GREEN)Development environment is ready!$(RESET)"
+	@echo "$(GREEN)========================================$(RESET)"
+	@echo ""
+	@echo "Services:"
+	@echo "  - Database: localhost:5432"
+	@echo "  - API:      http://localhost:8000"
+	@echo ""
+	@echo "Commands:"
+	@echo "  - View logs:    make dev-logs"
+	@echo "  - Stop:         make dev-down"
+	@echo "  - Restart:      make dev-restart"
+
+dev-down: ## Stop development environment
+	@echo "$(YELLOW)Stopping development environment...$(RESET)"
+	cd crates/api && docker-compose down
+
+dev-restart: ## Restart development environment
+	@echo "$(YELLOW)Restarting development environment...$(RESET)"
+	$(MAKE) dev-down
+	$(MAKE) dev
+
+dev-logs: ## Show all service logs
+	cd crates/api && docker-compose logs -f
+
+dev-db-only: db-up migrate ## Start only database (for local API development)
+	@echo "$(GREEN)Database ready!$(RESET)"
 	@echo ""
 	@echo "Database: $(DATABASE_URL)"
 	@echo ""
-	@echo "Next steps:"
-	@echo "  - Run API:    make api-run"
-	@echo "  - Run tests:  make test"
+	@echo "Run API locally: make api-run"
 
 setup: ## Initial project setup
 	@echo "$(GREEN)Setting up project...$(RESET)"
