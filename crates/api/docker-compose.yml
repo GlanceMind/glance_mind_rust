@@ -43,3 +43,5 @@ services:
 
 volumes:
   postgres_data:
+    external: true
+    name: glance_mind_api_postgres_data
