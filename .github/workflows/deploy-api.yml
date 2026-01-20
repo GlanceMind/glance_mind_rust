@@ -76,6 +76,14 @@ jobs:
           echo "RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}" >> .env
           echo "TURNSTILE_SECRET_KEY=${{ secrets.TURNSTILE_SECRET_KEY }}" >> .env
 
+      - name: Install Rust (for migrations)
+        if: needs.check-changes.outputs.db_changed == 'true' || github.event.inputs.run_migrations == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        if: needs.check-changes.outputs.db_changed == 'true' || github.event.inputs.run_migrations == 'true'
+        uses: Swatinem/rust-cache@v2
+
       - name: Run Database Migrations
         if: needs.check-changes.outputs.db_changed == 'true' || github.event.inputs.run_migrations == 'true'
         run: |
