@@ -103,9 +103,14 @@ jobs:
             cargo install diesel_cli --no-default-features --features postgres
           fi
 
+          # Replace host.docker.internal with localhost for non-Docker environment
+          # (GitHub Actions runner runs directly on host, not in Docker)
+          MIGRATION_DB_URL="${{ secrets.DATABASE_URL }}"
+          MIGRATION_DB_URL="${MIGRATION_DB_URL//host.docker.internal/localhost}"
+
           # Run migrations
           cd crates/db
-          DATABASE_URL="${{ secrets.DATABASE_URL }}" diesel migration run
+          DATABASE_URL="$MIGRATION_DB_URL" diesel migration run
 
           echo "✅ Migrations completed!"
 
