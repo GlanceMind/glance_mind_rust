@@ -43,6 +43,93 @@ diesel::table! {
 }
 
 diesel::table! {
+    gm_agent_facebook_comments (id) {
+        id -> Int4,
+        post_db_id -> Int4,
+        campaign_id -> Nullable<Int4>,
+        #[max_length = 255]
+        facebook_comment_id -> Varchar,
+        #[max_length = 255]
+        parent_comment_id -> Nullable<Varchar>,
+        comment_url -> Nullable<Text>,
+        comment_text -> Text,
+        reason -> Nullable<Text>,
+        suggested_reply -> Nullable<Text>,
+        suggested_dm -> Nullable<Text>,
+        suggested_reply_post -> Nullable<Text>,
+        #[max_length = 50]
+        status -> Nullable<Varchar>,
+        #[max_length = 255]
+        comment_user_id -> Nullable<Varchar>,
+        #[max_length = 255]
+        comment_username -> Nullable<Varchar>,
+        comment_user_url -> Nullable<Text>,
+        comment_user_profile_picture -> Nullable<Text>,
+        like_count -> Nullable<Int4>,
+        reply_count -> Nullable<Int4>,
+        threading_depth -> Nullable<Int4>,
+        created_at_ts -> Nullable<Int8>,
+        comment_created_at -> Nullable<Timestamptz>,
+        #[max_length = 255]
+        facebook_post_id -> Nullable<Varchar>,
+        post_url -> Nullable<Text>,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    gm_agent_facebook_posts (id) {
+        id -> Int4,
+        task_id -> Int4,
+        campaign_id -> Nullable<Int4>,
+        #[max_length = 255]
+        facebook_post_id -> Varchar,
+        #[max_length = 50]
+        post_type -> Nullable<Varchar>,
+        url -> Nullable<Text>,
+        message -> Nullable<Text>,
+        message_rich -> Nullable<Text>,
+        timestamp -> Nullable<Int8>,
+        posted_at -> Nullable<Timestamptz>,
+        reactions_count -> Nullable<Int4>,
+        comments_count -> Nullable<Int4>,
+        reshare_count -> Nullable<Int4>,
+        reactions_like -> Nullable<Int4>,
+        reactions_love -> Nullable<Int4>,
+        reactions_haha -> Nullable<Int4>,
+        reactions_wow -> Nullable<Int4>,
+        reactions_sad -> Nullable<Int4>,
+        reactions_angry -> Nullable<Int4>,
+        reactions_care -> Nullable<Int4>,
+        #[max_length = 255]
+        author_id -> Nullable<Varchar>,
+        #[max_length = 255]
+        author_name -> Nullable<Varchar>,
+        author_url -> Nullable<Text>,
+        author_profile_picture_url -> Nullable<Text>,
+        #[max_length = 255]
+        author_title -> Nullable<Varchar>,
+        has_image -> Nullable<Bool>,
+        image_url -> Nullable<Text>,
+        image_width -> Nullable<Int4>,
+        image_height -> Nullable<Int4>,
+        #[max_length = 255]
+        image_id -> Nullable<Varchar>,
+        has_video -> Nullable<Bool>,
+        video_thumbnail -> Nullable<Text>,
+        external_url -> Nullable<Text>,
+        attached_post_url -> Nullable<Text>,
+        #[max_length = 255]
+        comments_id -> Nullable<Varchar>,
+        #[max_length = 255]
+        shares_id -> Nullable<Varchar>,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
     gm_agent_instagram_comments (id) {
         id -> Int4,
         post_db_id -> Int4,
@@ -667,6 +754,10 @@ diesel::table! {
 
 diesel::joinable!(gm_agent_comments -> gm_agent_videos (video_db_id));
 diesel::joinable!(gm_agent_comments -> gm_campaigns (campaign_id));
+diesel::joinable!(gm_agent_facebook_comments -> gm_agent_facebook_posts (post_db_id));
+diesel::joinable!(gm_agent_facebook_comments -> gm_campaigns (campaign_id));
+diesel::joinable!(gm_agent_facebook_posts -> gm_campaigns (campaign_id));
+diesel::joinable!(gm_agent_facebook_posts -> gm_crawler_tasks (task_id));
 diesel::joinable!(gm_agent_instagram_comments -> gm_agent_instagram_posts (post_db_id));
 diesel::joinable!(gm_agent_instagram_comments -> gm_campaigns (campaign_id));
 diesel::joinable!(gm_agent_instagram_posts -> gm_campaigns (campaign_id));
@@ -712,6 +803,8 @@ diesel::joinable!(gm_wallet_transactions -> gm_users (user_id));
 diesel::allow_tables_to_appear_in_same_query!(
     gm_admin_users,
     gm_agent_comments,
+    gm_agent_facebook_comments,
+    gm_agent_facebook_posts,
     gm_agent_instagram_comments,
     gm_agent_instagram_posts,
     gm_agent_reddit_comments,

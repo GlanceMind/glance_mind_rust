@@ -185,37 +185,22 @@ api-run: ## Run API locally (without docker)
 # Development Commands
 # ============================================================================
 
-dev: ## Start full development environment (database + backend + migrations)
+dev: ## Start full development environment (database + backend)
 	@echo "$(GREEN)Starting development environment...$(RESET)"
 	cd crates/api && docker-compose up -d
-	@echo "$(GREEN)Waiting for database to be healthy...$(RESET)"
-	@until docker exec $(DB_CONTAINER) pg_isready -U aihub_user -d aihub_db > /dev/null 2>&1; do \
-		sleep 1; \
-	done
-	@echo "$(GREEN)Running migrations...$(RESET)"
-	cd crates/db && DATABASE_URL=$(DATABASE_URL) diesel migration run || true
-	@echo ""
-	@echo "$(GREEN)========================================$(RESET)"
-	@echo "$(GREEN)Development environment is ready!$(RESET)"
-	@echo "$(GREEN)========================================$(RESET)"
+	@echo "$(GREEN)Development environment started!$(RESET)"
 	@echo ""
 	@echo "Services:"
 	@echo "  - Database: localhost:5432"
 	@echo "  - API:      http://localhost:8000"
-	@echo ""
-	@echo "Commands:"
-	@echo "  - View logs:    make dev-logs"
-	@echo "  - Stop:         make dev-down"
-	@echo "  - Restart:      make dev-restart"
 
 dev-down: ## Stop development environment
 	@echo "$(YELLOW)Stopping development environment...$(RESET)"
 	cd crates/api && docker-compose down
 
-dev-restart: ## Restart development environment
-	@echo "$(YELLOW)Restarting development environment...$(RESET)"
-	$(MAKE) dev-down
-	$(MAKE) dev
+dev-restart: ## Rebuild and restart backend service
+	@echo "$(YELLOW)Rebuilding and restarting backend...$(RESET)"
+	cd crates/api && docker-compose up -d --build backend
 
 dev-logs: ## Show all service logs
 	cd crates/api && docker-compose logs -f
