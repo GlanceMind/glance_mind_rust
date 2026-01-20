@@ -1,7 +1,7 @@
 services:
   db:
     image: postgres:15-alpine
-    container_name: aihub_db
+    container_name: glance-mind-db
     restart: always
     environment:
       POSTGRES_USER: aihub_user
@@ -21,7 +21,7 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile.api
-    container_name: aihub_backend
+    container_name: glance-mind-api
     restart: always
     env_file:
       - .env

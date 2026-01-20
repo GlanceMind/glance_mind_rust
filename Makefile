@@ -12,8 +12,9 @@
 # Default target
 .DEFAULT_GOAL := help
 
-# Database configuration
-DB_CONTAINER := aihub_db
+# Container names
+DB_CONTAINER := glance-mind-db
+API_CONTAINER := glance-mind-api
 DATABASE_URL ?= postgres://aihub_user:aihub_password@localhost:5432/aihub_db
 
 # Colors
@@ -171,11 +172,11 @@ api-restart: ## Restart API service
 	$(MAKE) api-up
 
 api-logs: ## Show API service logs
-	docker logs -f aihub_backend
+	docker logs -f $(API_CONTAINER)
 
 api-build: ## Build API docker image
 	@echo "$(GREEN)Building API docker image...$(RESET)"
-	docker build -t aihub_backend:latest -f Dockerfile.api .
+	docker build -t glance-mind-api:latest -f Dockerfile.api .
 
 api-run: ## Run API locally (without docker)
 	@echo "$(GREEN)Starting API locally...$(RESET)"
