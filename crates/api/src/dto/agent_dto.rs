@@ -97,3 +97,35 @@ pub struct UpdateStatusResponse {
     pub success: bool,
     pub message: String,
 }
+
+/// Unified comment DTO for all platforms (TikTok, Facebook, Instagram, Reddit, Twitter)
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct UnifiedCommentDto {
+    pub id: i32,
+    pub content_db_id: i32,    // video_db_id / post_db_id / tweet_db_id
+    pub comment_id: String,    // Platform-specific comment ID
+    pub platform: String,      // "tiktok" / "facebook" / "instagram" / "reddit" / "twitter"
+
+    // Unified user info
+    pub user_name: Option<String>, // user_nickname / comment_username / author / comment_screen_name
+    pub user_id: Option<String>,   // user_unique_id / comment_user_id
+
+    // Unified content
+    pub content: Option<String>,           // content / comment_text / body
+    pub parent_comment_id: Option<String>, // For reply threads
+
+    // Unified engagement metrics
+    pub like_count: Option<i32>,  // digg_count / like_count / score / favorite_count
+    pub reply_count: Option<i32>, // reply_count / child_comment_count
+
+    // AI processing results
+    pub reason: Option<String>,
+    pub suggested_reply: Option<String>,
+    pub suggested_dm: Option<String>,
+    pub suggested_reply_post: Option<String>,
+    pub status: String, // Unified as String: "pending" / "processing" / "completed"
+
+    pub comment_created_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub campaign_id: Option<i32>,
+}

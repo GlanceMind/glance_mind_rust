@@ -423,6 +423,7 @@ diesel::table! {
         dm_template -> Nullable<Text>,
         dm_prompt -> Nullable<Text>,
         reply_post_prompt -> Nullable<Text>,
+        name -> Nullable<Varchar>,
     }
 }
 

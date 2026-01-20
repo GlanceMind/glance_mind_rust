@@ -28,6 +28,7 @@ pub struct CampaignTemplate {
     pub updated_at: Option<DateTime<Utc>>,
     pub dm_prompt: Option<String>,
     pub reply_post_prompt: Option<String>,
+    pub name: Option<String>,
 }
 
 #[derive(Insertable, Debug, Clone, Serialize, Deserialize)]
@@ -40,4 +41,5 @@ pub struct NewCampaignTemplate {
     pub updated_at: Option<DateTime<Utc>>,
     pub dm_prompt: Option<String>,
     pub reply_post_prompt: Option<String>,
+    pub name: Option<String>,
 }

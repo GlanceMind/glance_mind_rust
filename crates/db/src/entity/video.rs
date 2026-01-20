@@ -31,11 +31,12 @@ pub struct VideoGenerationTask {
     pub created_at: DateTime<Utc>,
     pub updated_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
-    pub model_id: Option<i32>,
+    // Fields must match schema column order
     pub title: Option<String>,
     pub orientation: Option<String>,
     pub video_seconds: Option<String>,
     pub video_size: Option<String>,
+    pub model_id: Option<i32>,
 }
 
 #[derive(Debug, Clone, Insertable)]

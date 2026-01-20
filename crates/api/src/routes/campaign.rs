@@ -1,4 +1,5 @@
 use crate::handler::campaign_handler;
+use crate::handler::crawler_handler;
 use crate::handler::export_handler;
 use crate::state::user_state::UserState;
 use axum::{
@@ -19,11 +20,17 @@ pub fn routes() -> Router<UserState> {
         .route("/:id/logs", get(campaign_handler::get_campaign_logs))
         .route(
             "/:id/crawler-tasks",
-            get(crate::handler::crawler_handler::list_campaign_tasks),
+            get(crawler_handler::list_campaign_tasks),
         )
+        // Unified endpoint - returns UnifiedContentDto for all platforms
         .route(
             "/:id/crawler-results",
-            get(crate::handler::crawler_handler::list_campaign_results),
+            get(crawler_handler::list_campaign_results),
+        )
+        // Alias for crawler-results (for backward compatibility with new endpoints)
+        .route(
+            "/:id/contents",
+            get(crawler_handler::list_campaign_contents_unified),
         )
         .route("/:id/export", get(export_handler::export_campaign_data))
 }

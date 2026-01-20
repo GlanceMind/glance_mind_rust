@@ -30,6 +30,8 @@ pub async fn list_task_results(
     Ok(api_ok!(response))
 }
 
+/// Returns UnifiedContentDto based on campaign's platform
+/// This endpoint automatically detects the platform and queries the correct table
 pub async fn list_campaign_results(
     State(state): State<UserState>,
     Path(campaign_id): Path<i32>,
@@ -37,7 +39,20 @@ pub async fn list_campaign_results(
 ) -> Result<impl IntoResponse, ApiError> {
     let response = state
         .crawler_service
-        .list_campaign_results(campaign_id, req)
+        .list_campaign_results_unified(campaign_id, req)
+        .await?;
+    Ok(api_ok!(response))
+}
+
+/// Alias for list_campaign_results - unified endpoint
+pub async fn list_campaign_contents_unified(
+    State(state): State<UserState>,
+    Path(campaign_id): Path<i32>,
+    Query(req): Query<crate::dto::common::PageRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let response = state
+        .crawler_service
+        .list_campaign_results_unified(campaign_id, req)
         .await?;
     Ok(api_ok!(response))
 }

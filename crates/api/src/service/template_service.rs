@@ -52,6 +52,7 @@ impl TemplateService {
             .template_repo
             .create(
                 campaign_id,
+                dto.name,
                 dto.weight,
                 dto.dm_prompt,
                 dto.reply_prompt,
@@ -151,6 +152,7 @@ impl TemplateService {
             .template_repo
             .update(
                 template_id,
+                dto.name,
                 dto.weight,
                 dto.dm_prompt,
                 dto.reply_prompt,
@@ -199,6 +201,7 @@ impl TemplateService {
             templates.push(TemplateReadDto {
                 id: i + 1,      // Mock i32 ID
                 campaign_id: 0, // Mock campaign ID
+                name: Some(format!("Auto-generated Template #{}", i + 1)),
                 weight: 1,
                 dm_prompt: Some(format!(
                     "Auto-generated DM #{}: Check out this amazing product! {}",

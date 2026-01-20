@@ -5,6 +5,7 @@ use validator::Validate;
 #[derive(Debug, Serialize, Deserialize, Clone, Validate)]
 pub struct TemplateCreateDto {
     pub campaign_id: i32,
+    pub name: Option<String>,
     pub weight: i32,
     pub dm_prompt: Option<String>,
     pub reply_prompt: Option<String>,
@@ -13,6 +14,7 @@ pub struct TemplateCreateDto {
 
 #[derive(Debug, Serialize, Deserialize, Validate)]
 pub struct TemplateUpdateDto {
+    pub name: Option<String>,
     pub weight: Option<i32>,
     pub dm_prompt: Option<String>,
     pub reply_prompt: Option<String>,
@@ -23,6 +25,7 @@ pub struct TemplateUpdateDto {
 pub struct TemplateReadDto {
     pub id: i32,
     pub campaign_id: i32,
+    pub name: Option<String>,
     pub weight: i32,
     pub dm_prompt: Option<String>,
     pub reply_prompt: Option<String>,
@@ -52,6 +55,7 @@ impl From<glance_mind_db::entity::template::CampaignTemplate> for TemplateReadDt
         Self {
             id: entity.id,
             campaign_id: entity.campaign_id,
+            name: entity.name,
             weight: entity.weight,
             dm_prompt: entity.dm_prompt,
             reply_prompt: entity.reply_prompt,

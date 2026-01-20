@@ -1,6 +1,7 @@
 use crate::config::database::Database;
-use crate::dto::crawler_dto::{CrawlerResultDto, CrawlerTaskDto};
+use crate::dto::crawler_dto::{CrawlerResultDto, CrawlerTaskDto, UnifiedContentDto};
 use crate::error::api_error::ApiError;
+use crate::repository::campaign_repository::CampaignRepository;
 use crate::repository::crawler_repository::CrawlerRepository;
 use glance_mind_db::entity::crawler::{CrawlerResult, CrawlerTask};
 use std::sync::Arc;
@@ -8,12 +9,14 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct CrawlerService {
     repo: CrawlerRepository,
+    campaign_repo: CampaignRepository,
 }
 
 impl CrawlerService {
     pub fn new(db: &Arc<Database>) -> Self {
         Self {
             repo: CrawlerRepository::new(db.pool.clone()),
+            campaign_repo: CampaignRepository::new(db.pool.clone()),
         }
     }
 
@@ -61,6 +64,8 @@ impl CrawlerService {
         ))
     }
 
+    /// Legacy method - returns CrawlerResultDto for backward compatibility (TikTok only)
+    #[allow(dead_code)]
     pub async fn list_campaign_results(
         &self,
         campaign_id: i32,
@@ -80,6 +85,79 @@ impl CrawlerService {
         let dtos = results.into_iter().map(Self::result_to_dto).collect();
         Ok(crate::dto::common::PageResponse::new(
             dtos,
+            total,
+            req.page,
+            req.page_size,
+        ))
+    }
+
+    /// Unified method - automatically detects platform and returns UnifiedContentDto
+    /// This is the main method used by the API endpoints
+    pub async fn list_campaign_results_unified(
+        &self,
+        campaign_id: i32,
+        req: crate::dto::common::PageRequest,
+    ) -> Result<crate::dto::common::PageResponse<UnifiedContentDto>, ApiError> {
+        // Get campaign to determine platform_id
+        let campaign = self
+            .campaign_repo
+            .find_by_id(campaign_id)
+            .await
+            .map_err(|e| {
+                ApiError::InternalServerError(format!("Failed to fetch campaign: {}", e))
+            })?;
+
+        tracing::info!(
+            "list_campaign_results_unified: campaign_id={}, platform_id={}",
+            campaign_id,
+            campaign.platform_id
+        );
+
+        let (contents, total) = self
+            .repo
+            .find_unified_contents_by_campaign(
+                campaign_id,
+                campaign.platform_id,
+                req.page,
+                req.page_size,
+            )
+            .await
+            .map_err(|e| {
+                ApiError::InternalServerError(format!("Failed to fetch campaign contents: {}", e))
+            })?;
+
+        tracing::info!(
+            "list_campaign_results_unified: found {} contents, total={}",
+            contents.len(),
+            total
+        );
+
+        Ok(crate::dto::common::PageResponse::new(
+            contents,
+            total,
+            req.page,
+            req.page_size,
+        ))
+    }
+
+    /// Unified method with explicit platform_id - returns UnifiedContentDto based on platform
+    #[allow(dead_code)]
+    pub async fn list_campaign_contents_unified(
+        &self,
+        campaign_id: i32,
+        platform_id: i32,
+        req: crate::dto::common::PageRequest,
+    ) -> Result<crate::dto::common::PageResponse<UnifiedContentDto>, ApiError> {
+        let (contents, total) = self
+            .repo
+            .find_unified_contents_by_campaign(campaign_id, platform_id, req.page, req.page_size)
+            .await
+            .map_err(|e| {
+                ApiError::InternalServerError(format!("Failed to fetch campaign contents: {}", e))
+            })?;
+
+        Ok(crate::dto::common::PageResponse::new(
+            contents,
             total,
             req.page,
             req.page_size,

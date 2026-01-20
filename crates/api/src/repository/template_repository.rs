@@ -17,6 +17,7 @@ impl TemplateRepository {
     pub async fn create(
         &self,
         campaign_id: i32,
+        name: Option<String>,
         weight: i32,
         dm_prompt: Option<String>,
         reply_prompt: Option<String>,
@@ -31,6 +32,7 @@ impl TemplateRepository {
             reply_post_prompt,
             created_at: chrono::Utc::now(),
             updated_at: None,
+            name,
         };
 
         diesel::insert_into(campaign_templates::table)
@@ -101,6 +103,7 @@ impl TemplateRepository {
     pub async fn update(
         &self,
         id: i32,
+        name: Option<String>,
         weight: Option<i32>,
         dm_prompt: Option<String>,
         reply_prompt: Option<String>,
@@ -114,6 +117,9 @@ impl TemplateRepository {
             .select(CampaignTemplate::as_select());
         let mut template = target.first::<CampaignTemplate>(&mut conn)?;
 
+        if let Some(n) = name {
+            template.name = Some(n);
+        }
         if let Some(w) = weight {
             template.weight = w;
         }

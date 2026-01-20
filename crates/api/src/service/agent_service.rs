@@ -1,5 +1,6 @@
 use crate::dto::agent_dto::{
-    CommentWithVideoDto, DeviceCommentsQuery, UpdateCommentStatusDto, UpdateStatusResponse,
+    CommentWithVideoDto, DeviceCommentsQuery, UnifiedCommentDto, UpdateCommentStatusDto,
+    UpdateStatusResponse,
 };
 use crate::dto::common::{PageRequest, PageResponse};
 use crate::error::api_error::ApiError;
@@ -19,7 +20,7 @@ impl AgentService {
         }
     }
 
-    // Existing method needed by agent_handler
+    /// Legacy method - only queries TikTok comments
     pub async fn get_video_comments(
         &self,
         video_id: i32,
@@ -27,6 +28,18 @@ impl AgentService {
     ) -> Result<PageResponse<crate::dto::agent_dto::AgentCommentDto>, ApiError> {
         self.agent_repo
             .get_video_comments(video_id, req.page, req.page_size)
+            .map_err(|e| ApiError::InternalServerError(e.to_string()))
+    }
+
+    /// Unified method - queries comments for any platform
+    pub async fn get_unified_comments(
+        &self,
+        content_db_id: i32,
+        platform_id: i32,
+        req: PageRequest,
+    ) -> Result<PageResponse<UnifiedCommentDto>, ApiError> {
+        self.agent_repo
+            .get_unified_comments(content_db_id, platform_id, req.page, req.page_size)
             .map_err(|e| ApiError::InternalServerError(e.to_string()))
     }
 
