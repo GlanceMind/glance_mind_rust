@@ -35,12 +35,14 @@ pub struct Campaign {
     pub auto_like: bool,
     pub auto_follow: bool,
     pub auto_dm: bool,
-    pub auto_reply_comments: bool,
-    pub auto_reply_post: bool,
+    // Fields must match schema column order exactly
     pub pending_consumption: BigDecimal,
     pub actual_consumption: BigDecimal,
     pub is_frozen: bool,
     pub search_options: Option<JsonValue>,
+    pub auto_reply_comments: bool,
+    pub auto_reply_post: bool,
+    pub completed_reason: Option<String>,
 }
 
 #[derive(Insertable, AsChangeset)]
