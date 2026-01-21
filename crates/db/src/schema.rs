@@ -39,6 +39,7 @@ diesel::table! {
         status -> Int2,
         suggested_dm -> Nullable<Text>,
         suggested_reply_post -> Nullable<Text>,
+        updated_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -354,6 +355,7 @@ diesel::table! {
         #[max_length = 255]
         author_unique_id -> Nullable<Varchar>,
         url -> Nullable<Text>,
+        updated_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -420,9 +422,9 @@ diesel::table! {
         reply_prompt -> Nullable<Text>,
         created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
-        dm_template -> Nullable<Text>,
         dm_prompt -> Nullable<Text>,
         reply_post_prompt -> Nullable<Text>,
+        #[max_length = 255]
         name -> Nullable<Varchar>,
     }
 }
@@ -460,8 +462,9 @@ diesel::table! {
         actual_consumption -> Numeric,
         is_frozen -> Bool,
         search_options -> Nullable<Jsonb>,
-        auto_reply_post -> Bool,
         auto_reply_comments -> Bool,
+        auto_reply_post -> Bool,
+        completed_reason -> Nullable<Text>,
     }
 }
 
@@ -497,18 +500,24 @@ diesel::table! {
         updated_at -> Nullable<Timestamptz>,
         search_offset -> Int4,
         search_limit -> Int4,
+        reserved_amount -> Nullable<Numeric>,
+        actual_consumption -> Nullable<Numeric>,
+        settled_at -> Nullable<Timestamptz>,
     }
 }
 
 diesel::table! {
     gm_email_verifications (id) {
         id -> Int4,
-        email -> Text,
-        code -> Text,
+        #[max_length = 255]
+        email -> Varchar,
+        #[max_length = 6]
+        code -> Varchar,
         expires_at -> Timestamptz,
         verified -> Bool,
         created_at -> Timestamptz,
-        ip_address -> Nullable<Text>,
+        #[max_length = 45]
+        ip_address -> Nullable<Varchar>,
         user_agent -> Nullable<Text>,
     }
 }
@@ -528,6 +537,30 @@ diesel::table! {
 }
 
 diesel::table! {
+    gm_notifications (id) {
+        id -> Int4,
+        #[max_length = 20]
+        notification_type -> Varchar,
+        #[max_length = 255]
+        title -> Varchar,
+        #[max_length = 255]
+        title_zh -> Nullable<Varchar>,
+        description -> Nullable<Text>,
+        description_zh -> Nullable<Text>,
+        #[max_length = 500]
+        link -> Nullable<Varchar>,
+        #[max_length = 100]
+        link_text -> Nullable<Varchar>,
+        #[max_length = 100]
+        link_text_zh -> Nullable<Varchar>,
+        important -> Nullable<Bool>,
+        published_at -> Nullable<Timestamptz>,
+        expires_at -> Nullable<Timestamptz>,
+        created_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
     gm_platforms (id) {
         id -> Int4,
         name -> Varchar,
@@ -537,6 +570,10 @@ diesel::table! {
         updated_at -> Nullable<Timestamptz>,
         base_url -> Varchar,
         page_size -> Int4,
+        #[max_length = 100]
+        content_table_name -> Nullable<Varchar>,
+        #[max_length = 100]
+        comment_table_name -> Nullable<Varchar>,
     }
 }
 
@@ -653,6 +690,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    gm_user_notification_reads (id) {
+        id -> Int4,
+        user_id -> Int4,
+        notification_id -> Int4,
+        read_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
     gm_user_wallets (user_id) {
         user_id -> Int4,
         balance_points -> Numeric,
@@ -723,6 +769,7 @@ diesel::table! {
         created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
         completed_at -> Nullable<Timestamptz>,
+        model_id -> Nullable<Int4>,
         #[max_length = 255]
         title -> Nullable<Varchar>,
         #[max_length = 20]
@@ -731,7 +778,6 @@ diesel::table! {
         video_seconds -> Nullable<Varchar>,
         #[max_length = 20]
         video_size -> Nullable<Varchar>,
-        model_id -> Nullable<Int4>,
     }
 }
 
@@ -752,42 +798,6 @@ diesel::table! {
 }
 
 diesel::joinable!(gm_agent_comments -> gm_agent_videos (video_db_id));
-diesel::table! {
-    gm_notifications (id) {
-        id -> Int4,
-        #[max_length = 20]
-        notification_type -> Varchar,
-        #[max_length = 255]
-        title -> Varchar,
-        #[max_length = 255]
-        title_zh -> Nullable<Varchar>,
-        description -> Nullable<Text>,
-        description_zh -> Nullable<Text>,
-        #[max_length = 500]
-        link -> Nullable<Varchar>,
-        #[max_length = 100]
-        link_text -> Nullable<Varchar>,
-        #[max_length = 100]
-        link_text_zh -> Nullable<Varchar>,
-        important -> Nullable<Bool>,
-        published_at -> Nullable<Timestamptz>,
-        expires_at -> Nullable<Timestamptz>,
-        created_at -> Nullable<Timestamptz>,
-    }
-}
-
-diesel::table! {
-    gm_user_notification_reads (id) {
-        id -> Int4,
-        user_id -> Int4,
-        notification_id -> Int4,
-        read_at -> Nullable<Timestamptz>,
-    }
-}
-
-diesel::joinable!(gm_user_notification_reads -> gm_users (user_id));
-diesel::joinable!(gm_user_notification_reads -> gm_notifications (notification_id));
-
 diesel::joinable!(gm_agent_comments -> gm_campaigns (campaign_id));
 diesel::joinable!(gm_agent_facebook_comments -> gm_agent_facebook_posts (post_db_id));
 diesel::joinable!(gm_agent_facebook_comments -> gm_campaigns (campaign_id));
@@ -829,6 +839,8 @@ diesel::joinable!(gm_social_groups -> gm_users (user_id));
 diesel::joinable!(gm_upload_tasks -> gm_platforms (platform_id));
 diesel::joinable!(gm_upload_tasks -> gm_social_accounts (social_account_id));
 diesel::joinable!(gm_upload_tasks -> gm_users (user_id));
+diesel::joinable!(gm_user_notification_reads -> gm_notifications (notification_id));
+diesel::joinable!(gm_user_notification_reads -> gm_users (user_id));
 diesel::joinable!(gm_user_wallets -> gm_users (user_id));
 diesel::joinable!(gm_video_generation_tasks -> gm_ai_models (model_id));
 diesel::joinable!(gm_video_generation_tasks -> gm_users (user_id));

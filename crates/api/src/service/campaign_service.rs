@@ -1,6 +1,6 @@
 use crate::config::database::Database;
 use crate::dto::campaign_dto::{
-    CampaignCreateDto, CampaignLogDto, CampaignReadDto, CampaignUpdateDto,
+    CampaignCreateDto, CampaignLogDto, CampaignReadDto, CampaignStatus, CampaignUpdateDto,
 };
 use crate::error::{api_error::ApiError, business_error::BusinessError};
 use crate::repository::campaign_repository::CampaignRepository;
@@ -8,6 +8,9 @@ use crate::repository::wallet_repository::WalletRepository;
 use diesel::result::Error as DieselError;
 use glance_mind_db::entity::campaign::{Campaign, NewCampaign};
 use std::sync::Arc;
+
+#[allow(unused_imports)]
+use bigdecimal::BigDecimal;
 
 #[derive(Clone)]
 pub struct CampaignService {
@@ -28,6 +31,7 @@ impl CampaignService {
         user_id: i32,
         dto: CampaignCreateDto,
     ) -> Result<CampaignReadDto, ApiError> {
+        // Create campaign in DRAFT status (budget not frozen yet)
         let new_campaign = NewCampaign {
             user_id,
             name: dto.name,
@@ -181,14 +185,8 @@ impl CampaignService {
         &self,
         id: i32,
         user_id: i32,
-        new_status: &str,
+        new_status: CampaignStatus,
     ) -> Result<CampaignReadDto, ApiError> {
-        // Validate status
-        match new_status {
-            "ACTIVE" | "PAUSED" | "COMPLETED" | "ARCHIVED" => {}
-            _ => return Err(ApiError::BusinessError(BusinessError::InvalidStatus)),
-        }
-
         // Get current campaign
         let campaign = self
             .repo
@@ -202,71 +200,134 @@ impl CampaignService {
                 }
             })?;
 
-        // Budget freezing logic: only freeze on first activation
-        if new_status == "ACTIVE" && !campaign.is_frozen {
-            // First activation - need to freeze budget
-            if let Some(budget_cap) = &campaign.budget_cap {
-                // Validate available balance
-                let has_balance = self
-                    .wallet_repo
-                    .validate_available_balance(user_id, budget_cap)
-                    .await
-                    .map_err(|e| {
-                        tracing::error!("Failed to validate balance: {:?}", e);
-                        ApiError::InternalServerError("Failed to validate balance".to_string())
-                    })?;
+        let status_str = new_status.to_string();
 
-                if !has_balance {
-                    return Err(ApiError::BusinessError(
-                        BusinessError::InsufficientBalanceForCampaign,
+        match new_status {
+            // Handle STOPPED/COMPLETED - use stored procedure for graceful stop
+            CampaignStatus::Stopped | CampaignStatus::Completed => {
+                let result = self.repo.stop_gracefully(id).await.map_err(|e| {
+                    tracing::error!("Failed to stop campaign gracefully: {:?}", e);
+                    ApiError::InternalServerError("Failed to stop campaign".to_string())
+                })?;
+
+                if !result.success {
+                    return Err(ApiError::InternalServerError(
+                        "Failed to stop campaign".to_string(),
                     ));
                 }
 
-                // Freeze budget in wallet
-                self.wallet_repo
-                    .freeze_campaign_budget(user_id, budget_cap)
+                tracing::info!(
+                    "Campaign {} stopped gracefully. Immediate: {}, Refunded: {}",
+                    id,
+                    result.immediate_stopped,
+                    result.refunded_amount
+                );
+
+                // Fetch updated campaign
+                let updated = self
+                    .repo
+                    .find_by_id_and_user(id, user_id)
                     .await
                     .map_err(|e| {
-                        tracing::error!("Failed to freeze budget: {:?}", e);
-                        ApiError::InternalServerError("Failed to freeze budget".to_string())
+                        tracing::error!("Failed to fetch updated campaign: {:?}", e);
+                        ApiError::InternalServerError("Failed to fetch campaign".to_string())
                     })?;
 
-                tracing::info!(
-                    "Froze budget {} for campaign {} (user {})",
-                    budget_cap,
-                    id,
-                    user_id
-                );
+                Ok(self.to_dto(updated))
             }
 
-            // Update campaign status and set is_frozen = true
-            let updated = self
-                .repo
-                .update_status_and_freeze(id, user_id, new_status, true)
-                .await
-                .map_err(|e| {
-                    tracing::error!("Failed to update status: {:?}", e);
-                    ApiError::InternalServerError("Failed to update status".to_string())
-                })?;
+            // Handle PAUSED - just update status
+            CampaignStatus::Paused => {
+                let updated = self
+                    .repo
+                    .update_status(id, user_id, &status_str)
+                    .await
+                    .map_err(|e| match e {
+                        DieselError::NotFound => {
+                            ApiError::BusinessError(BusinessError::CampaignNotFound)
+                        }
+                        e => {
+                            tracing::error!("Failed to update status: {:?}", e);
+                            ApiError::InternalServerError("Failed to update status".to_string())
+                        }
+                    })?;
 
-            Ok(self.to_dto(updated))
-        } else {
-            // Resume from PAUSED or other status change - just update status
-            let updated = self
-                .repo
-                .update_status(id, user_id, new_status)
-                .await
-                .map_err(|e| match e {
-                    DieselError::NotFound => {
-                        ApiError::BusinessError(BusinessError::CampaignNotFound)
-                    }
-                    e => {
-                        tracing::error!("Failed to update status: {:?}", e);
-                        ApiError::InternalServerError("Failed to update status".to_string())
-                    }
-                })?;
+                Ok(self.to_dto(updated))
+            }
 
-            Ok(self.to_dto(updated))
+            // Handle ACTIVE - use stored procedure for first activation (freezes budget)
+            CampaignStatus::Active => {
+                // Check if this is first activation (not frozen yet)
+                if !campaign.is_frozen {
+                    // First activation - use stored procedure to freeze budget
+                    let result = self.repo.activate_campaign(id).await.map_err(|e| {
+                        tracing::error!("Failed to activate campaign: {:?}", e);
+                        ApiError::InternalServerError("Failed to activate campaign".to_string())
+                    })?;
+
+                    if !result.success {
+                        // Check if it's insufficient balance
+                        if result.message.contains("Insufficient balance") {
+                            return Err(ApiError::BusinessError(
+                                BusinessError::InsufficientBalanceForCampaign,
+                            ));
+                        }
+                        return Err(ApiError::InternalServerError(result.message));
+                    }
+
+                    tracing::info!("Campaign {} activated with budget frozen", id);
+
+                    // Fetch updated campaign
+                    let updated =
+                        self.repo
+                            .find_by_id_and_user(id, user_id)
+                            .await
+                            .map_err(|e| {
+                                tracing::error!("Failed to fetch updated campaign: {:?}", e);
+                                ApiError::InternalServerError(
+                                    "Failed to fetch campaign".to_string(),
+                                )
+                            })?;
+
+                    Ok(self.to_dto(updated))
+                } else {
+                    // Resume from PAUSED - just update status (budget already frozen)
+                    let updated = self
+                        .repo
+                        .update_status(id, user_id, &status_str)
+                        .await
+                        .map_err(|e| {
+                            tracing::error!("Failed to update status: {:?}", e);
+                            ApiError::InternalServerError("Failed to update status".to_string())
+                        })?;
+
+                    Ok(self.to_dto(updated))
+                }
+            }
+
+            // Handle ARCHIVED - just update status
+            CampaignStatus::Archived => {
+                let updated = self
+                    .repo
+                    .update_status(id, user_id, &status_str)
+                    .await
+                    .map_err(|e| match e {
+                        DieselError::NotFound => {
+                            ApiError::BusinessError(BusinessError::CampaignNotFound)
+                        }
+                        e => {
+                            tracing::error!("Failed to update status: {:?}", e);
+                            ApiError::InternalServerError("Failed to update status".to_string())
+                        }
+                    })?;
+
+                Ok(self.to_dto(updated))
+            }
+
+            // DRAFT and STOPPING are not valid target statuses for manual update
+            CampaignStatus::Draft | CampaignStatus::Stopping => {
+                Err(ApiError::BusinessError(BusinessError::InvalidStatus))
+            }
         }
     }
 

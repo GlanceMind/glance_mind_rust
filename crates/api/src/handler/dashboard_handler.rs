@@ -10,6 +10,11 @@ pub struct PerformanceQuery {
     pub days: Option<i32>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct RecentCampaignsQuery {
+    pub limit: Option<i32>,
+}
+
 pub async fn get_overview_stats(
     Extension(user): Extension<User>,
     Extension(state): Extension<UserState>,
@@ -28,4 +33,17 @@ pub async fn get_performance_stats(
         .get_performance_stats(user.id, query.days)
         .await?;
     Ok(api_ok!(stats))
+}
+
+pub async fn get_recent_campaigns(
+    Extension(user): Extension<User>,
+    Extension(state): Extension<UserState>,
+    Query(query): Query<RecentCampaignsQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let limit = query.limit.unwrap_or(3);
+    let campaigns = state
+        .dashboard_service
+        .get_recent_campaigns(user.id, limit)
+        .await?;
+    Ok(api_ok!(campaigns))
 }

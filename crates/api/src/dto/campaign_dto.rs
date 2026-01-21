@@ -2,7 +2,92 @@ use bigdecimal::BigDecimal;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use std::fmt;
+use std::str::FromStr;
 use validator::Validate;
+
+/// Campaign status enum for type-safe status handling
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum CampaignStatus {
+    /// Initial state when campaign is created but not yet activated
+    Draft,
+    /// Campaign is running and processing tasks
+    Active,
+    /// Campaign is temporarily paused by user
+    Paused,
+    /// Campaign is in the process of stopping (waiting for active tasks to complete)
+    Stopping,
+    /// Campaign has been stopped by user (graceful stop completed)
+    Stopped,
+    /// Campaign has completed naturally (reached end date or max count)
+    Completed,
+    /// Campaign has been archived
+    Archived,
+}
+
+impl CampaignStatus {
+    /// Check if the status allows new tasks to be created
+    pub fn allows_new_tasks(&self) -> bool {
+        matches!(self, CampaignStatus::Active)
+    }
+
+    /// Check if the campaign is in a terminal state
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            CampaignStatus::Stopped | CampaignStatus::Completed | CampaignStatus::Archived
+        )
+    }
+
+    /// All valid status values for validation
+    pub const ALL: &'static [CampaignStatus] = &[
+        CampaignStatus::Draft,
+        CampaignStatus::Active,
+        CampaignStatus::Paused,
+        CampaignStatus::Stopping,
+        CampaignStatus::Stopped,
+        CampaignStatus::Completed,
+        CampaignStatus::Archived,
+    ];
+}
+
+impl fmt::Display for CampaignStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CampaignStatus::Draft => write!(f, "DRAFT"),
+            CampaignStatus::Active => write!(f, "ACTIVE"),
+            CampaignStatus::Paused => write!(f, "PAUSED"),
+            CampaignStatus::Stopping => write!(f, "STOPPING"),
+            CampaignStatus::Stopped => write!(f, "STOPPED"),
+            CampaignStatus::Completed => write!(f, "COMPLETED"),
+            CampaignStatus::Archived => write!(f, "ARCHIVED"),
+        }
+    }
+}
+
+impl FromStr for CampaignStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_uppercase().as_str() {
+            "DRAFT" => Ok(CampaignStatus::Draft),
+            "ACTIVE" => Ok(CampaignStatus::Active),
+            "PAUSED" => Ok(CampaignStatus::Paused),
+            "STOPPING" => Ok(CampaignStatus::Stopping),
+            "STOPPED" => Ok(CampaignStatus::Stopped),
+            "COMPLETED" => Ok(CampaignStatus::Completed),
+            "ARCHIVED" => Ok(CampaignStatus::Archived),
+            _ => Err(format!("Invalid campaign status: {}", s)),
+        }
+    }
+}
+
+impl From<CampaignStatus> for String {
+    fn from(status: CampaignStatus) -> Self {
+        status.to_string()
+    }
+}
 
 #[derive(Debug, Deserialize, Validate)]
 pub struct CampaignCreateDto {
@@ -93,7 +178,7 @@ pub struct CampaignUpdateDto {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CampaignStatusUpdateDto {
-    pub status: String,
+    pub status: CampaignStatus,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -53,7 +53,7 @@ pub async fn update_campaign_status(
     Json(dto): Json<CampaignStatusUpdateDto>,
 ) -> Result<ApiResult<impl serde::Serialize>, ApiError> {
     let campaign = campaign_service
-        .update_status(id, user.id, &dto.status)
+        .update_status(id, user.id, dto.status)
         .await?;
     Ok(api_result!(campaign))
 }

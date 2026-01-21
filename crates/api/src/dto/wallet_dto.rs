@@ -63,11 +63,11 @@ pub struct PaginatedResponse<T> {
 // Dashboard DTOs
 #[derive(Debug, Serialize)]
 pub struct OverviewStatsDto {
-    pub total_budget: BigDecimal,
-    pub active_campaigns: i64,
-    pub interaction_scanned_count: i64,
-    pub relevant_comments_count: i64,
-    pub replied_count: i64,
+    pub total_spent: BigDecimal,        // 总花费 (actual_consumption sum)
+    pub active_campaigns: i64,          // 活跃任务数
+    pub total_campaigns: i64,           // 总任务数
+    pub interaction_scanned_count: i64, // 本月互动数 (total_scanned)
+    pub total_replied_count: i64,       // 总回复数
 }
 
 #[derive(Debug, Serialize)]
@@ -76,6 +76,18 @@ pub struct PerformanceDataDto {
     pub spent: BigDecimal,
     pub reach: i32,
     pub conversions: i32,
+}
+
+// Recent Campaign Activity DTO
+#[derive(Debug, Serialize)]
+pub struct RecentCampaignDto {
+    pub id: i32,
+    pub name: String,
+    pub status: String,
+    pub platform_name: String,
+    pub actual_consumption: BigDecimal,
+    pub total_scanned: i32,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 // Password Change DTO

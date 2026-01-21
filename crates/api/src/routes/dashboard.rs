@@ -9,4 +9,8 @@ pub fn routes() -> Router<UserState> {
             "/performance",
             get(dashboard_handler::get_performance_stats),
         )
+        .route(
+            "/recent-campaigns",
+            get(dashboard_handler::get_recent_campaigns),
+        )
 }

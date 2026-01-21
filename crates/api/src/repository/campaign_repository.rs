@@ -1,6 +1,9 @@
 use crate::config::database::DBPool;
+use bigdecimal::BigDecimal;
 use diesel::prelude::*;
 use diesel::result::Error as DieselError;
+use diesel::sql_query;
+use diesel::sql_types::{Bool, Integer, Numeric, Text};
 use diesel::SelectableHelper;
 use glance_mind_db::entity::campaign::{Campaign, NewCampaign};
 use glance_mind_db::schema::gm_campaigns as campaigns;
@@ -149,4 +152,62 @@ impl CampaignRepository {
             .count()
             .get_result(&mut conn)
     }
+
+    /// Activate campaign using stored procedure
+    /// This atomically: validates balance, freezes budget, updates status, generates transaction log
+    pub async fn activate_campaign(
+        &self,
+        campaign_id: i32,
+    ) -> Result<ActivateCampaignResult, String> {
+        let mut conn = self.pool.get().map_err(|e| e.to_string())?;
+
+        let result: ActivateCampaignResult = sql_query(
+            r#"
+            SELECT success, message
+            FROM fn_activate_campaign($1)
+            "#,
+        )
+        .bind::<Integer, _>(campaign_id)
+        .get_result(&mut conn)
+        .map_err(|e| format!("Failed to call fn_activate_campaign: {}", e))?;
+
+        Ok(result)
+    }
+
+    /// Stop campaign gracefully using stored procedure
+    pub async fn stop_gracefully(&self, campaign_id: i32) -> Result<StopCampaignResult, String> {
+        let mut conn = self.pool.get().map_err(|e| e.to_string())?;
+
+        let result: StopCampaignResult = sql_query(
+            r#"
+            SELECT success, immediate_stopped, refunded_amount
+            FROM fn_stop_campaign_gracefully($1)
+            "#,
+        )
+        .bind::<Integer, _>(campaign_id)
+        .get_result(&mut conn)
+        .map_err(|e| format!("Failed to call fn_stop_campaign_gracefully: {}", e))?;
+
+        Ok(result)
+    }
+}
+
+/// Result from fn_activate_campaign stored procedure
+#[derive(Debug, QueryableByName)]
+pub struct ActivateCampaignResult {
+    #[diesel(sql_type = Bool)]
+    pub success: bool,
+    #[diesel(sql_type = Text)]
+    pub message: String,
+}
+
+/// Result from fn_stop_campaign_gracefully stored procedure
+#[derive(Debug, QueryableByName)]
+pub struct StopCampaignResult {
+    #[diesel(sql_type = Bool)]
+    pub success: bool,
+    #[diesel(sql_type = Bool)]
+    pub immediate_stopped: bool,
+    #[diesel(sql_type = Numeric)]
+    pub refunded_amount: BigDecimal,
 }
