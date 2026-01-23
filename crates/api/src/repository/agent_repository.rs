@@ -199,7 +199,7 @@ impl AgentRepository {
                 suggested_reply: c.suggested_reply,
                 suggested_dm: c.suggested_dm,
                 suggested_reply_post: c.suggested_reply_post,
-                status: c.status.unwrap_or_else(|| "pending".to_string()),
+                status: Self::status_i16_to_string(c.status),
                 comment_created_at: c.comment_created_at,
                 created_at: c.created_at,
                 campaign_id: c.campaign_id,
@@ -252,7 +252,7 @@ impl AgentRepository {
                 suggested_reply: c.suggested_reply,
                 suggested_dm: c.suggested_dm,
                 suggested_reply_post: c.suggested_reply_post,
-                status: c.status.unwrap_or_else(|| "pending".to_string()),
+                status: Self::status_i16_to_string(c.status),
                 comment_created_at: c.comment_created_at,
                 created_at: c.created_at,
                 campaign_id: c.campaign_id,
@@ -305,7 +305,7 @@ impl AgentRepository {
                 suggested_reply: c.suggested_reply,
                 suggested_dm: c.suggested_dm,
                 suggested_reply_post: c.suggested_reply_post,
-                status: c.status.unwrap_or_else(|| "pending".to_string()),
+                status: Self::status_i16_to_string(c.status),
                 comment_created_at: c.comment_created_at,
                 created_at: c.created_at,
                 campaign_id: c.campaign_id,
@@ -358,7 +358,7 @@ impl AgentRepository {
                 suggested_reply: c.suggested_reply,
                 suggested_dm: c.suggested_dm,
                 suggested_reply_post: c.suggested_reply_post,
-                status: c.status.unwrap_or_else(|| "pending".to_string()),
+                status: Self::status_i16_to_string(c.status),
                 comment_created_at: c.comment_created_at,
                 created_at: c.created_at,
                 campaign_id: c.campaign_id,
@@ -634,10 +634,19 @@ impl AgentRepository {
         for (comment, video, campaign) in results {
             let profile_name = self.get_random_profile_name(&mut conn, campaign.social_group_id);
 
+            // Build TikTok video URL: https://www.tiktok.com/@{author}/video/{video_id}
+            let author_unique_id = video.author_unique_id.clone();
+            let video_id = video.video_id.clone().unwrap_or_default();
+            let content_url = video.url.clone().or_else(|| {
+                author_unique_id.as_ref().map(|author| {
+                    format!("https://www.tiktok.com/@{}/video/{}", author, video_id)
+                })
+            });
+
             list.push(UnifiedCommentWithConfigDto {
                 id: comment.id,
                 comment_id: comment.comment_id,
-                content_id: video.video_id.unwrap_or_default(),
+                content_id: video_id,
                 platform: "tiktok".to_string(),
                 content: comment.content,
                 status: match comment.status {
@@ -661,6 +670,11 @@ impl AgentRepository {
                 auto_reply_comments: campaign.auto_reply_comments,
                 auto_reply_post: campaign.auto_reply_post,
                 profile_name,
+                // Platform-specific fields for TikTok
+                content_url,
+                content_type: Some("VIDEO".to_string()),
+                author_unique_id,
+                comment_url: None, // TikTok doesn't have direct comment URLs
             });
         }
 
@@ -686,12 +700,8 @@ impl AgentRepository {
             .map_err(|_| diesel::result::Error::NotFound)?;
 
         let offset = (page - 1) * per_page;
-        let status_str = match status_filter.unwrap_or(0) {
-            0 => "pending",
-            1 => "processing",
-            2 => "completed",
-            _ => "pending",
-        };
+        // Status is now i16: 0=pending, 1=processing, 2=completed
+        let status_val = status_filter.unwrap_or(0);
 
         let query = gm_agent_facebook_comments::table
             .inner_join(
@@ -713,7 +723,7 @@ impl AgentRepository {
                     .eq(gm_social_accounts::group_id)),
             )
             .filter(gm_social_accounts::device_id.eq(device_id))
-            .filter(gm_agent_facebook_comments::status.eq(status_str));
+            .filter(gm_agent_facebook_comments::status.eq(status_val));
 
         let total: i64 = query.count().get_result(&mut conn)?;
 
@@ -736,13 +746,18 @@ impl AgentRepository {
         for (comment, post, campaign) in results {
             let profile_name = self.get_random_profile_name(&mut conn, campaign.social_group_id);
 
+            // Use post_url from comment, or fallback to post's url
+            let content_url = comment.post_url.clone().or(post.url.clone());
+            // Content type from post_type (e.g., "POST", "VIDEO", "REEL")
+            let content_type = post.post_type.clone();
+
             list.push(UnifiedCommentWithConfigDto {
                 id: comment.id,
-                comment_id: comment.facebook_comment_id,
+                comment_id: comment.facebook_comment_id.clone(),
                 content_id: post.facebook_post_id,
                 platform: "facebook".to_string(),
                 content: Some(comment.comment_text),
-                status: comment.status.unwrap_or_else(|| "pending".to_string()),
+                status: Self::status_i16_to_string(comment.status),
                 user_nickname: comment.comment_username,
                 user_unique_id: comment.comment_user_id,
                 suggested_reply: comment.suggested_reply,
@@ -758,6 +773,11 @@ impl AgentRepository {
                 auto_reply_comments: campaign.auto_reply_comments,
                 auto_reply_post: campaign.auto_reply_post,
                 profile_name,
+                // Platform-specific fields for Facebook
+                content_url,
+                content_type,
+                author_unique_id: post.author_id.clone(), // Facebook author ID
+                comment_url: comment.comment_url.clone(), // Direct comment URL
             });
         }
 
@@ -783,12 +803,8 @@ impl AgentRepository {
             .map_err(|_| diesel::result::Error::NotFound)?;
 
         let offset = (page - 1) * per_page;
-        let status_str = match status_filter.unwrap_or(0) {
-            0 => "pending",
-            1 => "processing",
-            2 => "completed",
-            _ => "pending",
-        };
+        // Status is now i16: 0=pending, 1=processing, 2=completed
+        let status_val = status_filter.unwrap_or(0);
 
         let query = gm_agent_instagram_comments::table
             .inner_join(
@@ -810,7 +826,7 @@ impl AgentRepository {
                     .eq(gm_social_accounts::group_id)),
             )
             .filter(gm_social_accounts::device_id.eq(device_id))
-            .filter(gm_agent_instagram_comments::status.eq(status_str));
+            .filter(gm_agent_instagram_comments::status.eq(status_val));
 
         let total: i64 = query.count().get_result(&mut conn)?;
 
@@ -833,14 +849,20 @@ impl AgentRepository {
         for (comment, post, campaign) in results {
             let profile_name = self.get_random_profile_name(&mut conn, campaign.social_group_id);
 
+            // Build Instagram URL: https://www.instagram.com/p/{code}/
+            let code = post.code.clone();
+            let content_url = Some(format!("https://www.instagram.com/p/{}/", code));
+            // Content type from product_type (e.g., "feed", "reels", "igtv")
+            let content_type = post.product_type.clone();
+
             list.push(UnifiedCommentWithConfigDto {
                 id: comment.id,
                 comment_id: comment.instagram_comment_id,
-                content_id: post.code,
+                content_id: code,
                 platform: "instagram".to_string(),
                 content: Some(comment.comment_text),
-                status: comment.status.unwrap_or_else(|| "pending".to_string()),
-                user_nickname: comment.comment_username,
+                status: Self::status_i16_to_string(comment.status),
+                user_nickname: comment.comment_username.clone(),
                 user_unique_id: comment.comment_user_id,
                 suggested_reply: comment.suggested_reply,
                 suggested_dm: comment.suggested_dm,
@@ -855,6 +877,11 @@ impl AgentRepository {
                 auto_reply_comments: campaign.auto_reply_comments,
                 auto_reply_post: campaign.auto_reply_post,
                 profile_name,
+                // Platform-specific fields for Instagram
+                content_url,
+                content_type,
+                author_unique_id: post.owner_username.clone(), // Instagram owner username
+                comment_url: None, // Instagram doesn't have direct comment URLs
             });
         }
 
@@ -880,12 +907,8 @@ impl AgentRepository {
             .map_err(|_| diesel::result::Error::NotFound)?;
 
         let offset = (page - 1) * per_page;
-        let status_str = match status_filter.unwrap_or(0) {
-            0 => "pending",
-            1 => "processing",
-            2 => "completed",
-            _ => "pending",
-        };
+        // Status is now i16: 0=pending, 1=processing, 2=completed
+        let status_val = status_filter.unwrap_or(0);
 
         let query = gm_agent_reddit_comments::table
             .inner_join(
@@ -906,7 +929,7 @@ impl AgentRepository {
                     .eq(gm_social_accounts::group_id)),
             )
             .filter(gm_social_accounts::device_id.eq(device_id))
-            .filter(gm_agent_reddit_comments::status.eq(status_str));
+            .filter(gm_agent_reddit_comments::status.eq(status_val));
 
         let total: i64 = query.count().get_result(&mut conn)?;
 
@@ -929,15 +952,25 @@ impl AgentRepository {
         for (comment, post, campaign) in results {
             let profile_name = self.get_random_profile_name(&mut conn, campaign.social_group_id);
 
+            // Use permalink for content URL, or build from subreddit/post_id
+            let content_url = post.permalink.clone().map(|p| format!("https://www.reddit.com{}", p))
+                .or(post.url.clone());
+            // Reddit posts can be video or text, check is_video flag
+            let content_type = if post.is_video.unwrap_or(false) {
+                Some("VIDEO".to_string())
+            } else {
+                Some("POST".to_string())
+            };
+
             list.push(UnifiedCommentWithConfigDto {
                 id: comment.id,
-                comment_id: comment.comment_id,
+                comment_id: comment.comment_id.clone(),
                 content_id: post.post_id,
                 platform: "reddit".to_string(),
                 content: comment.body,
-                status: comment.status.unwrap_or_else(|| "pending".to_string()),
+                status: Self::status_i16_to_string(comment.status),
                 user_nickname: comment.author.clone(),
-                user_unique_id: comment.author,
+                user_unique_id: comment.author.clone(),
                 suggested_reply: comment.suggested_reply,
                 suggested_dm: comment.suggested_dm,
                 suggested_reply_post: comment.suggested_reply_post,
@@ -951,6 +984,11 @@ impl AgentRepository {
                 auto_reply_comments: campaign.auto_reply_comments,
                 auto_reply_post: campaign.auto_reply_post,
                 profile_name,
+                // Platform-specific fields for Reddit
+                content_url,
+                content_type,
+                author_unique_id: post.author.clone(), // Reddit post author
+                comment_url: None, // Reddit doesn't have direct comment URLs in the same way
             });
         }
 
@@ -976,12 +1014,8 @@ impl AgentRepository {
             .map_err(|_| diesel::result::Error::NotFound)?;
 
         let offset = (page - 1) * per_page;
-        let status_str = match status_filter.unwrap_or(0) {
-            0 => "pending",
-            1 => "processing",
-            2 => "completed",
-            _ => "pending",
-        };
+        // Status is now i16: 0=pending, 1=processing, 2=completed
+        let status_val = status_filter.unwrap_or(0);
 
         let query = gm_agent_twitter_comments::table
             .inner_join(
@@ -1003,7 +1037,7 @@ impl AgentRepository {
                     .eq(gm_social_accounts::group_id)),
             )
             .filter(gm_social_accounts::device_id.eq(device_id))
-            .filter(gm_agent_twitter_comments::status.eq(status_str));
+            .filter(gm_agent_twitter_comments::status.eq(status_val));
 
         let total: i64 = query.count().get_result(&mut conn)?;
 
@@ -1026,14 +1060,23 @@ impl AgentRepository {
         for (comment, tweet, campaign) in results {
             let profile_name = self.get_random_profile_name(&mut conn, campaign.social_group_id);
 
+            // Build Twitter URL: https://twitter.com/{screen_name}/status/{tweet_id}
+            let screen_name = tweet.screen_name.clone();
+            let tweet_id = tweet.twitter_tweet_id.clone();
+            let content_url = screen_name.as_ref().map(|sn| {
+                format!("https://twitter.com/{}/status/{}", sn, tweet_id)
+            });
+            // Twitter doesn't have content types like Facebook
+            let content_type = Some("TWEET".to_string());
+
             list.push(UnifiedCommentWithConfigDto {
                 id: comment.id,
-                comment_id: comment.twitter_comment_id,
-                content_id: tweet.twitter_tweet_id,
+                comment_id: comment.twitter_comment_id.clone(),
+                content_id: tweet_id,
                 platform: "twitter".to_string(),
                 content: Some(comment.comment_text),
-                status: comment.status.unwrap_or_else(|| "pending".to_string()),
-                user_nickname: comment.comment_screen_name,
+                status: Self::status_i16_to_string(comment.status),
+                user_nickname: comment.comment_screen_name.clone(),
                 user_unique_id: comment.comment_user_id,
                 suggested_reply: comment.suggested_reply,
                 suggested_dm: comment.suggested_dm,
@@ -1048,10 +1091,25 @@ impl AgentRepository {
                 auto_reply_comments: campaign.auto_reply_comments,
                 auto_reply_post: campaign.auto_reply_post,
                 profile_name,
+                // Platform-specific fields for Twitter
+                content_url,
+                content_type,
+                author_unique_id: screen_name, // Twitter screen name as author
+                comment_url: None, // Twitter doesn't have direct comment URLs
             });
         }
 
         Ok(PageResponse::new(list, total, page, per_page))
+    }
+
+    /// Helper to convert i16 status to string
+    fn status_i16_to_string(status: i16) -> String {
+        match status {
+            0 => "pending".to_string(),
+            1 => "processing".to_string(),
+            2 => "completed".to_string(),
+            _ => "pending".to_string(),
+        }
     }
 
     /// Helper to get random profile_name from a social group

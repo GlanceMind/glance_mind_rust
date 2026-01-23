@@ -58,8 +58,7 @@ diesel::table! {
         suggested_reply -> Nullable<Text>,
         suggested_dm -> Nullable<Text>,
         suggested_reply_post -> Nullable<Text>,
-        #[max_length = 50]
-        status -> Nullable<Varchar>,
+        status -> Int2,
         #[max_length = 255]
         comment_user_id -> Nullable<Varchar>,
         #[max_length = 255]
@@ -142,8 +141,7 @@ diesel::table! {
         comment_text -> Text,
         reason -> Nullable<Text>,
         suggested_reply -> Nullable<Text>,
-        #[max_length = 50]
-        status -> Nullable<Varchar>,
+        status -> Int2,
         #[max_length = 255]
         comment_user_id -> Nullable<Varchar>,
         #[max_length = 255]
@@ -207,8 +205,7 @@ diesel::table! {
         body -> Nullable<Text>,
         reason -> Nullable<Text>,
         suggested_reply -> Nullable<Text>,
-        #[max_length = 50]
-        status -> Nullable<Varchar>,
+        status -> Int2,
         score -> Nullable<Int4>,
         #[max_length = 255]
         parent_id -> Nullable<Varchar>,
@@ -271,8 +268,7 @@ diesel::table! {
         comment_text -> Text,
         reason -> Nullable<Text>,
         suggested_reply -> Nullable<Text>,
-        #[max_length = 50]
-        status -> Nullable<Varchar>,
+        status -> Int2,
         favorite_count -> Nullable<Int4>,
         retweet_count -> Nullable<Int4>,
         reply_count -> Nullable<Int4>,

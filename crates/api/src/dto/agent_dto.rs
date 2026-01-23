@@ -172,6 +172,11 @@ pub struct UnifiedCommentWithConfigDto {
     pub auto_reply_post: bool,
     // Randomly selected profile_name from campaign's group
     pub profile_name: Option<String>,
+    // Platform-specific fields for URL construction
+    pub content_url: Option<String>,     // Direct URL to the content (post/video/tweet)
+    pub content_type: Option<String>,    // Content type: POST/VIDEO/REEL (mainly for Facebook)
+    pub author_unique_id: Option<String>, // Author's unique ID (for TikTok URL construction)
+    pub comment_url: Option<String>,     // Direct URL to the comment
 }
 
 // ============================================================
@@ -221,6 +226,11 @@ impl UnifiedCommentWithConfigDto {
                 reason: c.reason,
                 create_time: c.create_time.map(|t| t.and_utc().to_rfc3339()),
                 created_at: c.created_at.to_rfc3339(),
+                // Platform-specific fields for URL construction
+                content_url: c.content_url,
+                content_type: c.content_type,
+                author_unique_id: c.author_unique_id,
+                comment_url: c.comment_url,
             })
             .collect();
 

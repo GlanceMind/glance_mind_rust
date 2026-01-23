@@ -259,6 +259,19 @@ pub struct CommentData {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub create_time: Option<String>,
     pub created_at: String,
+    /// Platform-specific fields for URL construction
+    /// Direct URL to the content (post/video/tweet)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_url: Option<String>,
+    /// Content type: POST/VIDEO/REEL (mainly for Facebook)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
+    /// Author's unique ID (for TikTok URL construction: @{author_unique_id}/video/{content_id})
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author_unique_id: Option<String>,
+    /// Direct URL to the comment (for platforms that support it)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment_url: Option<String>,
 }
 
 /// Pagination information
@@ -544,8 +557,9 @@ impl CommentStatus {
     }
 
     /// Convert from string status (for database string format)
+    /// Supports both lowercase and uppercase: "pending"/"PENDING", etc.
     pub fn from_str_status(s: &str) -> Self {
-        match s {
+        match s.to_lowercase().as_str() {
             "pending" => CommentStatus::Pending,
             "processing" => CommentStatus::Processing,
             "completed" => CommentStatus::Completed,
@@ -691,6 +705,10 @@ mod tests {
                 reason: None,
                 create_time: None,
                 created_at: "2024-01-01T00:00:00Z".to_string(),
+                content_url: None,
+                content_type: None,
+                author_unique_id: Some("tiktok_author".to_string()),
+                comment_url: None,
             }],
             100,
             1,
