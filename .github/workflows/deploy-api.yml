@@ -131,8 +131,9 @@ jobs:
           export COMPOSE_DOCKER_CLI_BUILD=1
 
           # Step 1: Build the new image first (while old service is still running)
-          echo "🔨 Building new Docker image..."
-          $COMPOSE_CMD -f docker-compose.prod.yml build --build-arg BUILDKIT_INLINE_CACHE=1
+          # Use --no-cache to ensure fresh build when schema changes
+          echo "🔨 Building new Docker image (no cache)..."
+          $COMPOSE_CMD -f docker-compose.prod.yml build --no-cache
 
           # Step 2: Stop and remove old containers (quick operation)
           echo "🛑 Stopping old containers..."
