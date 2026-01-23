@@ -26,6 +26,7 @@ pub struct AgentComment {
     pub status: i16,
     pub suggested_dm: Option<String>,
     pub suggested_reply_post: Option<String>,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Queryable, Selectable, Serialize, Deserialize, Clone)]
@@ -45,6 +46,7 @@ pub struct AgentVideo {
     pub publish_time: Option<i64>,
     pub author_unique_id: Option<String>,
     pub url: Option<String>,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 // ==================== Facebook ====================
