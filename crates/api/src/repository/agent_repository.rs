@@ -638,9 +638,9 @@ impl AgentRepository {
             let author_unique_id = video.author_unique_id.clone();
             let video_id = video.video_id.clone().unwrap_or_default();
             let content_url = video.url.clone().or_else(|| {
-                author_unique_id.as_ref().map(|author| {
-                    format!("https://www.tiktok.com/@{}/video/{}", author, video_id)
-                })
+                author_unique_id
+                    .as_ref()
+                    .map(|author| format!("https://www.tiktok.com/@{}/video/{}", author, video_id))
             });
 
             list.push(UnifiedCommentWithConfigDto {
@@ -953,7 +953,10 @@ impl AgentRepository {
             let profile_name = self.get_random_profile_name(&mut conn, campaign.social_group_id);
 
             // Use permalink for content URL, or build from subreddit/post_id
-            let content_url = post.permalink.clone().map(|p| format!("https://www.reddit.com{}", p))
+            let content_url = post
+                .permalink
+                .clone()
+                .map(|p| format!("https://www.reddit.com{}", p))
                 .or(post.url.clone());
             // Reddit posts can be video or text, check is_video flag
             let content_type = if post.is_video.unwrap_or(false) {
@@ -1063,9 +1066,9 @@ impl AgentRepository {
             // Build Twitter URL: https://twitter.com/{screen_name}/status/{tweet_id}
             let screen_name = tweet.screen_name.clone();
             let tweet_id = tweet.twitter_tweet_id.clone();
-            let content_url = screen_name.as_ref().map(|sn| {
-                format!("https://twitter.com/{}/status/{}", sn, tweet_id)
-            });
+            let content_url = screen_name
+                .as_ref()
+                .map(|sn| format!("https://twitter.com/{}/status/{}", sn, tweet_id));
             // Twitter doesn't have content types like Facebook
             let content_type = Some("TWEET".to_string());
 
@@ -1095,7 +1098,7 @@ impl AgentRepository {
                 content_url,
                 content_type,
                 author_unique_id: screen_name, // Twitter screen name as author
-                comment_url: None, // Twitter doesn't have direct comment URLs
+                comment_url: None,             // Twitter doesn't have direct comment URLs
             });
         }
 
