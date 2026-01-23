@@ -1,4 +1,4 @@
-use crate::dto::agent_dto::{AgentCommentDto, UnifiedCommentDto};
+use crate::dto::agent_dto::{AgentCommentDto, UnifiedCommentDto, UnifiedCommentWithConfigDto};
 use crate::dto::common::PageResponse;
 use crate::repository::crawler_repository::{
     PLATFORM_NAME_FACEBOOK, PLATFORM_NAME_INSTAGRAM, PLATFORM_NAME_REDDIT, PLATFORM_NAME_TIKTOK,
@@ -536,5 +536,545 @@ impl AgentRepository {
             .order(gm_agent_comments::id.desc())
             .select(AgentComment::as_select())
             .load(&mut conn)
+    }
+
+    /// Unified method to get comments by device_id with platform support
+    /// Routes to correct table based on platform name
+    pub fn get_comments_by_device_unified(
+        &self,
+        device_id: &str,
+        platform: &str,
+        status_filter: Option<i16>,
+        page: i64,
+        per_page: i64,
+    ) -> Result<PageResponse<UnifiedCommentWithConfigDto>, diesel::result::Error> {
+        let platform_upper = platform.to_uppercase();
+        match platform_upper.as_str() {
+            PLATFORM_NAME_TIKTOK => {
+                self.get_tiktok_comments_by_device(device_id, status_filter, page, per_page)
+            }
+            PLATFORM_NAME_FACEBOOK => {
+                self.get_facebook_comments_by_device(device_id, status_filter, page, per_page)
+            }
+            PLATFORM_NAME_INSTAGRAM => {
+                self.get_instagram_comments_by_device(device_id, status_filter, page, per_page)
+            }
+            PLATFORM_NAME_REDDIT => {
+                self.get_reddit_comments_by_device(device_id, status_filter, page, per_page)
+            }
+            PLATFORM_NAME_TWITTER => {
+                self.get_twitter_comments_by_device(device_id, status_filter, page, per_page)
+            }
+            _ => {
+                // Default to TikTok for unknown platforms
+                self.get_tiktok_comments_by_device(device_id, status_filter, page, per_page)
+            }
+        }
+    }
+
+    /// Get TikTok comments by device_id
+    fn get_tiktok_comments_by_device(
+        &self,
+        device_id: &str,
+        status_filter: Option<i16>,
+        page: i64,
+        per_page: i64,
+    ) -> Result<PageResponse<UnifiedCommentWithConfigDto>, diesel::result::Error> {
+        use glance_mind_db::schema::{
+            gm_agent_comments, gm_agent_videos, gm_campaigns, gm_crawler_tasks, gm_social_accounts,
+            gm_social_groups,
+        };
+
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|_| diesel::result::Error::NotFound)?;
+
+        let offset = (page - 1) * per_page;
+        let status_val = status_filter.unwrap_or(0);
+
+        let query = gm_agent_comments::table
+            .inner_join(
+                gm_agent_videos::table.on(gm_agent_comments::video_db_id.eq(gm_agent_videos::id)),
+            )
+            .inner_join(
+                gm_crawler_tasks::table.on(gm_agent_videos::task_id.eq(gm_crawler_tasks::id)),
+            )
+            .inner_join(gm_campaigns::table.on(gm_crawler_tasks::campaign_id.eq(gm_campaigns::id)))
+            .inner_join(
+                gm_social_groups::table
+                    .on(gm_campaigns::social_group_id.eq(gm_social_groups::id.nullable())),
+            )
+            .inner_join(
+                gm_social_accounts::table.on(gm_social_groups::id
+                    .nullable()
+                    .eq(gm_social_accounts::group_id)),
+            )
+            .filter(gm_social_accounts::device_id.eq(device_id))
+            .filter(gm_agent_comments::status.eq(status_val));
+
+        let total: i64 = query.count().get_result(&mut conn)?;
+
+        let results: Vec<(
+            AgentComment,
+            glance_mind_db::entity::agent::AgentVideo,
+            glance_mind_db::entity::campaign::Campaign,
+        )> = query
+            .select((
+                AgentComment::as_select(),
+                glance_mind_db::entity::agent::AgentVideo::as_select(),
+                glance_mind_db::entity::campaign::Campaign::as_select(),
+            ))
+            .order(gm_agent_comments::id.desc())
+            .limit(per_page)
+            .offset(offset)
+            .load(&mut conn)?;
+
+        let mut list = Vec::new();
+        for (comment, video, campaign) in results {
+            let profile_name = self.get_random_profile_name(&mut conn, campaign.social_group_id);
+
+            list.push(UnifiedCommentWithConfigDto {
+                id: comment.id,
+                comment_id: comment.comment_id,
+                content_id: video.video_id.unwrap_or_default(),
+                platform: "tiktok".to_string(),
+                content: comment.content,
+                status: match comment.status {
+                    0 => "pending".to_string(),
+                    1 => "processing".to_string(),
+                    2 => "completed".to_string(),
+                    _ => "pending".to_string(),
+                },
+                user_nickname: comment.user_nickname,
+                user_unique_id: comment.user_unique_id,
+                suggested_reply: comment.suggested_reply,
+                suggested_dm: comment.suggested_dm,
+                suggested_reply_post: comment.suggested_reply_post,
+                reason: comment.reason,
+                create_time: comment.create_time,
+                created_at: comment.created_at,
+                campaign_id: comment.campaign_id,
+                auto_like: campaign.auto_like,
+                auto_follow: campaign.auto_follow,
+                auto_dm: campaign.auto_dm,
+                auto_reply_comments: campaign.auto_reply_comments,
+                auto_reply_post: campaign.auto_reply_post,
+                profile_name,
+            });
+        }
+
+        Ok(PageResponse::new(list, total, page, per_page))
+    }
+
+    /// Get Facebook comments by device_id
+    fn get_facebook_comments_by_device(
+        &self,
+        device_id: &str,
+        status_filter: Option<i16>,
+        page: i64,
+        per_page: i64,
+    ) -> Result<PageResponse<UnifiedCommentWithConfigDto>, diesel::result::Error> {
+        use glance_mind_db::schema::{
+            gm_agent_facebook_comments, gm_agent_facebook_posts, gm_campaigns, gm_crawler_tasks,
+            gm_social_accounts, gm_social_groups,
+        };
+
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|_| diesel::result::Error::NotFound)?;
+
+        let offset = (page - 1) * per_page;
+        let status_str = match status_filter.unwrap_or(0) {
+            0 => "pending",
+            1 => "processing",
+            2 => "completed",
+            _ => "pending",
+        };
+
+        let query = gm_agent_facebook_comments::table
+            .inner_join(
+                gm_agent_facebook_posts::table
+                    .on(gm_agent_facebook_comments::post_db_id.eq(gm_agent_facebook_posts::id)),
+            )
+            .inner_join(
+                gm_crawler_tasks::table
+                    .on(gm_agent_facebook_posts::task_id.eq(gm_crawler_tasks::id)),
+            )
+            .inner_join(gm_campaigns::table.on(gm_crawler_tasks::campaign_id.eq(gm_campaigns::id)))
+            .inner_join(
+                gm_social_groups::table
+                    .on(gm_campaigns::social_group_id.eq(gm_social_groups::id.nullable())),
+            )
+            .inner_join(
+                gm_social_accounts::table.on(gm_social_groups::id
+                    .nullable()
+                    .eq(gm_social_accounts::group_id)),
+            )
+            .filter(gm_social_accounts::device_id.eq(device_id))
+            .filter(gm_agent_facebook_comments::status.eq(status_str));
+
+        let total: i64 = query.count().get_result(&mut conn)?;
+
+        let results: Vec<(
+            FacebookComment,
+            glance_mind_db::entity::agent::FacebookPost,
+            glance_mind_db::entity::campaign::Campaign,
+        )> = query
+            .select((
+                FacebookComment::as_select(),
+                glance_mind_db::entity::agent::FacebookPost::as_select(),
+                glance_mind_db::entity::campaign::Campaign::as_select(),
+            ))
+            .order(gm_agent_facebook_comments::id.desc())
+            .limit(per_page)
+            .offset(offset)
+            .load(&mut conn)?;
+
+        let mut list = Vec::new();
+        for (comment, post, campaign) in results {
+            let profile_name = self.get_random_profile_name(&mut conn, campaign.social_group_id);
+
+            list.push(UnifiedCommentWithConfigDto {
+                id: comment.id,
+                comment_id: comment.facebook_comment_id,
+                content_id: post.facebook_post_id,
+                platform: "facebook".to_string(),
+                content: Some(comment.comment_text),
+                status: comment.status.unwrap_or_else(|| "pending".to_string()),
+                user_nickname: comment.comment_username,
+                user_unique_id: comment.comment_user_id,
+                suggested_reply: comment.suggested_reply,
+                suggested_dm: comment.suggested_dm,
+                suggested_reply_post: comment.suggested_reply_post,
+                reason: comment.reason,
+                create_time: comment.comment_created_at.map(|dt| dt.naive_utc()),
+                created_at: comment.created_at,
+                campaign_id: comment.campaign_id,
+                auto_like: campaign.auto_like,
+                auto_follow: campaign.auto_follow,
+                auto_dm: campaign.auto_dm,
+                auto_reply_comments: campaign.auto_reply_comments,
+                auto_reply_post: campaign.auto_reply_post,
+                profile_name,
+            });
+        }
+
+        Ok(PageResponse::new(list, total, page, per_page))
+    }
+
+    /// Get Instagram comments by device_id
+    fn get_instagram_comments_by_device(
+        &self,
+        device_id: &str,
+        status_filter: Option<i16>,
+        page: i64,
+        per_page: i64,
+    ) -> Result<PageResponse<UnifiedCommentWithConfigDto>, diesel::result::Error> {
+        use glance_mind_db::schema::{
+            gm_agent_instagram_comments, gm_agent_instagram_posts, gm_campaigns, gm_crawler_tasks,
+            gm_social_accounts, gm_social_groups,
+        };
+
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|_| diesel::result::Error::NotFound)?;
+
+        let offset = (page - 1) * per_page;
+        let status_str = match status_filter.unwrap_or(0) {
+            0 => "pending",
+            1 => "processing",
+            2 => "completed",
+            _ => "pending",
+        };
+
+        let query = gm_agent_instagram_comments::table
+            .inner_join(
+                gm_agent_instagram_posts::table
+                    .on(gm_agent_instagram_comments::post_db_id.eq(gm_agent_instagram_posts::id)),
+            )
+            .inner_join(
+                gm_crawler_tasks::table
+                    .on(gm_agent_instagram_posts::task_id.eq(gm_crawler_tasks::id)),
+            )
+            .inner_join(gm_campaigns::table.on(gm_crawler_tasks::campaign_id.eq(gm_campaigns::id)))
+            .inner_join(
+                gm_social_groups::table
+                    .on(gm_campaigns::social_group_id.eq(gm_social_groups::id.nullable())),
+            )
+            .inner_join(
+                gm_social_accounts::table.on(gm_social_groups::id
+                    .nullable()
+                    .eq(gm_social_accounts::group_id)),
+            )
+            .filter(gm_social_accounts::device_id.eq(device_id))
+            .filter(gm_agent_instagram_comments::status.eq(status_str));
+
+        let total: i64 = query.count().get_result(&mut conn)?;
+
+        let results: Vec<(
+            InstagramComment,
+            glance_mind_db::entity::agent::InstagramPost,
+            glance_mind_db::entity::campaign::Campaign,
+        )> = query
+            .select((
+                InstagramComment::as_select(),
+                glance_mind_db::entity::agent::InstagramPost::as_select(),
+                glance_mind_db::entity::campaign::Campaign::as_select(),
+            ))
+            .order(gm_agent_instagram_comments::id.desc())
+            .limit(per_page)
+            .offset(offset)
+            .load(&mut conn)?;
+
+        let mut list = Vec::new();
+        for (comment, post, campaign) in results {
+            let profile_name = self.get_random_profile_name(&mut conn, campaign.social_group_id);
+
+            list.push(UnifiedCommentWithConfigDto {
+                id: comment.id,
+                comment_id: comment.instagram_comment_id,
+                content_id: post.code,
+                platform: "instagram".to_string(),
+                content: Some(comment.comment_text),
+                status: comment.status.unwrap_or_else(|| "pending".to_string()),
+                user_nickname: comment.comment_username,
+                user_unique_id: comment.comment_user_id,
+                suggested_reply: comment.suggested_reply,
+                suggested_dm: comment.suggested_dm,
+                suggested_reply_post: comment.suggested_reply_post,
+                reason: comment.reason,
+                create_time: comment.comment_created_at.map(|dt| dt.naive_utc()),
+                created_at: comment.created_at,
+                campaign_id: comment.campaign_id,
+                auto_like: campaign.auto_like,
+                auto_follow: campaign.auto_follow,
+                auto_dm: campaign.auto_dm,
+                auto_reply_comments: campaign.auto_reply_comments,
+                auto_reply_post: campaign.auto_reply_post,
+                profile_name,
+            });
+        }
+
+        Ok(PageResponse::new(list, total, page, per_page))
+    }
+
+    /// Get Reddit comments by device_id
+    fn get_reddit_comments_by_device(
+        &self,
+        device_id: &str,
+        status_filter: Option<i16>,
+        page: i64,
+        per_page: i64,
+    ) -> Result<PageResponse<UnifiedCommentWithConfigDto>, diesel::result::Error> {
+        use glance_mind_db::schema::{
+            gm_agent_reddit_comments, gm_agent_reddit_posts, gm_campaigns, gm_crawler_tasks,
+            gm_social_accounts, gm_social_groups,
+        };
+
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|_| diesel::result::Error::NotFound)?;
+
+        let offset = (page - 1) * per_page;
+        let status_str = match status_filter.unwrap_or(0) {
+            0 => "pending",
+            1 => "processing",
+            2 => "completed",
+            _ => "pending",
+        };
+
+        let query = gm_agent_reddit_comments::table
+            .inner_join(
+                gm_agent_reddit_posts::table
+                    .on(gm_agent_reddit_comments::post_db_id.eq(gm_agent_reddit_posts::id)),
+            )
+            .inner_join(
+                gm_crawler_tasks::table.on(gm_agent_reddit_posts::task_id.eq(gm_crawler_tasks::id)),
+            )
+            .inner_join(gm_campaigns::table.on(gm_crawler_tasks::campaign_id.eq(gm_campaigns::id)))
+            .inner_join(
+                gm_social_groups::table
+                    .on(gm_campaigns::social_group_id.eq(gm_social_groups::id.nullable())),
+            )
+            .inner_join(
+                gm_social_accounts::table.on(gm_social_groups::id
+                    .nullable()
+                    .eq(gm_social_accounts::group_id)),
+            )
+            .filter(gm_social_accounts::device_id.eq(device_id))
+            .filter(gm_agent_reddit_comments::status.eq(status_str));
+
+        let total: i64 = query.count().get_result(&mut conn)?;
+
+        let results: Vec<(
+            RedditComment,
+            glance_mind_db::entity::agent::RedditPost,
+            glance_mind_db::entity::campaign::Campaign,
+        )> = query
+            .select((
+                RedditComment::as_select(),
+                glance_mind_db::entity::agent::RedditPost::as_select(),
+                glance_mind_db::entity::campaign::Campaign::as_select(),
+            ))
+            .order(gm_agent_reddit_comments::id.desc())
+            .limit(per_page)
+            .offset(offset)
+            .load(&mut conn)?;
+
+        let mut list = Vec::new();
+        for (comment, post, campaign) in results {
+            let profile_name = self.get_random_profile_name(&mut conn, campaign.social_group_id);
+
+            list.push(UnifiedCommentWithConfigDto {
+                id: comment.id,
+                comment_id: comment.comment_id,
+                content_id: post.post_id,
+                platform: "reddit".to_string(),
+                content: comment.body,
+                status: comment.status.unwrap_or_else(|| "pending".to_string()),
+                user_nickname: comment.author.clone(),
+                user_unique_id: comment.author,
+                suggested_reply: comment.suggested_reply,
+                suggested_dm: comment.suggested_dm,
+                suggested_reply_post: comment.suggested_reply_post,
+                reason: comment.reason,
+                create_time: comment.comment_created_at.map(|dt| dt.naive_utc()),
+                created_at: comment.created_at,
+                campaign_id: comment.campaign_id,
+                auto_like: campaign.auto_like,
+                auto_follow: campaign.auto_follow,
+                auto_dm: campaign.auto_dm,
+                auto_reply_comments: campaign.auto_reply_comments,
+                auto_reply_post: campaign.auto_reply_post,
+                profile_name,
+            });
+        }
+
+        Ok(PageResponse::new(list, total, page, per_page))
+    }
+
+    /// Get Twitter comments by device_id
+    fn get_twitter_comments_by_device(
+        &self,
+        device_id: &str,
+        status_filter: Option<i16>,
+        page: i64,
+        per_page: i64,
+    ) -> Result<PageResponse<UnifiedCommentWithConfigDto>, diesel::result::Error> {
+        use glance_mind_db::schema::{
+            gm_agent_twitter_comments, gm_agent_twitter_tweets, gm_campaigns, gm_crawler_tasks,
+            gm_social_accounts, gm_social_groups,
+        };
+
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|_| diesel::result::Error::NotFound)?;
+
+        let offset = (page - 1) * per_page;
+        let status_str = match status_filter.unwrap_or(0) {
+            0 => "pending",
+            1 => "processing",
+            2 => "completed",
+            _ => "pending",
+        };
+
+        let query = gm_agent_twitter_comments::table
+            .inner_join(
+                gm_agent_twitter_tweets::table
+                    .on(gm_agent_twitter_comments::tweet_db_id.eq(gm_agent_twitter_tweets::id)),
+            )
+            .inner_join(
+                gm_crawler_tasks::table
+                    .on(gm_agent_twitter_tweets::task_id.eq(gm_crawler_tasks::id)),
+            )
+            .inner_join(gm_campaigns::table.on(gm_crawler_tasks::campaign_id.eq(gm_campaigns::id)))
+            .inner_join(
+                gm_social_groups::table
+                    .on(gm_campaigns::social_group_id.eq(gm_social_groups::id.nullable())),
+            )
+            .inner_join(
+                gm_social_accounts::table.on(gm_social_groups::id
+                    .nullable()
+                    .eq(gm_social_accounts::group_id)),
+            )
+            .filter(gm_social_accounts::device_id.eq(device_id))
+            .filter(gm_agent_twitter_comments::status.eq(status_str));
+
+        let total: i64 = query.count().get_result(&mut conn)?;
+
+        let results: Vec<(
+            TwitterComment,
+            glance_mind_db::entity::agent::TwitterTweet,
+            glance_mind_db::entity::campaign::Campaign,
+        )> = query
+            .select((
+                TwitterComment::as_select(),
+                glance_mind_db::entity::agent::TwitterTweet::as_select(),
+                glance_mind_db::entity::campaign::Campaign::as_select(),
+            ))
+            .order(gm_agent_twitter_comments::id.desc())
+            .limit(per_page)
+            .offset(offset)
+            .load(&mut conn)?;
+
+        let mut list = Vec::new();
+        for (comment, tweet, campaign) in results {
+            let profile_name = self.get_random_profile_name(&mut conn, campaign.social_group_id);
+
+            list.push(UnifiedCommentWithConfigDto {
+                id: comment.id,
+                comment_id: comment.twitter_comment_id,
+                content_id: tweet.twitter_tweet_id,
+                platform: "twitter".to_string(),
+                content: Some(comment.comment_text),
+                status: comment.status.unwrap_or_else(|| "pending".to_string()),
+                user_nickname: comment.comment_screen_name,
+                user_unique_id: comment.comment_user_id,
+                suggested_reply: comment.suggested_reply,
+                suggested_dm: comment.suggested_dm,
+                suggested_reply_post: comment.suggested_reply_post,
+                reason: comment.reason,
+                create_time: comment.comment_created_at.map(|dt| dt.naive_utc()),
+                created_at: comment.created_at,
+                campaign_id: comment.campaign_id,
+                auto_like: campaign.auto_like,
+                auto_follow: campaign.auto_follow,
+                auto_dm: campaign.auto_dm,
+                auto_reply_comments: campaign.auto_reply_comments,
+                auto_reply_post: campaign.auto_reply_post,
+                profile_name,
+            });
+        }
+
+        Ok(PageResponse::new(list, total, page, per_page))
+    }
+
+    /// Helper to get random profile_name from a social group
+    fn get_random_profile_name(
+        &self,
+        conn: &mut diesel::PgConnection,
+        social_group_id: Option<i32>,
+    ) -> Option<String> {
+        use diesel::dsl::sql;
+        use diesel::sql_types::Text;
+        use glance_mind_db::schema::gm_social_accounts;
+
+        if let Some(group_id) = social_group_id {
+            let result: Result<Option<String>, _> = gm_social_accounts::table
+                .filter(gm_social_accounts::group_id.eq(group_id))
+                .filter(gm_social_accounts::profile_name.is_not_null())
+                .select(gm_social_accounts::profile_name)
+                .order(sql::<Text>("RANDOM()"))
+                .first(conn);
+
+            result.unwrap_or_default()
+        } else {
+            None
+        }
     }
 }

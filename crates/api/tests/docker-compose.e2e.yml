@@ -1,0 +1,61 @@
+# =============================================================================
+# GlanceMind API E2E Test Environment
+# =============================================================================
+# Provides a complete testing environment with:
+# - PostgreSQL with all migrations and mock data
+# - API server
+#
+# Usage:
+#   make test-e2e  # or
+#   docker-compose -f e2e/docker-compose.e2e.yml up -d
+# =============================================================================
+
+services:
+  # Test Database - uses shared db image from crates/db
+  db:
+    build:
+      context: ../../db
+      dockerfile: docker/Dockerfile.test
+    container_name: api-e2e-db
+    environment:
+      POSTGRES_USER: glancemind
+      POSTGRES_PASSWORD: testpassword
+      POSTGRES_DB: glancemind_test
+    ports:
+      - "5434:5432"  # Use 5434 to avoid conflicts
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U glancemind -d glancemind_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+
+  # API Server
+  api:
+    build:
+      context: ../../..
+      dockerfile: crates/api/Dockerfile
+    container_name: api-e2e-server
+    environment:
+      DATABASE_URL: postgres://glancemind:testpassword@db:5432/glancemind_test
+      PORT: 8080
+      JWT_SECRET: e2e_test_jwt_secret_key_12345
+      RUST_LOG: info
+      # Disable external services for testing
+      LAOZHANG_API_KEY: ""
+      RESEND_API_KEY: ""
+      TURNSTILE_SECRET_KEY: ""
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  api_e2e_db_data:

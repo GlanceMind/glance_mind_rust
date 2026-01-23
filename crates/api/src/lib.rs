@@ -6,6 +6,7 @@ pub mod dto;
 pub mod error;
 pub mod handler;
 pub mod middleware;
+pub mod protocol_gen;
 pub mod repository;
 pub mod response;
 pub mod routes;

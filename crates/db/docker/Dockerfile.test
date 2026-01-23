@@ -1,0 +1,35 @@
+# =============================================================================
+# GlanceMind Test Database Docker Image
+# =============================================================================
+# This image provides a pre-initialized PostgreSQL database with:
+# - All migrations applied
+# - Mock base data for testing (platforms, regions, pricing rules, users, etc.)
+#
+# Usage:
+#   docker build -t glancemind-testdb -f docker/Dockerfile.test .
+#   docker run -p 5432:5432 glancemind-testdb
+# =============================================================================
+
+FROM postgres:15-alpine
+
+# Environment variables
+ENV POSTGRES_USER=glancemind
+ENV POSTGRES_PASSWORD=testpassword
+ENV POSTGRES_DB=glancemind_test
+
+# Copy migration scripts and init data
+COPY migrations/ /docker-entrypoint-initdb.d/migrations/
+COPY docker/init-test-data.sql /docker-entrypoint-initdb.d/99-init-test-data.sql
+
+# Copy init script that runs migrations in order
+COPY docker/run-migrations.sh /docker-entrypoint-initdb.d/00-run-migrations.sh
+
+# Make script executable
+RUN chmod +x /docker-entrypoint-initdb.d/00-run-migrations.sh
+
+# Expose PostgreSQL port
+EXPOSE 5432
+
+# Health check
+HEALTHCHECK --interval=5s --timeout=3s --start-period=10s --retries=5 \
+    CMD pg_isready -U glancemind -d glancemind_test || exit 1

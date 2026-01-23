@@ -1,0 +1,46 @@
+# =============================================================================
+# GlanceMind Test Database Docker Compose
+# =============================================================================
+# Provides a ready-to-use PostgreSQL database with all migrations and mock data.
+#
+# Usage:
+#   cd crates/db
+#   docker-compose -f docker-compose.test.yml up -d
+#   docker-compose -f docker-compose.test.yml down -v  # cleanup
+# =============================================================================
+
+services:
+  testdb:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.test
+    container_name: glancemind-testdb
+    environment:
+      POSTGRES_USER: glancemind
+      POSTGRES_PASSWORD: testpassword
+      POSTGRES_DB: glancemind_test
+    ports:
+      - "5433:5432"  # Use 5433 to avoid conflict with local PostgreSQL
+    volumes:
+      - testdb_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U glancemind -d glancemind_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  # Redis for task queue testing
+  redis:
+    image: redis:7-alpine
+    container_name: glancemind-testredis
+    ports:
+      - "6380:6379"  # Use 6380 to avoid conflict with local Redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  testdb_data:

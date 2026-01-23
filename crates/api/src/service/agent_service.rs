@@ -1,6 +1,6 @@
 use crate::dto::agent_dto::{
-    CommentWithVideoDto, DeviceCommentsQuery, UnifiedCommentDto, UpdateCommentStatusDto,
-    UpdateStatusResponse,
+    CommentWithVideoDto, DeviceCommentsQuery, DeviceCommentsResponse, UnifiedCommentDto,
+    UnifiedCommentWithConfigDto, UpdateCommentStatusDto, UpdateStatusResponse,
 };
 use crate::dto::common::{PageRequest, PageResponse};
 use crate::error::api_error::ApiError;
@@ -43,13 +43,48 @@ impl AgentService {
             .map_err(|e| ApiError::InternalServerError(e.to_string()))
     }
 
-    // New method for device-based query
+    // New method for device-based query with platform support
+    // Returns protocol-compliant structure: campaign config + comments array
     pub async fn get_comments_by_device(
         &self,
         query: DeviceCommentsQuery,
+    ) -> Result<DeviceCommentsResponse, ApiError> {
+        // Convert i32 to i64 for repository layer (database operations use i64)
+        let page_i64 = i64::from(query.page);
+        let per_page_i64 = i64::from(query.per_page);
+
+        let page_response = self
+            .agent_repo
+            .get_comments_by_device_unified(
+                &query.device_id,
+                &query.platform,
+                query.status,
+                page_i64,
+                per_page_i64,
+            )
+            .map_err(|e| ApiError::InternalServerError(e.to_string()))?;
+
+        // Convert to protocol-compliant structure (uses i32 for pagination)
+        Ok(UnifiedCommentWithConfigDto::to_protocol_response(
+            page_response.list,
+            page_response.total,
+            query.page,
+            query.per_page,
+        ))
+    }
+
+    // Legacy method for backward compatibility (TikTok only)
+    #[allow(dead_code)]
+    pub async fn get_tiktok_comments_by_device(
+        &self,
+        query: DeviceCommentsQuery,
     ) -> Result<PageResponse<CommentWithVideoDto>, ApiError> {
+        // Convert i32 to i64 for repository layer
+        let page_i64 = i64::from(query.page);
+        let per_page_i64 = i64::from(query.per_page);
+
         self.agent_repo
-            .get_comments_by_device(&query.device_id, query.status, query.page, query.per_page)
+            .get_comments_by_device(&query.device_id, query.status, page_i64, per_page_i64)
             .map_err(|e| ApiError::InternalServerError(e.to_string()))
     }
 

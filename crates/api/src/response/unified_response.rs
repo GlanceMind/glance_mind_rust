@@ -222,7 +222,7 @@ where
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// // With data
 /// api_ok!(user_data)
 ///
@@ -259,7 +259,7 @@ macro_rules! api_ok {
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// // Using error code
 /// api_err!(ErrorCode::UserNotFound)
 ///
