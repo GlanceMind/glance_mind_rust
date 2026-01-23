@@ -27,11 +27,12 @@ impl TemplateRepository {
         let new_template = NewCampaignTemplate {
             campaign_id,
             weight,
-            dm_prompt,
             reply_prompt,
-            reply_post_prompt,
             created_at: chrono::Utc::now(),
             updated_at: None,
+            dm_template: None,
+            dm_prompt,
+            reply_post_prompt,
             name,
         };
 

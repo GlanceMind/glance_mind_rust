@@ -108,7 +108,6 @@ pub struct FacebookComment {
     pub suggested_reply: Option<String>,
     pub suggested_dm: Option<String>,
     pub suggested_reply_post: Option<String>,
-    pub status: i16,
     pub comment_user_id: Option<String>,
     pub comment_username: Option<String>,
     pub comment_user_url: Option<String>,
@@ -122,6 +121,7 @@ pub struct FacebookComment {
     pub post_url: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub status: Option<i16>,
 }
 
 // ==================== Instagram ====================
@@ -162,7 +162,6 @@ pub struct InstagramComment {
     pub comment_text: String,
     pub reason: Option<String>,
     pub suggested_reply: Option<String>,
-    pub status: i16,
     pub comment_user_id: Option<String>,
     pub comment_username: Option<String>,
     pub comment_user_full_name: Option<String>,
@@ -175,6 +174,7 @@ pub struct InstagramComment {
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
     pub suggested_dm: Option<String>,
     pub suggested_reply_post: Option<String>,
+    pub status: Option<i16>,
 }
 
 // ==================== Reddit ====================
@@ -216,7 +216,6 @@ pub struct RedditComment {
     pub body: Option<String>,
     pub reason: Option<String>,
     pub suggested_reply: Option<String>,
-    pub status: i16,
     pub score: Option<i32>,
     pub parent_id: Option<String>,
     pub is_reply: Option<bool>,
@@ -226,6 +225,7 @@ pub struct RedditComment {
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
     pub suggested_dm: Option<String>,
     pub suggested_reply_post: Option<String>,
+    pub status: Option<i16>,
 }
 
 // ==================== Twitter ====================
@@ -280,7 +280,6 @@ pub struct TwitterComment {
     pub comment_text: String,
     pub reason: Option<String>,
     pub suggested_reply: Option<String>,
-    pub status: i16,
     pub favorite_count: Option<i32>,
     pub retweet_count: Option<i32>,
     pub reply_count: Option<i32>,
@@ -295,4 +294,5 @@ pub struct TwitterComment {
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
     pub suggested_dm: Option<String>,
     pub suggested_reply_post: Option<String>,
+    pub status: Option<i16>,
 }

@@ -58,7 +58,6 @@ diesel::table! {
         suggested_reply -> Nullable<Text>,
         suggested_dm -> Nullable<Text>,
         suggested_reply_post -> Nullable<Text>,
-        status -> Int2,
         #[max_length = 255]
         comment_user_id -> Nullable<Varchar>,
         #[max_length = 255]
@@ -75,6 +74,7 @@ diesel::table! {
         post_url -> Nullable<Text>,
         created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
+        status -> Nullable<Int2>,
     }
 }
 
@@ -141,7 +141,6 @@ diesel::table! {
         comment_text -> Text,
         reason -> Nullable<Text>,
         suggested_reply -> Nullable<Text>,
-        status -> Int2,
         #[max_length = 255]
         comment_user_id -> Nullable<Varchar>,
         #[max_length = 255]
@@ -157,6 +156,7 @@ diesel::table! {
         updated_at -> Nullable<Timestamptz>,
         suggested_dm -> Nullable<Text>,
         suggested_reply_post -> Nullable<Text>,
+        status -> Nullable<Int2>,
     }
 }
 
@@ -205,7 +205,6 @@ diesel::table! {
         body -> Nullable<Text>,
         reason -> Nullable<Text>,
         suggested_reply -> Nullable<Text>,
-        status -> Int2,
         score -> Nullable<Int4>,
         #[max_length = 255]
         parent_id -> Nullable<Varchar>,
@@ -216,6 +215,7 @@ diesel::table! {
         updated_at -> Nullable<Timestamptz>,
         suggested_dm -> Nullable<Text>,
         suggested_reply_post -> Nullable<Text>,
+        status -> Nullable<Int2>,
     }
 }
 
@@ -268,7 +268,6 @@ diesel::table! {
         comment_text -> Text,
         reason -> Nullable<Text>,
         suggested_reply -> Nullable<Text>,
-        status -> Int2,
         favorite_count -> Nullable<Int4>,
         retweet_count -> Nullable<Int4>,
         reply_count -> Nullable<Int4>,
@@ -285,6 +284,7 @@ diesel::table! {
         updated_at -> Nullable<Timestamptz>,
         suggested_dm -> Nullable<Text>,
         suggested_reply_post -> Nullable<Text>,
+        status -> Nullable<Int2>,
     }
 }
 
@@ -418,6 +418,7 @@ diesel::table! {
         reply_prompt -> Nullable<Text>,
         created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
+        dm_template -> Nullable<Text>,
         dm_prompt -> Nullable<Text>,
         reply_post_prompt -> Nullable<Text>,
         #[max_length = 255]
@@ -458,8 +459,8 @@ diesel::table! {
         actual_consumption -> Numeric,
         is_frozen -> Bool,
         search_options -> Nullable<Jsonb>,
-        auto_reply_comments -> Bool,
         auto_reply_post -> Bool,
+        auto_reply_comments -> Bool,
         completed_reason -> Nullable<Text>,
     }
 }
@@ -505,15 +506,12 @@ diesel::table! {
 diesel::table! {
     gm_email_verifications (id) {
         id -> Int4,
-        #[max_length = 255]
-        email -> Varchar,
-        #[max_length = 6]
-        code -> Varchar,
+        email -> Text,
+        code -> Text,
         expires_at -> Timestamptz,
         verified -> Bool,
         created_at -> Timestamptz,
-        #[max_length = 45]
-        ip_address -> Nullable<Varchar>,
+        ip_address -> Nullable<Text>,
         user_agent -> Nullable<Text>,
     }
 }
@@ -765,7 +763,6 @@ diesel::table! {
         created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
         completed_at -> Nullable<Timestamptz>,
-        model_id -> Nullable<Int4>,
         #[max_length = 255]
         title -> Nullable<Varchar>,
         #[max_length = 20]
@@ -774,6 +771,7 @@ diesel::table! {
         video_seconds -> Nullable<Varchar>,
         #[max_length = 20]
         video_size -> Nullable<Varchar>,
+        model_id -> Nullable<Int4>,
     }
 }
 
