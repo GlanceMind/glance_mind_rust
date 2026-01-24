@@ -2,14 +2,12 @@ version: "3.8"
 
 services:
   backend:
+    # Use pre-built image (built by CI with buildx)
+    # Falls back to building if image doesn't exist
+    image: aihub_backend:latest
     build:
       context: ../..
       dockerfile: Dockerfile.api
-      cache_from:
-        - aihub_backend:latest
-      args:
-        BUILDKIT_INLINE_CACHE: 1
-    image: aihub_backend:latest
     container_name: aihub_backend
     restart: always
     env_file:
@@ -18,3 +16,9 @@ services:
       - "8000:8000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s

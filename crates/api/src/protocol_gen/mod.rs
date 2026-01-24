@@ -272,6 +272,11 @@ pub struct CommentData {
     /// Direct URL to the comment (for platforms that support it)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment_url: Option<String>,
+    /// Profile name for task execution
+    /// Randomly selected from campaign's associated social group
+    /// Used by executor to determine which browser profile to use
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_name: Option<String>,
 }
 
 /// Pagination information
@@ -709,6 +714,7 @@ mod tests {
                 content_type: None,
                 author_unique_id: Some("tiktok_author".to_string()),
                 comment_url: None,
+                profile_name: Some("test_profile".to_string()),
             }],
             100,
             1,

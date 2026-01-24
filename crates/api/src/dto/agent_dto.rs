@@ -173,10 +173,10 @@ pub struct UnifiedCommentWithConfigDto {
     // Randomly selected profile_name from campaign's group
     pub profile_name: Option<String>,
     // Platform-specific fields for URL construction
-    pub content_url: Option<String>,     // Direct URL to the content (post/video/tweet)
-    pub content_type: Option<String>,    // Content type: POST/VIDEO/REEL (mainly for Facebook)
+    pub content_url: Option<String>, // Direct URL to the content (post/video/tweet)
+    pub content_type: Option<String>, // Content type: POST/VIDEO/REEL (mainly for Facebook)
     pub author_unique_id: Option<String>, // Author's unique ID (for TikTok URL construction)
-    pub comment_url: Option<String>,     // Direct URL to the comment
+    pub comment_url: Option<String>, // Direct URL to the comment
 }
 
 // ============================================================
@@ -231,6 +231,8 @@ impl UnifiedCommentWithConfigDto {
                 content_type: c.content_type,
                 author_unique_id: c.author_unique_id,
                 comment_url: c.comment_url,
+                // Profile name for task execution (randomly selected from campaign's group)
+                profile_name: c.profile_name,
             })
             .collect();
 
@@ -337,6 +339,11 @@ mod tests {
             auto_reply_comments: true,
             auto_reply_post: false,
             profile_name: Some("Test Profile".to_string()),
+            // Platform-specific fields
+            content_url: Some(format!("https://example.com/{}/content/{}", platform, id)),
+            content_type: Some("POST".to_string()),
+            author_unique_id: Some(format!("{}_author_{}", platform, id)),
+            comment_url: None,
         }
     }
 

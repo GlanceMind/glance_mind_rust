@@ -12,6 +12,14 @@ on:
         options:
           - "false"
           - "true"
+      no_cache:
+        description: "Build without cache (for troubleshooting)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
 
   # Auto trigger on push to release branches
   push:
@@ -26,6 +34,11 @@ on:
       - "crates/db/**"
       - "Cargo.toml"
       - "Cargo.lock"
+
+env:
+  IMAGE_NAME: aihub_backend
+  # Cache directory for BuildKit on self-hosted runner
+  BUILDKIT_CACHE_DIR: /var/cache/buildkit
 
 jobs:
   # Check if migrations directory changed
@@ -61,6 +74,12 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          # Use docker-container driver for better caching
+          driver: docker-container
+          driver-opts: |
+            image=moby/buildkit:latest
+            network=host
 
       - name: Create .env file
         working-directory: crates/api
@@ -104,7 +123,6 @@ jobs:
           fi
 
           # Replace host.docker.internal with localhost for non-Docker environment
-          # (GitHub Actions runner runs directly on host, not in Docker)
           MIGRATION_DB_URL="${{ secrets.DATABASE_URL }}"
           MIGRATION_DB_URL="${MIGRATION_DB_URL//host.docker.internal/localhost}"
 
@@ -114,10 +132,45 @@ jobs:
 
           echo "✅ Migrations completed!"
 
-      - name: Deploy with Docker Compose (optimized for minimal downtime)
+      - name: Create BuildKit cache directory
+        run: |
+          sudo mkdir -p ${{ env.BUILDKIT_CACHE_DIR }}
+          sudo chown -R $USER:$USER ${{ env.BUILDKIT_CACHE_DIR }}
+
+      - name: Build Docker Image with Cache
+        run: |
+          echo "🔨 Building Docker image..."
+          
+          # Determine cache flags
+          CACHE_FROM=""
+          CACHE_TO=""
+          
+          if [ "${{ github.event.inputs.no_cache }}" != "true" ]; then
+            # Use local cache directory for self-hosted runner
+            CACHE_FROM="--cache-from=type=local,src=${{ env.BUILDKIT_CACHE_DIR }}"
+            CACHE_TO="--cache-to=type=local,dest=${{ env.BUILDKIT_CACHE_DIR }},mode=max"
+            echo "📦 Using BuildKit cache at ${{ env.BUILDKIT_CACHE_DIR }}"
+          else
+            echo "⚠️ Building without cache (no_cache=true)"
+          fi
+          
+          # Build with buildx
+          docker buildx build \
+            --file Dockerfile.api \
+            --tag ${{ env.IMAGE_NAME }}:latest \
+            --tag ${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            $CACHE_FROM \
+            $CACHE_TO \
+            --load \
+            --progress=plain \
+            .
+          
+          echo "✅ Build complete!"
+
+      - name: Deploy Application
         working-directory: crates/api
         run: |
-          # Try to use docker-compose (v1/standalone) or fall back to docker compose (v2 plugin)
+          # Try to use docker-compose (v1) or fall back to docker compose (v2)
           if command -v docker-compose &> /dev/null; then
             COMPOSE_CMD="docker-compose"
           else
@@ -126,21 +179,37 @@ jobs:
 
           echo "Using compose command: $COMPOSE_CMD"
 
-          # Export buildx builder for docker-compose
-          export DOCKER_BUILDKIT=1
-          export COMPOSE_DOCKER_CLI_BUILD=1
-
-          # Step 1: Build the new image first (while old service is still running)
-          # Use --no-cache to ensure fresh build when schema changes
-          echo "🔨 Building new Docker image (no cache)..."
-          $COMPOSE_CMD -f docker-compose.prod.yml build --no-cache
-
-          # Step 2: Stop and remove old containers (quick operation)
+          # Step 1: Stop old containers
           echo "🛑 Stopping old containers..."
-          $COMPOSE_CMD -f docker-compose.prod.yml down
+          $COMPOSE_CMD -f docker-compose.prod.yml down || true
 
-          # Step 3: Start new containers immediately with the pre-built image
+          # Step 2: Start new containers with the pre-built image
           echo "🚀 Starting new containers..."
           $COMPOSE_CMD -f docker-compose.prod.yml up -d
 
           echo "✅ Deployment complete!"
+
+      - name: Verify Deployment
+        run: |
+          echo "🔍 Verifying deployment..."
+          sleep 5
+          
+          # Check if container is running
+          if docker ps | grep -q "${{ env.IMAGE_NAME }}"; then
+            echo "✅ Container is running"
+          else
+            echo "❌ Container is not running!"
+            docker logs $(docker ps -a --filter "name=${{ env.IMAGE_NAME }}" -q --latest) || true
+            exit 1
+          fi
+
+      - name: Show Cache Stats
+        if: always()
+        run: |
+          echo "📊 BuildKit Cache Stats:"
+          if [ -d "${{ env.BUILDKIT_CACHE_DIR }}" ]; then
+            du -sh ${{ env.BUILDKIT_CACHE_DIR }} || echo "Could not get cache size"
+            ls -la ${{ env.BUILDKIT_CACHE_DIR }} || echo "Could not list cache"
+          else
+            echo "Cache directory does not exist"
+          fi
