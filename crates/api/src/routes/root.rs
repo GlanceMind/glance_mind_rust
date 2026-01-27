@@ -214,6 +214,19 @@ pub fn routes(db_conn: Arc<Database>) -> Router {
                     .with_state(user_state.clone()),
             )
             .nest(
+                "/video-cases",
+                crate::routes::video_case::video_case_routes()
+                    .layer(
+                        ServiceBuilder::new()
+                            .layer(middleware::from_fn_with_state(
+                                user_state.clone(),
+                                auth_middleware::auth,
+                            ))
+                            .layer(axum::Extension(user_state.clone())),
+                    )
+                    .with_state(user_state.clone()),
+            )
+            .nest(
                 "/scan",
                 crate::routes::scan::routes()
                     .layer(
@@ -258,6 +271,29 @@ pub fn routes(db_conn: Arc<Database>) -> Router {
                             ))
                             .layer(axum::Extension(user_state.clone())),
                     ),
+            )
+            // AI Publish User Routes (requires auth)
+            .merge(
+                crate::routes::aipub::aipub_user_routes()
+                    .layer(
+                        ServiceBuilder::new()
+                            .layer(middleware::from_fn_with_state(
+                                user_state.clone(),
+                                auth_middleware::auth,
+                            ))
+                            .layer(axum::Extension(user_state.clone())),
+                    )
+                    .with_state(user_state.clone()),
+            )
+            // AI Publish Internal Routes (for Scheduler - no auth for now)
+            .merge(
+                crate::routes::aipub::aipub_internal_routes()
+                    .with_state(user_state.clone()),
+            )
+            // AI Publish Public Routes (for Executor - no auth for now)
+            .merge(
+                crate::routes::aipub::aipub_public_routes()
+                    .with_state(user_state.clone()),
             )
             .merge(Router::new().route("/health", get(|| async { "Healthy..." })))
     };

@@ -67,6 +67,9 @@ pub enum BusinessError {
     #[error("Item not found")]
     ItemNotFound,
 
+    #[error("{0} not found")]
+    ResourceNotFound(String),
+
     // Permission Errors
     #[error("You don't have permission to access this template")]
     TemplatePermissionDenied,
@@ -90,11 +93,20 @@ pub enum BusinessError {
     #[error("Missing required parameter: {0}")]
     MissingRequiredParameter(String),
 
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
+
     #[error("Failed to parse form")]
     FormParsingFailed,
 
     #[error("Failed to read form field: {0}")]
     InvalidFormField(String),
+
+    #[error("Invalid file type: {0}. Allowed types: JPG, PNG, GIF, WebP, BMP")]
+    InvalidFileType(String),
+
+    #[error("File too large. Maximum size is {0} bytes")]
+    FileTooLarge(usize),
 
     // Data Operation Errors
     #[error("Failed to generate Excel file")]
@@ -130,6 +142,7 @@ impl BusinessError {
             BusinessError::AccountNotFound => ErrorCode::NotFound,
             BusinessError::GroupNotFound => ErrorCode::NotFound,
             BusinessError::ItemNotFound => ErrorCode::NotFound,
+            BusinessError::ResourceNotFound(_) => ErrorCode::NotFound,
 
             // Permission Errors
             BusinessError::TemplatePermissionDenied => ErrorCode::Forbidden,
@@ -141,8 +154,11 @@ impl BusinessError {
             BusinessError::ValidationFailed(_) => ErrorCode::ValidationError,
             BusinessError::UsernameAlreadyExists => ErrorCode::UserAlreadyExists,
             BusinessError::MissingRequiredParameter(_) => ErrorCode::BadRequest,
+            BusinessError::InvalidInput(_) => ErrorCode::BadRequest,
             BusinessError::FormParsingFailed => ErrorCode::BadRequest,
             BusinessError::InvalidFormField(_) => ErrorCode::BadRequest,
+            BusinessError::InvalidFileType(_) => ErrorCode::BadRequest,
+            BusinessError::FileTooLarge(_) => ErrorCode::BadRequest,
 
             // Data Operation Errors
             BusinessError::ExcelGenerationFailed => ErrorCode::InternalServerError,
@@ -189,6 +205,7 @@ impl BusinessError {
             BusinessError::AccountNotFound => "账号未找到".to_string(),
             BusinessError::GroupNotFound => "分组未找到".to_string(),
             BusinessError::ItemNotFound => "项目未找到".to_string(),
+            BusinessError::ResourceNotFound(resource) => format!("{}未找到", resource),
 
             // Permission Errors
             BusinessError::TemplatePermissionDenied => "您没有权限访问此模板".to_string(),
@@ -200,8 +217,18 @@ impl BusinessError {
             BusinessError::ValidationFailed(msg) => format!("验证失败: {}", msg),
             BusinessError::UsernameAlreadyExists => "用户名已存在".to_string(),
             BusinessError::MissingRequiredParameter(param) => format!("缺少必需参数: {}", param),
+            BusinessError::InvalidInput(msg) => format!("无效输入: {}", msg),
             BusinessError::FormParsingFailed => "表单解析失败".to_string(),
             BusinessError::InvalidFormField(field) => format!("表单字段读取失败: {}", field),
+            BusinessError::InvalidFileType(file_type) => {
+                format!(
+                    "无效的文件类型: {}。支持的类型: JPG, PNG, GIF, WebP, BMP",
+                    file_type
+                )
+            }
+            BusinessError::FileTooLarge(max_size) => {
+                format!("文件过大。最大允许 {} 字节", max_size)
+            }
 
             // Data Operation Errors
             BusinessError::ExcelGenerationFailed => "Excel文件生成失败".to_string(),

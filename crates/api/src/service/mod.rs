@@ -1,6 +1,7 @@
 pub mod agent_analysis_service;
 pub(crate) mod agent_service;
 pub mod ai_service;
+pub mod aipub_service;
 pub mod campaign_service;
 pub mod config_service;
 pub mod crawler_service;
@@ -8,6 +9,7 @@ pub(crate) mod dashboard_service;
 pub mod email_verification_service;
 pub mod laozhang_client;
 pub mod notification_service;
+pub mod oss_service;
 pub mod platform_service;
 pub mod promo_code_service;
 pub mod referral_service;
@@ -17,5 +19,6 @@ pub mod template_service;
 // pub mod tikhub_client; // Replaced by laozhang_client
 pub mod upload_task_service;
 pub mod user_service;
+pub mod video_case_service;
 pub mod video_service;
 pub(crate) mod wallet_service;

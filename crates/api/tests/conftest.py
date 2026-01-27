@@ -23,13 +23,13 @@ DATABASE_URL = os.getenv(
 
 # Test user credentials matching init-test-data.sql
 # Password: TestPassword123!
-TEST_USER_EMAIL = "user@glancemind.test"
+TEST_USER_EMAIL = "e2e@glancemind.test"
 TEST_USER_PASSWORD = "TestPassword123!"
-TEST_USER_ID = 2
+TEST_USER_ID = 999
 
-TEST_ADMIN_EMAIL = "admin@glancemind.test"
+TEST_ADMIN_EMAIL = "e2e@glancemind.test"
 TEST_ADMIN_PASSWORD = "TestPassword123!"
-TEST_ADMIN_ID = 1
+TEST_ADMIN_ID = 999
 
 
 # =============================================================================

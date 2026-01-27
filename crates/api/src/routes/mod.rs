@@ -1,6 +1,7 @@
 pub mod agent;
 pub(crate) mod agent_analysis;
 pub mod ai;
+pub mod aipub;
 pub(crate) mod auth;
 pub(crate) mod campaign;
 pub(crate) mod config;
@@ -19,4 +20,5 @@ pub(crate) mod template;
 pub mod upload_task;
 pub(crate) mod user;
 pub mod video;
+pub mod video_case;
 pub(crate) mod wallet;

@@ -401,6 +401,75 @@ diesel::table! {
 }
 
 diesel::table! {
+    gm_aipub_ai_tasks (id) {
+        id -> Int4,
+        plan_id -> Int4,
+        #[max_length = 20]
+        task_type -> Varchar,
+        #[max_length = 50]
+        external_service -> Varchar,
+        #[max_length = 200]
+        external_job_id -> Nullable<Varchar>,
+        input -> Jsonb,
+        result -> Nullable<Jsonb>,
+        #[max_length = 20]
+        status -> Varchar,
+        progress -> Nullable<Int4>,
+        error_message -> Nullable<Text>,
+        retry_count -> Nullable<Int4>,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+        completed_at -> Nullable<Timestamptz>,
+        sequence -> Int4,
+    }
+}
+
+diesel::table! {
+    gm_aipub_plans (id) {
+        id -> Int4,
+        user_id -> Int4,
+        group_id -> Nullable<Int4>,
+        social_account_id -> Nullable<Int4>,
+        platform_id -> Int4,
+        #[max_length = 20]
+        content_type -> Varchar,
+        ai_task_types -> Nullable<Array<Nullable<Text>>>,
+        ai_service_config -> Nullable<Jsonb>,
+        ai_input -> Nullable<Jsonb>,
+        chat_ai_model_id -> Nullable<Int4>,
+        video_ai_model_id -> Nullable<Int4>,
+        content -> Nullable<Jsonb>,
+        #[max_length = 20]
+        status -> Varchar,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+        #[max_length = 20]
+        plan_type -> Varchar,
+        #[max_length = 200]
+        name -> Nullable<Varchar>,
+    }
+}
+
+diesel::table! {
+    gm_aipub_tasks (id) {
+        id -> Int4,
+        plan_id -> Int4,
+        social_account_id -> Int4,
+        content -> Jsonb,
+        #[max_length = 20]
+        status -> Varchar,
+        #[max_length = 500]
+        result_url -> Nullable<Varchar>,
+        error_message -> Nullable<Text>,
+        retry_count -> Nullable<Int4>,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+        published_at -> Nullable<Timestamptz>,
+        ai_task_id -> Nullable<Int4>,
+    }
+}
+
+diesel::table! {
     gm_campaign_accounts (id) {
         id -> Int4,
         campaign_id -> Int4,
@@ -418,7 +487,6 @@ diesel::table! {
         reply_prompt -> Nullable<Text>,
         created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
-        dm_template -> Nullable<Text>,
         dm_prompt -> Nullable<Text>,
         reply_post_prompt -> Nullable<Text>,
         #[max_length = 255]
@@ -459,8 +527,8 @@ diesel::table! {
         actual_consumption -> Numeric,
         is_frozen -> Bool,
         search_options -> Nullable<Jsonb>,
-        auto_reply_post -> Bool,
         auto_reply_comments -> Bool,
+        auto_reply_post -> Bool,
         completed_reason -> Nullable<Text>,
     }
 }
@@ -504,14 +572,70 @@ diesel::table! {
 }
 
 diesel::table! {
+    /// Video cases table - primary key is task_no (varchar)
+    gm_data_video_cases (task_no) {
+        #[max_length = 32]
+        task_no -> Varchar,
+        video_id -> Nullable<Int8>,
+        case_id -> Nullable<Int4>,
+        #[max_length = 64]
+        user_id -> Nullable<Varchar>,
+        #[max_length = 16]
+        task_type -> Nullable<Varchar>,
+        #[max_length = 32]
+        tt_category_id -> Nullable<Varchar>,
+        #[max_length = 128]
+        category_name_en -> Nullable<Varchar>,
+        #[max_length = 128]
+        category_name_cn -> Nullable<Varchar>,
+        video_url -> Nullable<Text>,
+        refer_image_url -> Nullable<Text>,
+        ai_image_url -> Nullable<Text>,
+        ai_prompt -> Nullable<Text>,
+        #[max_length = 32]
+        video_status -> Nullable<Varchar>,
+        progress -> Nullable<Int4>,
+        case_status -> Nullable<Int4>,
+        favorite_status -> Nullable<Int4>,
+        error_message -> Nullable<Text>,
+        #[max_length = 32]
+        video_size -> Nullable<Varchar>,
+        detail_id -> Nullable<Int4>,
+        num -> Nullable<Int4>,
+        detail_status -> Nullable<Int4>,
+        completed_num -> Nullable<Int4>,
+        #[max_length = 256]
+        product_name -> Nullable<Varchar>,
+        #[max_length = 256]
+        brand_name -> Nullable<Varchar>,
+        selling_point -> Nullable<Text>,
+        #[max_length = 64]
+        video_model -> Nullable<Varchar>,
+        #[max_length = 32]
+        video_language -> Nullable<Varchar>,
+        script -> Nullable<Text>,
+        refer_video_url -> Nullable<Text>,
+        image_urls -> Nullable<Jsonb>,
+        characters -> Nullable<Jsonb>,
+        videos -> Nullable<Jsonb>,
+        create_time -> Nullable<Timestamp>,
+        crawl_time -> Nullable<Timestamp>,
+        updated_at -> Nullable<Timestamp>,
+    }
+}
+
+diesel::table! {
     gm_email_verifications (id) {
         id -> Int4,
-        email -> Text,
-        code -> Text,
+        #[max_length = 255]
+        email -> Varchar,
+        #[max_length = 6]
+        code -> Varchar,
         expires_at -> Timestamptz,
         verified -> Bool,
         created_at -> Timestamptz,
-        ip_address -> Nullable<Text>,
+        #[max_length = 45]
+        ip_address -> Nullable<Varchar>,
         user_agent -> Nullable<Text>,
     }
 }
@@ -763,6 +887,7 @@ diesel::table! {
         created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
         completed_at -> Nullable<Timestamptz>,
+        model_id -> Nullable<Int4>,
         #[max_length = 255]
         title -> Nullable<Varchar>,
         #[max_length = 20]
@@ -771,7 +896,6 @@ diesel::table! {
         video_seconds -> Nullable<Varchar>,
         #[max_length = 20]
         video_size -> Nullable<Varchar>,
-        model_id -> Nullable<Int4>,
     }
 }
 
@@ -811,6 +935,12 @@ diesel::joinable!(gm_agent_twitter_tweets -> gm_campaigns (campaign_id));
 diesel::joinable!(gm_agent_twitter_tweets -> gm_crawler_tasks (task_id));
 diesel::joinable!(gm_agent_videos -> gm_campaigns (campaign_id));
 diesel::joinable!(gm_agent_videos -> gm_crawler_tasks (task_id));
+diesel::joinable!(gm_aipub_plans -> gm_platforms (platform_id));
+diesel::joinable!(gm_aipub_plans -> gm_social_accounts (social_account_id));
+diesel::joinable!(gm_aipub_plans -> gm_social_groups (group_id));
+diesel::joinable!(gm_aipub_plans -> gm_users (user_id));
+diesel::joinable!(gm_aipub_tasks -> gm_aipub_ai_tasks (ai_task_id));
+diesel::joinable!(gm_aipub_tasks -> gm_social_accounts (social_account_id));
 diesel::joinable!(gm_campaign_accounts -> gm_campaigns (campaign_id));
 diesel::joinable!(gm_campaign_accounts -> gm_social_accounts (account_id));
 diesel::joinable!(gm_campaign_templates -> gm_campaigns (campaign_id));
@@ -855,11 +985,15 @@ diesel::allow_tables_to_appear_in_same_query!(
     gm_agent_videos,
     gm_ai_models,
     gm_ai_video_models,
+    gm_aipub_ai_tasks,
+    gm_aipub_plans,
+    gm_aipub_tasks,
     gm_campaign_accounts,
     gm_campaign_templates,
     gm_campaigns,
     gm_crawler_results,
     gm_crawler_tasks,
+    gm_data_video_cases,
     gm_email_verifications,
     gm_login_logs,
     gm_notifications,

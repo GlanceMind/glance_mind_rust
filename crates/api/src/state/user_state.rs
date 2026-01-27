@@ -7,6 +7,7 @@ use crate::repository::user_repository::UserRepository;
 use crate::repository::wallet_repository::WalletRepository;
 use crate::service::agent_analysis_service::AgentAnalysisService;
 use crate::service::agent_service::AgentService;
+use crate::service::aipub_service::AipubService;
 use crate::service::campaign_service::CampaignService;
 use crate::service::config_service::ConfigService;
 use crate::service::crawler_service::CrawlerService;
@@ -21,6 +22,7 @@ use crate::service::social_group_service::SocialGroupService;
 use crate::service::template_service::TemplateService;
 use crate::service::upload_task_service::UploadTaskService;
 use crate::service::user_service::UserService;
+use crate::service::video_case_service::VideoCaseService;
 use crate::service::video_service::VideoService;
 use crate::service::wallet_service::WalletService;
 use std::sync::Arc;
@@ -44,7 +46,9 @@ pub struct UserState {
     pub agent_service: AgentService,
     pub agent_analysis_service: AgentAnalysisService,
     pub video_service: VideoService,
+    pub video_case_service: VideoCaseService,
     pub upload_task_service: UploadTaskService,
+    pub aipub_service: AipubService,
     pub charging_manager: ChargingManager,
 }
 
@@ -86,7 +90,9 @@ impl UserState {
                 laozhang_client,
                 ConfigService::new(db_conn),
             ),
+            video_case_service: VideoCaseService::new(db_conn.pool.clone()),
             upload_task_service: UploadTaskService::new(db_conn),
+            aipub_service: AipubService::new(db_conn),
             charging_manager,
         }
     }

@@ -53,6 +53,7 @@ pub struct UpdateSocialAccountDto {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SocialAccountDto {
     pub id: i32,
+    pub platform_id: i32,
     pub group_id: Option<i32>,
     pub username: String,
     pub cookie: Option<String>,

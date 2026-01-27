@@ -171,6 +171,7 @@ impl SocialAccountService {
     fn to_dto(&self, account: SocialAccount) -> SocialAccountDto {
         SocialAccountDto {
             id: account.id,
+            platform_id: account.platform_id,
             group_id: account.group_id,
             username: account.username,
             cookie: Some(account.cookie),

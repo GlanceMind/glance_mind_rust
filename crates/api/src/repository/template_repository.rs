@@ -30,7 +30,6 @@ impl TemplateRepository {
             reply_prompt,
             created_at: chrono::Utc::now(),
             updated_at: None,
-            dm_template: None,
             dm_prompt,
             reply_post_prompt,
             name,
