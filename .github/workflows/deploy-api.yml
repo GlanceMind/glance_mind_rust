@@ -95,6 +95,11 @@ jobs:
           echo "TIKHUB_BASE_URL=${{ secrets.TIKHUB_BASE_URL }}" >> .env
           echo "RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}" >> .env
           echo "TURNSTILE_SECRET_KEY=${{ secrets.TURNSTILE_SECRET_KEY }}" >> .env
+          # OSS Configuration
+          echo "OSS_ACCESS_KEY_ID=${{ secrets.OSS_ACCESS_KEY_ID }}" >> .env
+          echo "OSS_ACCESS_KEY_SECRET=${{ secrets.OSS_ACCESS_KEY_SECRET }}" >> .env
+          echo "OSS_ENDPOINT=${{ vars.OSS_ENDPOINT }}" >> .env
+          echo "OSS_BUCKET=${{ vars.OSS_BUCKET }}" >> .env
 
       - name: Install Rust (for migrations)
         if: needs.check-changes.outputs.db_changed == 'true' || github.event.inputs.run_migrations == 'true'
