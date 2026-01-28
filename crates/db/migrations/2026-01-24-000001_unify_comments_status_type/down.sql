@@ -1,5 +1,5 @@
 -- Rollback: Revert comments status field type from SMALLINT back to VARCHAR(50)
--- Status values: 0->PENDING, 1->PROCESSING, 2->COMPLETED
+-- Status values: 0->PENDING, 2->COMPLETED (no intermediate state)
 -- This rollback is idempotent - safe to run on databases that haven't been migrated
 
 -- ============================================================================

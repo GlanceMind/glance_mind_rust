@@ -700,7 +700,7 @@ impl AgentRepository {
             .map_err(|_| diesel::result::Error::NotFound)?;
 
         let offset = (page - 1) * per_page;
-        // Status is now i16: 0=pending, 1=processing, 2=completed
+        // Status is now i16: 0=pending, 2=completed
         let status_val = status_filter.unwrap_or(0);
 
         let query = gm_agent_facebook_comments::table
@@ -803,7 +803,7 @@ impl AgentRepository {
             .map_err(|_| diesel::result::Error::NotFound)?;
 
         let offset = (page - 1) * per_page;
-        // Status is now i16: 0=pending, 1=processing, 2=completed
+        // Status is now i16: 0=pending, 2=completed
         let status_val = status_filter.unwrap_or(0);
 
         let query = gm_agent_instagram_comments::table
@@ -907,7 +907,7 @@ impl AgentRepository {
             .map_err(|_| diesel::result::Error::NotFound)?;
 
         let offset = (page - 1) * per_page;
-        // Status is now i16: 0=pending, 1=processing, 2=completed
+        // Status is now i16: 0=pending, 2=completed
         let status_val = status_filter.unwrap_or(0);
 
         let query = gm_agent_reddit_comments::table
@@ -1017,7 +1017,7 @@ impl AgentRepository {
             .map_err(|_| diesel::result::Error::NotFound)?;
 
         let offset = (page - 1) * per_page;
-        // Status is now i16: 0=pending, 1=processing, 2=completed
+        // Status is now i16: 0=pending, 2=completed
         let status_val = status_filter.unwrap_or(0);
 
         let query = gm_agent_twitter_comments::table

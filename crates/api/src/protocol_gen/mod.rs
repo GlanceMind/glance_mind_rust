@@ -79,31 +79,28 @@ impl Platform {
 }
 
 /// Comment processing status
+/// Only two states: 0=Pending (waiting for executor), 2=Completed (replied)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(i32)]
 pub enum CommentStatus {
-    Unspecified = 0,
-    Pending = 1,
-    Processing = 2,
-    Completed = 3,
+    Pending = 0,
+    Completed = 2,
 }
 
 impl CommentStatus {
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            Self::Unspecified => "COMMENT_STATUS_UNSPECIFIED",
             Self::Pending => "COMMENT_STATUS_PENDING",
-            Self::Processing => "COMMENT_STATUS_PROCESSING",
             Self::Completed => "COMMENT_STATUS_COMPLETED",
         }
     }
 
     pub fn from_str_name(value: &str) -> Option<Self> {
         match value {
-            "COMMENT_STATUS_UNSPECIFIED" => Some(Self::Unspecified),
             "COMMENT_STATUS_PENDING" => Some(Self::Pending),
-            "COMMENT_STATUS_PROCESSING" => Some(Self::Processing),
             "COMMENT_STATUS_COMPLETED" => Some(Self::Completed),
+            // Backwards compatibility: treat old values as Pending
+            "COMMENT_STATUS_UNSPECIFIED" | "COMMENT_STATUS_PROCESSING" => Some(Self::Pending),
             _ => None,
         }
     }
@@ -516,7 +513,7 @@ impl<'de> Deserialize<'de> for CommentStatus {
     {
         let s = String::deserialize(deserializer)?;
         CommentStatus::from_json_str(&s).ok_or_else(|| {
-            serde::de::Error::unknown_variant(&s, &["pending", "processing", "completed"])
+            serde::de::Error::unknown_variant(&s, &["pending", "completed"])
         })
     }
 }
@@ -524,9 +521,7 @@ impl<'de> Deserialize<'de> for CommentStatus {
 impl CommentStatus {
     pub fn to_json_str(&self) -> &'static str {
         match self {
-            CommentStatus::Unspecified => "unspecified",
             CommentStatus::Pending => "pending",
-            CommentStatus::Processing => "processing",
             CommentStatus::Completed => "completed",
         }
     }
@@ -534,20 +529,21 @@ impl CommentStatus {
     pub fn from_json_str(s: &str) -> Option<Self> {
         match s {
             "pending" => Some(CommentStatus::Pending),
-            "processing" => Some(CommentStatus::Processing),
             "completed" => Some(CommentStatus::Completed),
-            "unspecified" => Some(CommentStatus::Unspecified),
+            // Backwards compatibility: treat old values as Pending
+            "processing" | "unspecified" => Some(CommentStatus::Pending),
             _ => None,
         }
     }
 
     /// Convert from i16 status code (database format)
+    /// 0=Pending, 2=Completed, others treated as Pending
     pub fn from_i16(status: i16) -> Self {
         match status {
             0 => CommentStatus::Pending,
-            1 => CommentStatus::Processing,
             2 => CommentStatus::Completed,
-            _ => CommentStatus::Unspecified,
+            // Backwards compatibility: treat 1 (old Processing) as Pending
+            _ => CommentStatus::Pending,
         }
     }
 
@@ -555,9 +551,7 @@ impl CommentStatus {
     pub fn to_i16(&self) -> i16 {
         match self {
             CommentStatus::Pending => 0,
-            CommentStatus::Processing => 1,
             CommentStatus::Completed => 2,
-            CommentStatus::Unspecified => -1,
         }
     }
 
@@ -566,9 +560,9 @@ impl CommentStatus {
     pub fn from_str_status(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "pending" => CommentStatus::Pending,
-            "processing" => CommentStatus::Processing,
             "completed" => CommentStatus::Completed,
-            _ => CommentStatus::Unspecified,
+            // Backwards compatibility: treat old values as Pending
+            "processing" | "unspecified" | _ => CommentStatus::Pending,
         }
     }
 }

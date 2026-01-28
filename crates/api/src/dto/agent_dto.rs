@@ -22,7 +22,7 @@ pub struct AgentCommentDto {
     pub suggested_reply_post: Option<String>,
     pub create_time: Option<String>, // ISO 8601 format
     pub digg_count: Option<i32>,     //  From comment data if  available
-    pub status: i16,                 // 0=init, 1=processing, 2=completed
+    pub status: i16,                 // 0=pending, 2=completed
 }
 
 impl AgentCommentDto {

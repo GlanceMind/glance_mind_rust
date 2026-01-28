@@ -1,6 +1,6 @@
 -- Migration: Unify comments status field type across all platforms
 -- Change status from VARCHAR(50) to SMALLINT to match TikTok's gm_agent_comments table
--- Status values: 0=pending, 1=processing, 2=completed
+-- Status values: 0=pending, 2=completed (no intermediate state)
 -- This migration is idempotent - safe to run on databases that have already been migrated
 
 -- ============================================================================
