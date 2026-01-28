@@ -14,6 +14,7 @@ use crate::service::crawler_service::CrawlerService;
 use crate::service::dashboard_service::DashboardService;
 use crate::service::email_verification_service::EmailVerificationService;
 use crate::service::laozhang_client::LaoZhangClient;
+use crate::service::material_service::MaterialService;
 use crate::service::platform_service::PlatformService;
 use crate::service::promo_code_service::PromoCodeService;
 use crate::service::referral_service::ReferralService;
@@ -49,6 +50,7 @@ pub struct UserState {
     pub video_case_service: VideoCaseService,
     pub upload_task_service: UploadTaskService,
     pub aipub_service: AipubService,
+    pub material_service: MaterialService,
     pub charging_manager: ChargingManager,
 }
 
@@ -56,10 +58,11 @@ impl UserState {
     pub fn new(db_conn: &Arc<Database>) -> Self {
         let user_repo = UserRepository::new(db_conn.pool.clone());
 
-        // Initialize LaoZhang client
+        // Initialize LaoZhang client (shared for video_service and material_service)
         let laozhang_api_key = parameter::get("LAOZHANG_API_KEY");
         let laozhang_base_url = std::env::var("LAOZHANG_BASE_URL").ok();
-        let laozhang_client = LaoZhangClient::new(laozhang_api_key, laozhang_base_url);
+        let laozhang_client = LaoZhangClient::new(laozhang_api_key.clone(), laozhang_base_url.clone());
+        let laozhang_client_for_material = LaoZhangClient::new(laozhang_api_key, laozhang_base_url);
 
         // Initialize ChargingManager
         let pricing_repo = PricingRepository::new(db_conn.pool.clone());
@@ -93,6 +96,11 @@ impl UserState {
             video_case_service: VideoCaseService::new(db_conn.pool.clone()),
             upload_task_service: UploadTaskService::new(db_conn),
             aipub_service: AipubService::new(db_conn),
+            material_service: MaterialService::new(
+                db_conn,
+                laozhang_client_for_material,
+                VideoCaseService::new(db_conn.pool.clone()),
+            ),
             charging_manager,
         }
     }

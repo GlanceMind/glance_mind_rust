@@ -4,6 +4,7 @@
 use crate::handler::{aipub_handler, oss_handler};
 use crate::state::user_state::UserState;
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{get, patch, post},
     Router,
 };
@@ -11,11 +12,20 @@ use axum::{
 /// User-facing API routes (requires JWT auth)
 /// Auth middleware will be applied by root.rs when merging
 pub fn aipub_user_routes() -> Router<UserState> {
+    // Body size limit: 100MB for video uploads
+    const MAX_VIDEO_UPLOAD_SIZE: usize = 100 * 1024 * 1024; // 100MB
+    
     Router::new()
         // Stats (put before :id routes to avoid conflict)
         .route("/publish_plans/stats", get(aipub_handler::get_plan_stats))
         // Image upload to OSS
         .route("/aipub/upload-image", post(oss_handler::upload_image))
+        // Video upload to OSS - with increased body size limit
+        .route(
+            "/oss/upload-video",
+            post(oss_handler::upload_video)
+                .layer(DefaultBodyLimit::max(MAX_VIDEO_UPLOAD_SIZE))
+        )
         // Plan CRUD
         .route(
             "/publish_plans",

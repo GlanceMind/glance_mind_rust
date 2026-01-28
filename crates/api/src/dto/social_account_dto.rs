@@ -9,6 +9,8 @@ pub struct SocialGroupDto {
     pub platform_id: i32,
     pub group_name: String,
     pub accounts: Option<Vec<SocialAccountDto>>,
+    /// Total number of accounts in this group
+    pub account_count: i64,
     pub created_at: NaiveDateTime,
     pub updated_at: Option<NaiveDateTime>,
 }
@@ -74,4 +76,48 @@ pub struct AccountStatisticsDto {
     pub active: i64,
     pub risk_control: i64,
     pub unavailable: i64,
+}
+
+// Batch Create Social Accounts DTO
+#[derive(Debug, Deserialize)]
+pub struct BatchCreateAccountsDto {
+    /// Platform ID
+    pub platform_id: i32,
+    /// Base username (will be combined with profile name)
+    pub username: String,
+    /// Device ID (shared for all accounts)
+    pub device_id: Option<String>,
+    /// Profile range start (e.g., "account_1")
+    pub profile_start: String,
+    /// Profile range end (e.g., "account_100")
+    pub profile_end: String,
+    /// Daily max replies for each account
+    #[serde(default = "default_daily_max_replies")]
+    pub daily_max_replies: i32,
+    /// Group ID (optional)
+    pub group_id: Option<i32>,
+}
+
+fn default_daily_max_replies() -> i32 {
+    50
+}
+
+// Batch Create Response DTO
+#[derive(Debug, Serialize)]
+pub struct BatchCreateResultDto {
+    /// Number of accounts successfully created
+    pub created_count: i32,
+    /// Total accounts attempted
+    pub total_attempted: i32,
+    /// List of created account IDs
+    pub created_ids: Vec<i32>,
+    /// Errors if any
+    pub errors: Vec<String>,
+}
+
+// Batch add accounts to group DTO
+#[derive(Debug, Deserialize)]
+pub struct BatchAddAccountsToGroupDto {
+    pub group_id: i32,
+    pub profile_names: Vec<String>, // List of profile names to add
 }

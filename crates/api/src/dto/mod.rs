@@ -8,6 +8,7 @@ pub mod crawler_dto;
 pub mod email_verification_dto;
 pub mod google_auth_dto;
 pub mod laozhang_dto;
+pub mod material_dto;
 pub mod notification_dto;
 pub mod oss_dto;
 pub mod promo_code_dto;

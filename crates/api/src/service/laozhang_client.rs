@@ -6,6 +6,7 @@ use crate::error::{
     api_error::ApiError, business_error::BusinessError, infrastructure_error::InfrastructureError,
 };
 use reqwest::{multipart, Client};
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 /// LaoZhang.ai API Client
@@ -685,6 +686,242 @@ impl LaoZhangClient {
         );
         Ok(task_response)
     }
+
+    /// Analyze video using Gemini model (for material prompt generation)
+    ///
+    /// Supported models:
+    /// - gemini-2.5-pro: Detailed and accurate, recommended for complex video analysis
+    /// - gemini-2.5-flash: Fast and cost-effective, suitable for batch processing
+    ///
+    /// # Arguments
+    /// * `model` - Model name (e.g., "gemini-2.5-pro", "gemini-2.5-flash")
+    /// * `video_url` - URL of the video to analyze
+    /// * `prompt` - Analysis instruction prompt
+    /// * `max_tokens` - Maximum tokens in response (optional)
+    ///
+    /// # Returns
+    /// Returns the analysis result as a string
+    pub async fn analyze_video(
+        &self,
+        model: &str,
+        video_url: &str,
+        prompt: &str,
+        max_tokens: Option<u32>,
+    ) -> Result<String, ApiError> {
+        let url = format!("{}/v1/chat/completions", self.base_url);
+
+        let request = VideoAnalysisRequest::new(model, prompt, video_url, max_tokens);
+
+        tracing::info!(
+            "Starting video analysis: model={}, video_url='{}', max_tokens={:?}",
+            model,
+            video_url.chars().take(50).collect::<String>(),
+            max_tokens
+        );
+
+        tracing::debug!(
+            "Video analysis request body: {}",
+            serde_json::to_string_pretty(&request).unwrap_or_default()
+        );
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| {
+                tracing::error!("Video analysis request failed: {:?}", e);
+                ApiError::InfrastructureError(InfrastructureError::ExternalApiRequestFailed(
+                    e.to_string(),
+                ))
+            })?;
+
+        let status = response.status();
+        let body_text = response.text().await.map_err(|e| {
+            tracing::error!("Failed to read video analysis response: {:?}", e);
+            ApiError::InfrastructureError(InfrastructureError::ExternalApiResponseParsingFailed(
+                e.to_string(),
+            ))
+        })?;
+
+        tracing::info!(
+            "Video analysis response: status={}, body_len={}",
+            status,
+            body_text.len()
+        );
+
+        if !status.is_success() {
+            tracing::error!(
+                "Video analysis failed: status={}, body={}",
+                status, body_text
+            );
+
+            if let Ok(error_response) = serde_json::from_str::<LaoZhangErrorResponse>(&body_text) {
+                return Err(ApiError::InfrastructureError(
+                    InfrastructureError::ExternalApiRequestFailed(format!(
+                        "Video analysis error: {}",
+                        error_response.error.message
+                    )),
+                ));
+            }
+
+            return Err(ApiError::InfrastructureError(
+                InfrastructureError::ExternalApiRequestFailed(format!(
+                    "Video analysis error: {} - {}",
+                    status, body_text
+                )),
+            ));
+        }
+
+        tracing::debug!("Video analysis response content: {}", body_text);
+
+        let analysis_response: VideoAnalysisResponse =
+            serde_json::from_str(&body_text).map_err(|e| {
+                tracing::error!(
+                    "Failed to parse video analysis response: {:?}, body: {}",
+                    e, body_text
+                );
+                ApiError::InfrastructureError(InfrastructureError::ExternalApiResponseParsingFailed(
+                    e.to_string(),
+                ))
+            })?;
+
+        let content = analysis_response
+            .get_content()
+            .ok_or_else(|| {
+                ApiError::InfrastructureError(InfrastructureError::ExternalApiResponseParsingFailed(
+                    "No content in video analysis response".to_string(),
+                ))
+            })?;
+
+        tracing::info!(
+            "Video analysis completed: id={}, model={}, content_len={}",
+            analysis_response.id,
+            analysis_response.model,
+            content.len()
+        );
+
+        Ok(content.to_string())
+    }
+}
+
+// ============================================================================
+// Video Analysis Types (Gemini Vision API)
+// ============================================================================
+
+/// Content item for multimodal messages
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ContentItem {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: ImageUrlContent },
+}
+
+/// Image/Video URL content
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageUrlContent {
+    pub url: String,
+}
+
+/// Message for chat completions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: Vec<ContentItem>,
+}
+
+/// Video analysis request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoAnalysisRequest {
+    pub model: String,
+    pub messages: Vec<ChatMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+}
+
+impl VideoAnalysisRequest {
+    /// Create a new video analysis request
+    pub fn new(model: &str, prompt: &str, video_url: &str, max_tokens: Option<u32>) -> Self {
+        Self {
+            model: model.to_string(),
+            messages: vec![ChatMessage {
+                role: "user".to_string(),
+                content: vec![
+                    ContentItem::Text {
+                        text: prompt.to_string(),
+                    },
+                    ContentItem::ImageUrl {
+                        image_url: ImageUrlContent {
+                            url: video_url.to_string(),
+                        },
+                    },
+                ],
+            }],
+            max_tokens,
+        }
+    }
+}
+
+/// Choice in chat completion response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatChoice {
+    pub index: u32,
+    pub message: ChatResponseMessage,
+    pub finish_reason: Option<String>,
+}
+
+/// Message in chat completion response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatResponseMessage {
+    pub role: String,
+    pub content: String,
+}
+
+/// Chat completion usage info
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+}
+
+/// Video analysis response (chat completions format)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoAnalysisResponse {
+    pub id: String,
+    pub object: String,
+    pub created: i64,
+    pub model: String,
+    pub choices: Vec<ChatChoice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<ChatUsage>,
+}
+
+impl VideoAnalysisResponse {
+    /// Get the first response content
+    pub fn get_content(&self) -> Option<&str> {
+        self.choices.first().map(|c| c.message.content.as_str())
+    }
+}
+
+/// Error response from LaoZhang API
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LaoZhangErrorResponse {
+    pub error: LaoZhangError,
+}
+
+/// Error details
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LaoZhangError {
+    pub message: String,
+    #[serde(rename = "type")]
+    pub error_type: Option<String>,
+    pub code: Option<String>,
 }
 
 #[cfg(test)]

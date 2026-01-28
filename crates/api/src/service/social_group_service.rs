@@ -1,6 +1,7 @@
 use crate::config::database::Database;
 use crate::dto::social_account_dto::{CreateSocialGroupDto, SocialGroupDto, UpdateSocialGroupDto};
 use crate::error::{api_error::ApiError, business_error::BusinessError};
+use crate::repository::social_account_repository::SocialAccountRepository;
 use crate::repository::social_group_repository::SocialGroupRepository;
 use glance_mind_db::entity::social_group::{NewSocialGroup, SocialGroup};
 use std::sync::Arc;
@@ -8,12 +9,14 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct SocialGroupService {
     repo: SocialGroupRepository,
+    account_repo: SocialAccountRepository,
 }
 
 impl SocialGroupService {
     pub fn new(db: &Arc<Database>) -> Self {
         Self {
             repo: SocialGroupRepository::new(db.pool.clone()),
+            account_repo: SocialAccountRepository::new(db.pool.clone()),
         }
     }
 
@@ -28,7 +31,17 @@ impl SocialGroupService {
             .await
             .map_err(|_| ApiError::InternalServerError("Failed to list groups".to_string()))?;
 
-        let dtos = groups.into_iter().map(Self::to_dto).collect();
+        // Fetch account count for each group
+        let mut dtos = Vec::with_capacity(groups.len());
+        for group in groups {
+            let account_count = self
+                .account_repo
+                .count_by_group(group.id)
+                .await
+                .unwrap_or(0);
+            dtos.push(Self::to_dto_with_count(group, account_count));
+        }
+
         Ok(crate::dto::common::PageResponse::new(
             dtos,
             total,
@@ -104,12 +117,17 @@ impl SocialGroupService {
     }
 
     fn to_dto(group: SocialGroup) -> SocialGroupDto {
+        Self::to_dto_with_count(group, 0)
+    }
+
+    fn to_dto_with_count(group: SocialGroup, account_count: i64) -> SocialGroupDto {
         SocialGroupDto {
             id: group.id,
             user_id: group.user_id,
             platform_id: group.platform_id,
             group_name: group.group_name,
             accounts: None, // Accounts can be populated separately if needed
+            account_count,
             created_at: group.created_at,
             updated_at: group.updated_at,
         }

@@ -22,22 +22,46 @@ impl SocialAccountRepository {
         user_id: i32,
         page: i64,
         page_size: i64,
+        group_id: Option<i32>,
     ) -> Result<(Vec<SocialAccount>, i64), DieselError> {
         let mut conn = self.pool.get().expect("Connection error");
 
-        let total = social_accounts::table
-            .filter(social_accounts::user_id.eq(user_id))
-            .filter(social_accounts::status.ne("DELETED"))
-            .count()
-            .get_result(&mut conn)?;
+        // Build query with optional group_id filter
+        let total: i64 = if let Some(gid) = group_id {
+            social_accounts::table
+                .filter(social_accounts::user_id.eq(user_id))
+                .filter(social_accounts::group_id.eq(gid))
+                .filter(social_accounts::status.ne("DELETED"))
+                .count()
+                .get_result(&mut conn)?
+        } else {
+            social_accounts::table
+                .filter(social_accounts::user_id.eq(user_id))
+                .filter(social_accounts::status.ne("DELETED"))
+                .count()
+                .get_result(&mut conn)?
+        };
 
-        let items = social_accounts::table
-            .filter(social_accounts::user_id.eq(user_id))
-            .filter(social_accounts::status.ne("DELETED"))
-            .limit(page_size)
-            .offset((page - 1) * page_size)
-            .select(SocialAccount::as_select())
-            .load(&mut conn)?;
+        let items = if let Some(gid) = group_id {
+            social_accounts::table
+                .filter(social_accounts::user_id.eq(user_id))
+                .filter(social_accounts::group_id.eq(gid))
+                .filter(social_accounts::status.ne("DELETED"))
+                .order(social_accounts::created_at.desc())
+                .limit(page_size)
+                .offset((page - 1) * page_size)
+                .select(SocialAccount::as_select())
+                .load(&mut conn)?
+        } else {
+            social_accounts::table
+                .filter(social_accounts::user_id.eq(user_id))
+                .filter(social_accounts::status.ne("DELETED"))
+                .order(social_accounts::created_at.desc())
+                .limit(page_size)
+                .offset((page - 1) * page_size)
+                .select(SocialAccount::as_select())
+                .load(&mut conn)?
+        };
 
         Ok((items, total))
     }
@@ -100,6 +124,14 @@ impl SocialAccountRepository {
     pub async fn delete(&self, account_id: i32) -> Result<usize, DieselError> {
         let mut conn = self.pool.get().expect("Connection error");
         diesel::delete(social_accounts::table.find(account_id)).execute(&mut conn)
+    }
+
+    /// Clear group_id (set to NULL) for an account
+    pub async fn clear_group(&self, account_id: i32) -> Result<usize, DieselError> {
+        let mut conn = self.pool.get().expect("Connection error");
+        diesel::update(social_accounts::table.find(account_id))
+            .set(social_accounts::group_id.eq(None::<i32>))
+            .execute(&mut conn)
     }
 
     pub async fn count_by_group(&self, group_id: i32) -> Result<i64, DieselError> {
@@ -185,5 +217,37 @@ impl SocialAccountRepository {
             .find(platform_id)
             .select(gm_platforms::name)
             .first(&mut conn)
+    }
+
+    /// Batch create multiple accounts
+    pub async fn batch_create(
+        &self,
+        new_accounts: Vec<NewSocialAccount>,
+    ) -> Result<Vec<SocialAccount>, DieselError> {
+        let mut conn = self.pool.get().expect("Connection error");
+        diesel::insert_into(social_accounts::table)
+            .values(&new_accounts)
+            .returning(SocialAccount::as_returning())
+            .get_results(&mut conn)
+    }
+
+    /// Batch update accounts by profile_name to add them to a group
+    pub async fn batch_update_group_by_profile_names(
+        &self,
+        user_id: i32,
+        group_id: i32,
+        profile_names: &[String],
+    ) -> Result<usize, DieselError> {
+        let mut conn = self.pool.get().expect("Connection error");
+
+        let updated = diesel::update(
+            social_accounts::table
+                .filter(social_accounts::user_id.eq(user_id))
+                .filter(social_accounts::profile_name.eq_any(profile_names))
+        )
+        .set(social_accounts::group_id.eq(Some(group_id)))
+        .execute(&mut conn)?;
+
+        Ok(updated)
     }
 }

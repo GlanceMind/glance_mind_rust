@@ -572,7 +572,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    /// Video cases table - primary key is task_no (varchar)
     gm_data_video_cases (task_no) {
         #[max_length = 32]
         task_no -> Varchar,
@@ -808,6 +807,26 @@ diesel::table! {
 }
 
 diesel::table! {
+    gm_user_materials (id) {
+        id -> Int4,
+        user_id -> Int4,
+        video_url -> Text,
+        prompt -> Nullable<Text>,
+        thumbnail_url -> Nullable<Text>,
+        #[max_length = 100]
+        tag -> Nullable<Varchar>,
+        #[max_length = 255]
+        title -> Nullable<Varchar>,
+        description -> Nullable<Text>,
+        duration -> Nullable<Int4>,
+        file_size -> Nullable<Int8>,
+        is_active -> Nullable<Bool>,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
     gm_user_notification_reads (id) {
         id -> Int4,
         user_id -> Int4,
@@ -1006,6 +1025,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     gm_social_accounts,
     gm_social_groups,
     gm_upload_tasks,
+    gm_user_materials,
     gm_user_notification_reads,
     gm_user_wallets,
     gm_users,

@@ -226,6 +226,18 @@ pub fn routes(db_conn: Arc<Database>) -> Router {
                     )
                     .with_state(user_state.clone()),
             )
+            .merge(
+                crate::routes::material::material_routes()
+                    .layer(
+                        ServiceBuilder::new()
+                            .layer(middleware::from_fn_with_state(
+                                user_state.clone(),
+                                auth_middleware::auth,
+                            ))
+                            .layer(axum::Extension(user_state.clone())),
+                    )
+                    .with_state(user_state.clone()),
+            )
             .nest(
                 "/scan",
                 crate::routes::scan::routes()

@@ -1,5 +1,7 @@
 use crate::api_ok;
-use crate::dto::social_account_dto::{CreateSocialAccountDto, UpdateSocialAccountDto};
+use crate::dto::social_account_dto::{
+    BatchCreateAccountsDto, CreateSocialAccountDto, UpdateSocialAccountDto,
+};
 use crate::error::api_error::ApiError;
 use crate::state::user_state::UserState;
 use axum::{
@@ -83,4 +85,32 @@ pub async fn get_account_statistics(
         .await?;
 
     Ok(api_ok!(stats))
+}
+
+/// Batch create social accounts
+/// POST /accounts/batch
+pub async fn batch_create_accounts(
+    Extension(user): Extension<User>,
+    Extension(state): Extension<UserState>,
+    Json(dto): Json<BatchCreateAccountsDto>,
+) -> Result<impl IntoResponse, ApiError> {
+    let result = state
+        .social_account_service
+        .batch_create_accounts(user.id, dto)
+        .await?;
+    Ok(api_ok!(result))
+}
+
+/// Remove account from group (set group_id to NULL)
+/// POST /accounts/:id/remove-from-group
+pub async fn remove_from_group(
+    Extension(user): Extension<User>,
+    Extension(state): Extension<UserState>,
+    Path(id): Path<i32>,
+) -> Result<impl IntoResponse, ApiError> {
+    state
+        .social_account_service
+        .remove_from_group(id, user.id)
+        .await?;
+    Ok(api_ok!(msg: "Account removed from group", "账户已从分组中移除"))
 }

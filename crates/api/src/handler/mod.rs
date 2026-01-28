@@ -9,6 +9,7 @@ pub(crate) mod crawler_handler;
 pub(crate) mod dashboard_handler;
 pub(crate) mod email_verification_handler;
 pub(crate) mod export_handler;
+pub mod material_handler;
 pub mod notification_handler;
 pub mod oss_handler;
 pub(crate) mod promo_code_handler;

@@ -196,6 +196,99 @@ impl OssService {
         )
     }
 
+    /// Upload video to OSS (async version using reqwest)
+    ///
+    /// # Arguments
+    /// * `data` - Video binary data
+    /// * `user_id` - User ID for organizing files
+    /// * `original_filename` - Original filename to preserve extension
+    /// * `content_type` - MIME type of the video
+    ///
+    /// # Returns
+    /// * `Ok(UploadResult)` - The upload result with URL and metadata
+    /// * `Err(ApiError)` - Upload failed
+    pub async fn upload_video(
+        &self,
+        data: Vec<u8>,
+        user_id: i32,
+        original_filename: String,
+        content_type: String,
+    ) -> Result<UploadResult, ApiError> {
+        // Generate unique filename
+        let extension = Self::get_video_extension_static(&original_filename, &content_type);
+        let timestamp = Utc::now().format("%Y%m%d%H%M%S");
+        let uuid_short = Uuid::new_v4().to_string()[..8].to_string();
+        let new_filename = format!("{}_{}.{}", timestamp, uuid_short, extension);
+
+        // Build object path: materials/user_{user_id}/{filename}
+        let object_path = format!("materials/user_{}/{}", user_id, new_filename);
+        let data_len = data.len();
+
+        // Build the URL
+        let url = format!(
+            "https://{}.{}/{}",
+            self.config.bucket, self.config.endpoint, object_path
+        );
+
+        // Generate date header
+        let date = Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+
+        // Build the string to sign
+        let string_to_sign = format!(
+            "PUT\n\n{}\n{}\n/{}/{}",
+            content_type, date, self.config.bucket, object_path
+        );
+
+        // Calculate signature
+        let signature = self.calculate_signature(&string_to_sign)?;
+
+        // Build authorization header
+        let authorization = format!("OSS {}:{}", self.config.access_key_id, signature);
+
+        info!(
+            "Uploading video to OSS: {} ({} bytes)",
+            object_path, data_len
+        );
+
+        // Send the request
+        let response = self
+            .client
+            .put(&url)
+            .header("Date", &date)
+            .header("Content-Type", &content_type)
+            .header("Authorization", &authorization)
+            .body(data)
+            .send()
+            .await
+            .map_err(|e| {
+                error!("Failed to send video request to OSS: {:?}", e);
+                ApiError::InternalServerError(format!("OSS request failed: {}", e))
+            })?;
+
+        // Check response status
+        let status = response.status();
+        if !status.is_success() {
+            let error_body = response.text().await.unwrap_or_default();
+            error!("OSS video upload failed with status {}: {}", status, error_body);
+            return Err(ApiError::InternalServerError(format!(
+                "OSS video upload failed with status {}: {}",
+                status, error_body
+            )));
+        }
+
+        // Build public URL
+        let video_url = self.build_url(&object_path);
+
+        info!("Video uploaded to OSS: {} ({} bytes)", video_url, data_len);
+
+        Ok(UploadResult {
+            image_url: video_url, // Reuse image_url field for video_url
+            filename: new_filename,
+            object_path,
+            size: data_len,
+        })
+    }
+
     /// Get file extension from filename or content type (static version)
     fn get_extension_static(filename: &str, content_type: &str) -> String {
         // Try to get from filename first
@@ -225,6 +318,33 @@ impl OssService {
             "image/webp" => "webp",
             "image/bmp" => "bmp",
             _ => "jpg", // Default to jpg
+        }
+        .to_string()
+    }
+
+    /// Get video file extension from filename or content type (static version)
+    fn get_video_extension_static(filename: &str, content_type: &str) -> String {
+        // Try to get from filename first
+        if let Some(ext) = filename.rsplit('.').next() {
+            let ext_lower = ext.to_lowercase();
+            if matches!(
+                ext_lower.as_str(),
+                "mp4" | "mov" | "avi" | "webm" | "mkv" | "flv" | "wmv" | "m4v"
+            ) {
+                return ext_lower;
+            }
+        }
+
+        // Fall back to content type
+        match content_type {
+            "video/mp4" | "video/x-m4v" => "mp4",
+            "video/quicktime" => "mov",
+            "video/x-msvideo" => "avi",
+            "video/webm" => "webm",
+            "video/x-matroska" => "mkv",
+            "video/x-flv" => "flv",
+            "video/x-ms-wmv" => "wmv",
+            _ => "mp4", // Default to mp4
         }
         .to_string()
     }

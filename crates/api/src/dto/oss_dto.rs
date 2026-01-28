@@ -12,3 +12,16 @@ pub struct UploadImageResponse {
     /// File size in bytes
     pub size: usize,
 }
+
+/// Response for video upload
+#[derive(Debug, Clone, Serialize)]
+pub struct UploadVideoResponse {
+    /// Public URL of the uploaded video
+    pub video_url: String,
+    /// Generated filename
+    pub filename: String,
+    /// File size in bytes
+    pub size: usize,
+    /// Video duration in seconds (optional)
+    pub duration: Option<i32>,
+}
