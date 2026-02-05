@@ -137,20 +137,59 @@ impl CampaignRepository {
     }
 
     // Get count of AI-processed comments (ai replies) for a campaign
+    // Supports all platforms: TikTok, Instagram, Facebook, Twitter, Reddit
     pub async fn get_ai_replies_count(&self, campaign_id: i32) -> Result<i64, DieselError> {
         use glance_mind_db::schema::{
-            gm_agent_comments as agent_comments, gm_agent_videos as agent_videos,
+            gm_agent_comments as agent_comments,
+            gm_agent_videos as agent_videos,
             gm_crawler_tasks as crawler_tasks,
+            gm_agent_instagram_comments,
+            gm_agent_facebook_comments,
+            gm_agent_twitter_comments,
+            gm_agent_reddit_comments,
         };
 
         let mut conn = self.pool.get().expect("Connection error");
 
-        agent_comments::table
+        // TikTok comments (requires join through agent_videos and crawler_tasks)
+        let tiktok_count: i64 = agent_comments::table
             .inner_join(agent_videos::table)
             .inner_join(crawler_tasks::table.on(agent_videos::task_id.eq(crawler_tasks::id)))
             .filter(crawler_tasks::campaign_id.eq(campaign_id))
             .count()
             .get_result(&mut conn)
+            .unwrap_or(0);
+
+        // Instagram comments (direct campaign_id relation)
+        let instagram_count: i64 = gm_agent_instagram_comments::table
+            .filter(gm_agent_instagram_comments::campaign_id.eq(campaign_id))
+            .count()
+            .get_result(&mut conn)
+            .unwrap_or(0);
+
+        // Facebook comments (direct campaign_id relation)
+        let facebook_count: i64 = gm_agent_facebook_comments::table
+            .filter(gm_agent_facebook_comments::campaign_id.eq(campaign_id))
+            .count()
+            .get_result(&mut conn)
+            .unwrap_or(0);
+
+        // Twitter comments (direct campaign_id relation)
+        let twitter_count: i64 = gm_agent_twitter_comments::table
+            .filter(gm_agent_twitter_comments::campaign_id.eq(campaign_id))
+            .count()
+            .get_result(&mut conn)
+            .unwrap_or(0);
+
+        // Reddit comments (direct campaign_id relation)
+        let reddit_count: i64 = gm_agent_reddit_comments::table
+            .filter(gm_agent_reddit_comments::campaign_id.eq(campaign_id))
+            .count()
+            .get_result(&mut conn)
+            .unwrap_or(0);
+
+        // Return sum of all platforms
+        Ok(tiktok_count + instagram_count + facebook_count + twitter_count + reddit_count)
     }
 
     /// Activate campaign using stored procedure

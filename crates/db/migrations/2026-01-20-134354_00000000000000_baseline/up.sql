@@ -1141,7 +1141,6 @@ CREATE TABLE IF NOT EXISTS public.gm_user_wallets (
     updated_at timestamp with time zone,
     deposit_cny numeric DEFAULT 0 NOT NULL,
     deposit_usd numeric DEFAULT 0 NOT NULL,
-    CONSTRAINT chk_balance_frozen CHECK ((balance_points >= frozen_points)),
     CONSTRAINT user_wallets_balance_points_check CHECK ((balance_points >= (0)::numeric)),
     CONSTRAINT user_wallets_frozen_points_check CHECK ((frozen_points >= (0)::numeric))
 );

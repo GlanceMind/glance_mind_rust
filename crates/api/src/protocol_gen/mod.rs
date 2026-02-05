@@ -79,28 +79,31 @@ impl Platform {
 }
 
 /// Comment processing status
-/// Only two states: 0=Pending (waiting for executor), 2=Completed (replied)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(i32)]
 pub enum CommentStatus {
-    Pending = 0,
-    Completed = 2,
+    Unspecified = 0,
+    Pending = 1,
+    Processing = 2,
+    Completed = 3,
 }
 
 impl CommentStatus {
     pub fn as_str_name(&self) -> &'static str {
         match self {
+            Self::Unspecified => "COMMENT_STATUS_UNSPECIFIED",
             Self::Pending => "COMMENT_STATUS_PENDING",
+            Self::Processing => "COMMENT_STATUS_PROCESSING",
             Self::Completed => "COMMENT_STATUS_COMPLETED",
         }
     }
 
     pub fn from_str_name(value: &str) -> Option<Self> {
         match value {
+            "COMMENT_STATUS_UNSPECIFIED" => Some(Self::Unspecified),
             "COMMENT_STATUS_PENDING" => Some(Self::Pending),
+            "COMMENT_STATUS_PROCESSING" => Some(Self::Processing),
             "COMMENT_STATUS_COMPLETED" => Some(Self::Completed),
-            // Backwards compatibility: treat old values as Pending
-            "COMMENT_STATUS_UNSPECIFIED" | "COMMENT_STATUS_PROCESSING" => Some(Self::Pending),
             _ => None,
         }
     }
@@ -513,7 +516,7 @@ impl<'de> Deserialize<'de> for CommentStatus {
     {
         let s = String::deserialize(deserializer)?;
         CommentStatus::from_json_str(&s).ok_or_else(|| {
-            serde::de::Error::unknown_variant(&s, &["pending", "completed"])
+            serde::de::Error::unknown_variant(&s, &["pending", "processing", "completed"])
         })
     }
 }
@@ -521,7 +524,9 @@ impl<'de> Deserialize<'de> for CommentStatus {
 impl CommentStatus {
     pub fn to_json_str(&self) -> &'static str {
         match self {
+            CommentStatus::Unspecified => "unspecified",
             CommentStatus::Pending => "pending",
+            CommentStatus::Processing => "processing",
             CommentStatus::Completed => "completed",
         }
     }
@@ -529,21 +534,20 @@ impl CommentStatus {
     pub fn from_json_str(s: &str) -> Option<Self> {
         match s {
             "pending" => Some(CommentStatus::Pending),
+            "processing" => Some(CommentStatus::Processing),
             "completed" => Some(CommentStatus::Completed),
-            // Backwards compatibility: treat old values as Pending
-            "processing" | "unspecified" => Some(CommentStatus::Pending),
+            "unspecified" => Some(CommentStatus::Unspecified),
             _ => None,
         }
     }
 
     /// Convert from i16 status code (database format)
-    /// 0=Pending, 2=Completed, others treated as Pending
     pub fn from_i16(status: i16) -> Self {
         match status {
             0 => CommentStatus::Pending,
+            1 => CommentStatus::Processing,
             2 => CommentStatus::Completed,
-            // Backwards compatibility: treat 1 (old Processing) as Pending
-            _ => CommentStatus::Pending,
+            _ => CommentStatus::Unspecified,
         }
     }
 
@@ -551,7 +555,9 @@ impl CommentStatus {
     pub fn to_i16(&self) -> i16 {
         match self {
             CommentStatus::Pending => 0,
+            CommentStatus::Processing => 1,
             CommentStatus::Completed => 2,
+            CommentStatus::Unspecified => -1,
         }
     }
 
@@ -560,9 +566,9 @@ impl CommentStatus {
     pub fn from_str_status(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "pending" => CommentStatus::Pending,
+            "processing" => CommentStatus::Processing,
             "completed" => CommentStatus::Completed,
-            // Backwards compatibility: treat old values as Pending
-            "processing" | "unspecified" | _ => CommentStatus::Pending,
+            _ => CommentStatus::Unspecified,
         }
     }
 }
@@ -590,34 +596,6 @@ pub struct AiPubImageConfig {
     pub end_frame_url: Option<String>,
 }
 
-/// Reference video configuration for video prompt enhancement
-/// Allows users to provide a reference video that will be analyzed
-/// to extract visual style and narrative structure for better prompts
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
-pub struct ReferenceVideoConfig {
-    /// URL of the reference video to analyze
-    #[serde(default)]
-    pub video_url: String,
-    /// AI model for video analysis: "gemini-2.5-pro" (detailed) or "gemini-2.5-flash" (fast)
-    #[serde(default)]
-    pub model_name: String,
-}
-
-impl ReferenceVideoConfig {
-    /// Create a new reference video configuration
-    pub fn new(video_url: impl Into<String>, model_name: impl Into<String>) -> Self {
-        Self {
-            video_url: video_url.into(),
-            model_name: model_name.into(),
-        }
-    }
-
-    /// Check if this configuration is valid (has required fields)
-    pub fn is_valid(&self) -> bool {
-        !self.video_url.is_empty() && !self.model_name.is_empty()
-    }
-}
-
 // ============================================================
 // AI Task Input/Result Protocol
 // Structure for gm_aipub_ai_tasks.input and result fields
@@ -633,6 +611,7 @@ pub struct AiTaskInput {
     pub version: i32,
 
     // === Content Generation Input ===
+
     /// Video generation base prompt (from AiPubInput.video_prompt)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub video_prompt: Option<String>,
@@ -642,6 +621,7 @@ pub struct AiTaskInput {
     pub content_prompt: Option<String>,
 
     // === Video Generation Input ===
+
     /// AI model name (e.g., "veo-3.1", "sora-1.0")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -713,6 +693,7 @@ pub struct AiTaskResult {
     pub version: i32,
 
     // === Content Generation Result ===
+
     /// Number of content variations generated
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_count: Option<i32>,
@@ -726,6 +707,7 @@ pub struct AiTaskResult {
     pub content_variations: Vec<ContentVariation>,
 
     // === Video Generation Result ===
+
     /// Generated video URL
     #[serde(skip_serializing_if = "Option::is_none")]
     pub video_url: Option<String>,
@@ -735,6 +717,7 @@ pub struct AiTaskResult {
     pub video_duration: Option<f32>,
 
     // === Common Fields ===
+
     /// Timestamp when task completed (ISO 8601 format)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generated_at: Option<String>,
@@ -860,12 +843,6 @@ pub struct AiPubInput {
     /// Overrides default_images for specific accounts
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account_images: Option<std::collections::HashMap<String, AiPubImageConfig>>,
-
-    /// Reference video configuration for prompt enhancement
-    /// When provided, the system will analyze the reference video to extract
-    /// visual style and narrative structure, then enhance the video_prompt
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reference_video: Option<ReferenceVideoConfig>,
 }
 
 impl Default for AiPubInput {
@@ -876,7 +853,6 @@ impl Default for AiPubInput {
             prompt: String::new(),
             default_images: None,
             account_images: None,
-            reference_video: None,
         }
     }
 }
@@ -890,7 +866,6 @@ impl AiPubInput {
             content_prompt: String::new(),
             default_images: None,
             account_images: None,
-            reference_video: None,
         }
     }
 
@@ -905,22 +880,7 @@ impl AiPubInput {
             prompt: String::new(),
             default_images: None,
             account_images: None,
-            reference_video: None,
         }
-    }
-
-    /// Set reference video configuration
-    pub fn with_reference_video(mut self, reference_video: ReferenceVideoConfig) -> Self {
-        self.reference_video = Some(reference_video);
-        self
-    }
-
-    /// Check if this input has a reference video configuration
-    pub fn has_reference_video(&self) -> bool {
-        self.reference_video
-            .as_ref()
-            .map(|r| r.is_valid())
-            .unwrap_or(false)
     }
 
     /// Get the effective video prompt (falls back to legacy prompt if empty)
@@ -1261,7 +1221,6 @@ mod tests {
                 end_frame_url: Some("https://example.com/end.png".to_string()),
             }),
             account_images: None,
-            reference_video: None,
         };
 
         let json = serde_json::to_string_pretty(&input).unwrap();
@@ -1299,7 +1258,6 @@ mod tests {
                 end_frame_url: None,
             }),
             account_images: Some(account_images),
-            reference_video: None,
         };
 
         // Account 123 should get its own images
@@ -1338,7 +1296,6 @@ mod tests {
             prompt: "Fallback prompt".to_string(),
             default_images: None,
             account_images: None,
-            reference_video: None,
         };
         assert_eq!(mixed_input.get_video_prompt(), "Specific video prompt");
         assert_eq!(mixed_input.get_content_prompt(), "Fallback prompt");
