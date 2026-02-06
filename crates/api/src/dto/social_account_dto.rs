@@ -29,6 +29,10 @@ pub struct UpdateSocialGroupDto {
 // Social Account DTOs
 #[derive(Debug, Deserialize)]
 pub struct CreateSocialAccountDto {
+    /// Platform ID (1=reddit, 2=tiktok, 3=facebook, etc.)
+    /// Defaults to 2 (TikTok) if not provided
+    #[serde(default = "default_platform_id")]
+    pub platform_id: i32,
     pub username: String,
     #[serde(default)]
     pub cookie: Option<String>,
@@ -38,6 +42,10 @@ pub struct CreateSocialAccountDto {
     pub device_id: Option<String>,
     #[serde(default)]
     pub profile_name: Option<String>,
+}
+
+fn default_platform_id() -> i32 {
+    2 // Default to TikTok
 }
 
 #[derive(Debug, Deserialize)]

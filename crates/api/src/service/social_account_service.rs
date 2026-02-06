@@ -46,9 +46,7 @@ impl SocialAccountService {
         user_id: i32,
         dto: CreateSocialAccountDto,
     ) -> Result<SocialAccountDto, ApiError> {
-        // Get platform_id - for now use a mock ID
-        // In real implementation, look up platform by name
-        let platform_id = 1; // Mock ID
+        let platform_id = dto.platform_id;
 
         let new_account = NewSocialAccount {
             user_id,
