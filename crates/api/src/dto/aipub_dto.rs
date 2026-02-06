@@ -31,6 +31,7 @@ pub struct CreatePlanDto {
     pub content: Option<JsonValue>,
     pub chat_ai_model_id: Option<i32>,
     pub video_ai_model_id: Option<i32>,
+    pub image_ai_model_id: Option<i32>,
 }
 
 /// Plan response DTO
@@ -49,8 +50,10 @@ pub struct PlanResponseDto {
     pub chat_ai_model_name: Option<String>,
     pub video_ai_model_id: Option<i32>,
     pub video_ai_model_name: Option<String>,
+    pub image_ai_model_id: Option<i32>,
+    pub image_ai_model_name: Option<String>,
     pub content_type: String,
-    /// Plan type: "batch_text" or "single_video"
+    /// Plan type: "batch_text", "single_video", or "account_grooming"
     pub plan_type: String,
     pub ai_task_types: Option<Vec<String>>,
     pub ai_service_config: Option<JsonValue>,
@@ -83,6 +86,7 @@ pub struct PlanListQueryDto {
     pub status: Option<String>,
     pub platform_id: Option<i32>,
     pub content_type: Option<String>,
+    pub plan_type: Option<String>,
 }
 
 /// Plan detail query params
@@ -98,6 +102,7 @@ pub struct UpdatePlanDto {
     pub name: Option<String>,
     pub chat_ai_model_id: Option<i32>,
     pub video_ai_model_id: Option<i32>,
+    pub image_ai_model_id: Option<i32>,
     pub ai_input: Option<JsonValue>,
 }
 
@@ -132,6 +137,8 @@ impl From<glance_mind_db::entity::aipub::AipubPlan> for PlanResponseDto {
             chat_ai_model_name: None,
             video_ai_model_id: plan.video_ai_model_id,
             video_ai_model_name: None,
+            image_ai_model_id: plan.image_ai_model_id,
+            image_ai_model_name: None,
             content_type: plan.content_type,
             plan_type: plan.plan_type,
             ai_task_types: plan
@@ -326,6 +333,7 @@ pub struct ExecutorPublishTaskDto {
     pub platform: String,
     pub platform_id: i32,
     pub content_type: String,
+    pub plan_type: String,
     pub profile_name: String,
     pub content: JsonValue,
     pub created_at: DateTime<Utc>,

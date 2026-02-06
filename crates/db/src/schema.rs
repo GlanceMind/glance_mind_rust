@@ -447,6 +447,7 @@ diesel::table! {
         plan_type -> Varchar,
         #[max_length = 200]
         name -> Nullable<Varchar>,
+        image_ai_model_id -> Nullable<Int4>,
     }
 }
 

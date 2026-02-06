@@ -31,8 +31,9 @@ pub struct AipubPlan {
     pub chat_ai_model_id: Option<i32>,
     pub video_ai_model_id: Option<i32>,
     pub name: Option<String>,
-    /// Plan type: batch_text (multiple text posts for group) or single_video (one video for account)
+    /// Plan type: batch_text, single_video, or account_grooming
     pub plan_type: String,
+    pub image_ai_model_id: Option<i32>,
 }
 
 #[derive(Debug, Clone, Insertable)]
@@ -51,8 +52,9 @@ pub struct NewAipubPlan {
     pub status: String,
     pub chat_ai_model_id: Option<i32>,
     pub video_ai_model_id: Option<i32>,
-    /// Plan type: batch_text or single_video
+    /// Plan type: batch_text, single_video, or account_grooming
     pub plan_type: String,
+    pub image_ai_model_id: Option<i32>,
 }
 
 #[derive(Debug, Clone, Default, AsChangeset)]
@@ -64,6 +66,7 @@ pub struct UpdateAipubPlan {
     pub ai_input: Option<JsonValue>,
     pub chat_ai_model_id: Option<Option<i32>>,
     pub video_ai_model_id: Option<Option<i32>>,
+    pub image_ai_model_id: Option<Option<i32>>,
     pub updated_at: Option<DateTime<Utc>>,
 }
 
@@ -115,6 +118,8 @@ pub enum PlanType {
     BatchText,
     /// Single video generation for one account (video + content)
     SingleVideo,
+    /// Account grooming: generate profile names + avatars for a group
+    AccountGrooming,
 }
 
 impl PlanType {
@@ -122,6 +127,7 @@ impl PlanType {
         match self {
             PlanType::BatchText => "batch_text",
             PlanType::SingleVideo => "single_video",
+            PlanType::AccountGrooming => "account_grooming",
         }
     }
 
@@ -129,6 +135,7 @@ impl PlanType {
         match s {
             "batch_text" => Some(PlanType::BatchText),
             "single_video" => Some(PlanType::SingleVideo),
+            "account_grooming" => Some(PlanType::AccountGrooming),
             _ => None,
         }
     }
@@ -140,7 +147,7 @@ impl PlanType {
 
     /// Returns true if this plan type targets a group (multiple accounts)
     pub fn targets_group(&self) -> bool {
-        matches!(self, PlanType::BatchText)
+        matches!(self, PlanType::BatchText | PlanType::AccountGrooming)
     }
 }
 
@@ -207,28 +214,38 @@ pub struct UpdateAipubAiTask {
 }
 
 /// AI Task Type enum
+/// DB CHECK: ('video_gen','content_gen','image_gen','combined','account_grooming')
+/// Source of truth: aipub.proto AiTaskType
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AiTaskType {
-    VideoGen,
     ContentGen,
+    VideoGen,
     ImageGen,
+    /// Content + Video combined generation
+    Combined,
+    /// Account grooming: generate name + avatar for profile
+    AccountGrooming,
 }
 
 impl AiTaskType {
     pub fn as_str(&self) -> &'static str {
         match self {
-            AiTaskType::VideoGen => "video_gen",
             AiTaskType::ContentGen => "content_gen",
+            AiTaskType::VideoGen => "video_gen",
             AiTaskType::ImageGen => "image_gen",
+            AiTaskType::Combined => "combined",
+            AiTaskType::AccountGrooming => "account_grooming",
         }
     }
 
     pub fn parse(s: &str) -> Option<Self> {
         match s {
-            "video_gen" => Some(AiTaskType::VideoGen),
             "content_gen" => Some(AiTaskType::ContentGen),
+            "video_gen" => Some(AiTaskType::VideoGen),
             "image_gen" => Some(AiTaskType::ImageGen),
+            "combined" => Some(AiTaskType::Combined),
+            "account_grooming" => Some(AiTaskType::AccountGrooming),
             _ => None,
         }
     }
@@ -323,11 +340,23 @@ pub struct UpdateAipubTask {
 }
 
 /// Publish Task Status enum
+/// DB CHECK: ('pending','video_pending','video_processing','ready',
+///            'processing','completed','failed')
+/// Source of truth: aipub.proto PublishTaskStatus
+/// Includes historical video-pipeline states for backward compatibility.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PublishTaskStatus {
+    Pending,
+    /// Historical: waiting for video generation
+    VideoPending,
+    /// Historical: video being generated
+    VideoProcessing,
+    /// Ready for executor to pick up
     Ready,
+    /// Executor is processing
     Processing,
+    /// Published successfully
     Completed,
     Failed,
 }
@@ -335,6 +364,9 @@ pub enum PublishTaskStatus {
 impl PublishTaskStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
+            PublishTaskStatus::Pending => "pending",
+            PublishTaskStatus::VideoPending => "video_pending",
+            PublishTaskStatus::VideoProcessing => "video_processing",
             PublishTaskStatus::Ready => "ready",
             PublishTaskStatus::Processing => "processing",
             PublishTaskStatus::Completed => "completed",
@@ -344,6 +376,9 @@ impl PublishTaskStatus {
 
     pub fn parse(s: &str) -> Option<Self> {
         match s {
+            "pending" => Some(PublishTaskStatus::Pending),
+            "video_pending" => Some(PublishTaskStatus::VideoPending),
+            "video_processing" => Some(PublishTaskStatus::VideoProcessing),
             "ready" => Some(PublishTaskStatus::Ready),
             "processing" => Some(PublishTaskStatus::Processing),
             "completed" => Some(PublishTaskStatus::Completed),
@@ -354,6 +389,49 @@ impl PublishTaskStatus {
 }
 
 impl std::fmt::Display for PublishTaskStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// Content Type enum
+/// DB CHECK: ('post', 'video', 'reel', 'story', 'profile')
+/// Source of truth: aipub.proto ContentType
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentType {
+    Post,
+    Video,
+    Reel,
+    Story,
+    /// For account grooming profile updates
+    Profile,
+}
+
+impl ContentType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ContentType::Post => "post",
+            ContentType::Video => "video",
+            ContentType::Reel => "reel",
+            ContentType::Story => "story",
+            ContentType::Profile => "profile",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "post" => Some(ContentType::Post),
+            "video" => Some(ContentType::Video),
+            "reel" => Some(ContentType::Reel),
+            "story" => Some(ContentType::Story),
+            "profile" => Some(ContentType::Profile),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for ContentType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
     }

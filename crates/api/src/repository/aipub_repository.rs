@@ -5,8 +5,8 @@ use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::result::Error as DieselError;
 use glance_mind_db::entity::aipub::{
-    AipubAiTask, AipubPlan, AipubTask, NewAipubAiTask, NewAipubPlan, NewAipubTask,
-    UpdateAipubAiTask, UpdateAipubPlan, UpdateAipubTask,
+    AiTaskStatus, AipubAiTask, AipubPlan, AipubTask, NewAipubAiTask, NewAipubPlan, NewAipubTask,
+    PublishTaskStatus, UpdateAipubAiTask, UpdateAipubPlan, UpdateAipubTask,
 };
 
 #[derive(Clone)]
@@ -59,6 +59,7 @@ impl AipubRepository {
         status_filter: Option<String>,
         platform_id_filter: Option<i32>,
         content_type_filter: Option<String>,
+        plan_type_filter: Option<String>,
     ) -> Result<(Vec<AipubPlan>, i64), DieselError> {
         use glance_mind_db::schema::gm_aipub_plans::dsl::*;
 
@@ -81,6 +82,9 @@ impl AipubRepository {
         if let Some(ref ct) = content_type_filter {
             count_query = count_query.filter(content_type.eq(ct));
         }
+        if let Some(ref pt) = plan_type_filter {
+            count_query = count_query.filter(plan_type.eq(pt));
+        }
 
         let total = count_query
             .select(diesel::dsl::count(id))
@@ -99,6 +103,9 @@ impl AipubRepository {
         }
         if let Some(ct) = content_type_filter {
             plans_query = plans_query.filter(content_type.eq(ct));
+        }
+        if let Some(pt) = plan_type_filter {
+            plans_query = plans_query.filter(plan_type.eq(pt));
         }
 
         let plans = plans_query
@@ -224,7 +231,7 @@ impl AipubRepository {
 
         gm_aipub_ai_tasks
             .select(AipubAiTask::as_select())
-            .filter(status.eq("processing"))
+            .filter(status.eq(AiTaskStatus::Processing.as_str()))
             .order(created_at.asc())
             .limit(limit_param)
             .load(&mut conn)
@@ -358,7 +365,7 @@ impl AipubRepository {
                     .on(gm_aipub_tasks::social_account_id.eq(gm_social_accounts::id)),
             )
             .inner_join(gm_platforms::table.on(gm_aipub_plans::platform_id.eq(gm_platforms::id)))
-            .filter(gm_aipub_tasks::status.eq("ready"))
+            .filter(gm_aipub_tasks::status.eq(PublishTaskStatus::Ready.as_str()))
             .filter(gm_social_accounts::device_id.eq(device_id_param))
             .into_boxed();
 

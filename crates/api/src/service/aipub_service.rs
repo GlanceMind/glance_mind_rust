@@ -11,7 +11,8 @@ use crate::repository::aipub_repository::AipubRepository;
 use chrono::Utc;
 use diesel::result::Error as DieselError;
 use glance_mind_db::entity::aipub::{
-    NewAipubAiTask, NewAipubPlan, NewAipubTask, UpdateAipubAiTask, UpdateAipubPlan, UpdateAipubTask,
+    AiTaskStatus, AiTaskType, NewAipubAiTask, NewAipubPlan, NewAipubTask, PlanStatus, PlanType,
+    PublishTaskStatus, UpdateAipubAiTask, UpdateAipubPlan, UpdateAipubTask,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -39,18 +40,18 @@ impl AipubService {
         dto: CreatePlanDto,
     ) -> Result<PlanResponseDto, ApiError> {
         // Determine plan_type: default to "batch_text" if not specified
-        let plan_type = dto.plan_type.clone().unwrap_or_else(|| "batch_text".to_string());
+        let plan_type = dto.plan_type.clone().unwrap_or_else(|| PlanType::BatchText.as_str().to_string());
         
         // Validate plan_type
-        if plan_type != "batch_text" && plan_type != "single_video" {
+        if PlanType::parse(&plan_type).is_none() {
             return Err(ApiError::BusinessError(BusinessError::InvalidInput(
-                format!("Invalid plan_type: {}. Must be 'batch_text' or 'single_video'", plan_type),
+                format!("Invalid plan_type: {}. Must be 'batch_text', 'single_video', or 'account_grooming'", plan_type),
             )));
         }
 
         // Validate target based on plan_type
-        match plan_type.as_str() {
-            "batch_text" => {
+        match PlanType::parse(plan_type.as_str()) {
+            Some(PlanType::BatchText) => {
                 // batch_text requires group_id (multiple accounts)
                 if dto.group_id.is_none() {
                     return Err(ApiError::BusinessError(BusinessError::InvalidInput(
@@ -63,7 +64,7 @@ impl AipubService {
                     )));
                 }
             }
-            "single_video" => {
+            Some(PlanType::SingleVideo) => {
                 // single_video requires social_account_id (single account)
                 if dto.social_account_id.is_none() {
                     return Err(ApiError::BusinessError(BusinessError::InvalidInput(
@@ -82,24 +83,38 @@ impl AipubService {
                     )));
                 }
             }
-            _ => {}
+            Some(PlanType::AccountGrooming) => {
+                // account_grooming requires group_id (generate profiles for all accounts in group)
+                if dto.group_id.is_none() {
+                    return Err(ApiError::BusinessError(BusinessError::InvalidInput(
+                        "account_grooming plan requires group_id".to_string(),
+                    )));
+                }
+                if dto.social_account_id.is_some() {
+                    return Err(ApiError::BusinessError(BusinessError::InvalidInput(
+                        "account_grooming plan cannot have social_account_id, use group_id instead".to_string(),
+                    )));
+                }
+            }
+            None => {}
         }
 
         // Determine initial status based on whether AI tasks are needed
         let initial_status = if dto.ai_task_types.is_some() && dto.content.is_none() {
-            "pending" // Will transition to ai_processing when AI tasks are created
+            PlanStatus::Pending.as_str() // Will transition to ai_processing when AI tasks are created
         } else if dto.content.is_some() {
-            "ready" // Direct content provided, skip AI
+            PlanStatus::Ready.as_str() // Direct content provided, skip AI
         } else {
-            "pending"
+            PlanStatus::Pending.as_str()
         };
 
         // Infer ai_task_types based on plan_type if not explicitly set
         let ai_task_types = dto.ai_task_types.clone().or_else(|| {
-            match plan_type.as_str() {
-                "batch_text" => Some(vec!["content_gen".to_string()]),
-                "single_video" => Some(vec!["content_gen".to_string(), "video_gen".to_string()]),
-                _ => None,
+            match PlanType::parse(plan_type.as_str()) {
+                Some(PlanType::BatchText) => Some(vec![AiTaskType::ContentGen.as_str().to_string()]),
+                Some(PlanType::SingleVideo) => Some(vec![AiTaskType::ContentGen.as_str().to_string(), AiTaskType::VideoGen.as_str().to_string()]),
+                Some(PlanType::AccountGrooming) => Some(vec![AiTaskType::AccountGrooming.as_str().to_string()]),
+                None => None,
             }
         });
 
@@ -118,6 +133,7 @@ impl AipubService {
             status: initial_status.to_string(),
             chat_ai_model_id: dto.chat_ai_model_id,
             video_ai_model_id: dto.video_ai_model_id,
+            image_ai_model_id: dto.image_ai_model_id,
         };
 
         let plan = self
@@ -152,6 +168,11 @@ impl AipubService {
                 response.video_ai_model_name = Some(name);
             }
         }
+        if let Some(mid) = plan.image_ai_model_id {
+            if let Ok(name) = self.repo.get_model_name(mid) {
+                response.image_ai_model_name = Some(name);
+            }
+        }
 
         // NOTE: AI tasks are now created by the Scheduler, not by the API.
         // The Scheduler will pick up pending plans and create ai_tasks.
@@ -164,12 +185,12 @@ impl AipubService {
             
             // Update plan status to ready
             let update = UpdateAipubPlan {
-                status: Some("ready".to_string()),
+                status: Some(PlanStatus::Ready.as_str().to_string()),
                 updated_at: Some(Utc::now()),
                 ..Default::default()
             };
             self.repo.update_plan(plan.id, update).await.ok();
-            response.status = "ready".to_string();
+            response.status = PlanStatus::Ready.as_str().to_string();
         }
         // Otherwise, plan stays in "pending" status and Scheduler will pick it up
 
@@ -227,6 +248,11 @@ impl AipubService {
                 response.video_ai_model_name = Some(name);
             }
         }
+        if let Some(mid) = plan.image_ai_model_id {
+            if let Ok(name) = self.repo.get_model_name(mid) {
+                response.image_ai_model_name = Some(name);
+            }
+        }
 
         // Add stats
         let ai_stats = self
@@ -245,14 +271,14 @@ impl AipubService {
         response.completed_count = Some(
             publish_stats
                 .iter()
-                .filter(|(s, _)| s == "completed")
+                .filter(|(s, _)| s == PublishTaskStatus::Completed.as_str())
                 .map(|(_, c)| c)
                 .sum(),
         );
         response.failed_count = Some(
             publish_stats
                 .iter()
-                .filter(|(s, _)| s == "failed")
+                .filter(|(s, _)| s == PublishTaskStatus::Failed.as_str())
                 .map(|(_, c)| c)
                 .sum(),
         );
@@ -320,6 +346,7 @@ impl AipubService {
                 query.status,
                 query.platform_id,
                 query.content_type,
+                query.plan_type,
             )
             .await
             .map_err(|e| ApiError::from(DbError::SomethingWentWrong(e.to_string())))?;
@@ -363,9 +390,8 @@ impl AipubService {
         }
 
         // Don't allow updating plans that are completed or in progress
-        if plan.status == "completed"
-            || plan.status == "ai_processing"
-            || plan.status == "processing"
+        if plan.status == PlanStatus::Completed.as_str()
+            || plan.status == PlanStatus::AiProcessing.as_str()
         {
             return Err(ApiError::BusinessError(BusinessError::InvalidInput(
                 "Cannot update plan that is completed or in progress".to_string(),
@@ -377,6 +403,7 @@ impl AipubService {
             ai_input: dto.ai_input,
             chat_ai_model_id: dto.chat_ai_model_id.map(Some),
             video_ai_model_id: dto.video_ai_model_id.map(Some),
+            image_ai_model_id: dto.image_ai_model_id.map(Some),
             updated_at: Some(Utc::now()),
             ..Default::default()
         };
@@ -413,6 +440,11 @@ impl AipubService {
                 response.video_ai_model_name = Some(name);
             }
         }
+        if let Some(mid) = updated_plan.image_ai_model_id {
+            if let Ok(name) = self.repo.get_model_name(mid) {
+                response.image_ai_model_name = Some(name);
+            }
+        }
 
         Ok(response)
     }
@@ -437,7 +469,7 @@ impl AipubService {
         }
 
         // Don't allow deleting plans that are in progress
-        if plan.status == "ai_processing" || plan.status == "processing" {
+        if plan.status == PlanStatus::AiProcessing.as_str() {
             return Err(ApiError::BusinessError(BusinessError::InvalidInput(
                 "Cannot delete plan that is in progress".to_string(),
             )));
@@ -486,9 +518,9 @@ impl AipubService {
                 .await
                 .unwrap_or_default();
             for task in ai_tasks {
-                if task.status == "failed" {
+                if task.status == AiTaskStatus::Failed.as_str() {
                     let update = UpdateAipubAiTask {
-                        status: Some("pending".to_string()),
+                        status: Some(AiTaskStatus::Pending.as_str().to_string()),
                         error_message: Some(String::new()),
                         retry_count: Some(task.retry_count.unwrap_or(0) + 1),
                         updated_at: Some(Utc::now()),
@@ -508,9 +540,9 @@ impl AipubService {
                 .await
                 .unwrap_or_default();
             for task in publish_tasks {
-                if task.status == "failed" {
+                if task.status == PublishTaskStatus::Failed.as_str() {
                     let update = UpdateAipubTask {
-                        status: Some("ready".to_string()),
+                        status: Some(PublishTaskStatus::Ready.as_str().to_string()),
                         error_message: Some(String::new()),
                         retry_count: Some(task.retry_count.unwrap_or(0) + 1),
                         updated_at: Some(Utc::now()),
@@ -524,9 +556,9 @@ impl AipubService {
 
         // Update plan status
         let new_status = if retried_ai_tasks > 0 {
-            "ai_processing"
+            PlanStatus::AiProcessing.as_str()
         } else if retried_publish_tasks > 0 {
-            "ready"
+            PlanStatus::Ready.as_str()
         } else {
             &plan.status
         };
@@ -564,12 +596,14 @@ impl AipubService {
 
         for (status, count) in stats {
             result.total_plans += count;
-            match status.as_str() {
-                "ai_processing" => result.ai_processing = count,
-                "ready" => result.ready = count,
-                "completed" => result.completed = count,
-                "failed" => result.failed = count,
-                _ => {}
+            if status == PlanStatus::AiProcessing.as_str() {
+                result.ai_processing = count;
+            } else if status == PlanStatus::Ready.as_str() {
+                result.ready = count;
+            } else if status == PlanStatus::Completed.as_str() {
+                result.completed = count;
+            } else if status == PlanStatus::Failed.as_str() {
+                result.failed = count;
             }
         }
 
@@ -670,7 +704,7 @@ impl AipubService {
                 _ => ApiError::from(DbError::SomethingWentWrong(e.to_string())),
             })?;
 
-        if ai_task.status != "processing" {
+        if ai_task.status != AiTaskStatus::Processing.as_str() {
             return Err(ApiError::BusinessError(BusinessError::InvalidInput(
                 "AI task is not in processing status".to_string(),
             )));
@@ -679,7 +713,7 @@ impl AipubService {
         // Update AI task to completed
         let now = Utc::now();
         let update = UpdateAipubAiTask {
-            status: Some("completed".to_string()),
+            status: Some(AiTaskStatus::Completed.as_str().to_string()),
             result: Some(result.clone()),
             progress: Some(100),
             updated_at: Some(now),
@@ -701,7 +735,7 @@ impl AipubService {
 
         let all_completed = ai_tasks
             .iter()
-            .all(|t| t.id == task_id || t.status == "completed");
+            .all(|t| t.id == task_id || t.status == AiTaskStatus::Completed.as_str());
 
         let expanded_count = if all_completed {
             // Build final content from all AI results
@@ -733,7 +767,7 @@ impl AipubService {
 
             // Update plan status to ready
             let plan_update = UpdateAipubPlan {
-                status: Some("ready".to_string()),
+                status: Some(PlanStatus::Ready.as_str().to_string()),
                 updated_at: Some(now),
                 ..Default::default()
             };
@@ -749,7 +783,7 @@ impl AipubService {
 
         Ok(CompleteAiTaskResponseDto {
             id: task_id,
-            status: "completed".to_string(),
+            status: AiTaskStatus::Completed.as_str().to_string(),
             completed_at: Some(now),
             expanded_tasks_count: expanded_count,
         })
@@ -773,7 +807,7 @@ impl AipubService {
             })?;
 
         let update = UpdateAipubAiTask {
-            status: Some("failed".to_string()),
+            status: Some(AiTaskStatus::Failed.as_str().to_string()),
             error_message: Some(error_message),
             updated_at: Some(Utc::now()),
             ..Default::default()
@@ -787,7 +821,7 @@ impl AipubService {
 
         // Update plan status to failed
         let plan_update = UpdateAipubPlan {
-            status: Some("failed".to_string()),
+            status: Some(PlanStatus::Failed.as_str().to_string()),
             updated_at: Some(Utc::now()),
             ..Default::default()
         };
@@ -899,7 +933,8 @@ impl AipubService {
                     social_account_id: task.social_account_id,
                     platform,
                     platform_id,
-                    content_type: plan.content_type,
+                    content_type: plan.content_type.clone(),
+                    plan_type: plan.plan_type.clone(),
                     profile_name: profile_name.unwrap_or_default(),
                     content: task.content,
                     created_at: task.created_at,
@@ -931,7 +966,7 @@ impl AipubService {
             result_url: dto.result_url,
             error_message: dto.error_message,
             updated_at: Some(now),
-            published_at: if dto.status == "completed" {
+            published_at: if dto.status == PublishTaskStatus::Completed.as_str() {
                 Some(now)
             } else {
                 None
@@ -946,7 +981,9 @@ impl AipubService {
             .map_err(|e| ApiError::from(DbError::SomethingWentWrong(e.to_string())))?;
 
         // Check if all publish tasks for this plan are completed
-        if dto.status == "completed" || dto.status == "failed" {
+        if dto.status == PublishTaskStatus::Completed.as_str()
+            || dto.status == PublishTaskStatus::Failed.as_str()
+        {
             self.check_and_update_plan_completion(task.plan_id).await?;
         }
 
@@ -986,7 +1023,7 @@ impl AipubService {
                 plan_id,
                 social_account_id: account_id,
                 content: content.clone(),
-                status: "ready".to_string(),
+                status: PublishTaskStatus::Ready.as_str().to_string(),
                 ai_task_id: None, // Direct content - no AI task
             })
             .collect();
@@ -1012,20 +1049,20 @@ impl AipubService {
         let total: i64 = stats.iter().map(|(_, c)| c).sum();
         let completed: i64 = stats
             .iter()
-            .filter(|(s, _)| s == "completed")
+            .filter(|(s, _)| s == PublishTaskStatus::Completed.as_str())
             .map(|(_, c)| *c)
             .sum();
         let failed: i64 = stats
             .iter()
-            .filter(|(s, _)| s == "failed")
+            .filter(|(s, _)| s == PublishTaskStatus::Failed.as_str())
             .map(|(_, c)| *c)
             .sum();
 
         if total > 0 && completed + failed == total {
             let new_status = if failed > 0 && completed == 0 {
-                "failed"
+                PlanStatus::Failed.as_str()
             } else {
-                "completed"
+                PlanStatus::Completed.as_str()
             };
 
             let update = UpdateAipubPlan {
