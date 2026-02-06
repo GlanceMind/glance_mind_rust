@@ -47,8 +47,15 @@ def get_test_group_with_accounts(db_cursor) -> Optional[dict]:
     """)
     return db_cursor.fetchone()
 
-def create_grooming_plan(auth_client, group_id, platform_id, name_suffix=""):
+def create_grooming_plan(auth_client, group_id, platform_id, name_suffix="", include_bio=True):
     """Create a grooming plan and return the response data."""
+    ai_input = {
+        "text_prompt": "Creative tech usernames, modern style",
+        "image_prompt": "Minimalist avatar, vibrant gradient",
+    }
+    if include_bio:
+        ai_input["bio_prompt"] = "Short catchy bio, tech enthusiast, max 80 chars"
+
     payload = {
         "plan_type": "account_grooming",
         "name": f"Grooming Test {name_suffix or uuid.uuid4().hex[:6]}",
@@ -56,10 +63,7 @@ def create_grooming_plan(auth_client, group_id, platform_id, name_suffix=""):
         "platform_id": platform_id,
         "content_type": "profile",
         "ai_task_types": ["name_gen", "avatar_gen"],
-        "ai_input": {
-            "text_prompt": "Creative tech usernames, modern style",
-            "image_prompt": "Minimalist avatar, vibrant gradient"
-        },
+        "ai_input": ai_input,
     }
     return auth_client.post("/api/v1/publish_plans", json=payload)
 
@@ -132,7 +136,7 @@ class TestGroomingPlanCreate:
         auth_client.delete(f"/api/v1/publish_plans/{plan_id}")
 
     def test_create_plan_ai_input_persisted(self, auth_client, db_cursor):
-        """ai_input JSON with text_prompt and image_prompt should be stored."""
+        """ai_input JSON with text_prompt, image_prompt, and bio_prompt should be stored."""
         group = get_test_group_with_accounts(db_cursor)
         if not group:
             pytest.skip("No group with accounts available")
@@ -150,8 +154,35 @@ class TestGroomingPlanCreate:
             ai_input = json.loads(ai_input)
         assert "text_prompt" in ai_input, "Should have text_prompt"
         assert "image_prompt" in ai_input, "Should have image_prompt"
+        assert "bio_prompt" in ai_input, "Should have bio_prompt"
         assert ai_input["text_prompt"] == "Creative tech usernames, modern style"
-        print(f"  OK: ai_input persisted with text_prompt + image_prompt")
+        assert ai_input["bio_prompt"] == "Short catchy bio, tech enthusiast, max 80 chars"
+        print(f"  OK: ai_input persisted with text_prompt + image_prompt + bio_prompt")
+
+        auth_client.delete(f"/api/v1/publish_plans/{plan_id}")
+
+    def test_create_plan_without_bio_prompt(self, auth_client, db_cursor):
+        """ai_input without bio_prompt should still work (bio is optional)."""
+        group = get_test_group_with_accounts(db_cursor)
+        if not group:
+            pytest.skip("No group with accounts available")
+
+        resp = create_grooming_plan(auth_client, group["group_id"], group["platform_id"],
+                                    "no_bio", include_bio=False)
+        if resp.status_code not in [200, 201]:
+            pytest.skip("Plan creation not available")
+
+        plan_id = extract_data(resp.json())["id"]
+
+        db_cursor.execute("SELECT ai_input FROM gm_aipub_plans WHERE id = %s", (plan_id,))
+        row = db_cursor.fetchone()
+        ai_input = row["ai_input"]
+        if isinstance(ai_input, str):
+            ai_input = json.loads(ai_input)
+        assert "text_prompt" in ai_input
+        assert "image_prompt" in ai_input
+        assert "bio_prompt" not in ai_input, "bio_prompt should not be present when not provided"
+        print(f"  OK: ai_input persisted without bio_prompt (optional)")
 
         auth_client.delete(f"/api/v1/publish_plans/{plan_id}")
 
@@ -247,35 +278,47 @@ class TestGroomingDBLifecycle:
         print(f"  Step 1 OK: plan={plan_id}, ai_tasks={ai_count}, pub_tasks={pub_count}")
 
     def test_lifecycle_02_scheduler_picks_up(self, db_cursor):
-        """Step 2: Simulate scheduler creating an AI task."""
+        """Step 2: Simulate scheduler creating an AI task with bio_prompt."""
         if not self.plan_id:
             pytest.skip("No plan from step 1")
 
+        ai_task_input = json.dumps({
+            "version": 1,
+            "type": "account_grooming",
+            "text_prompt": "Creative tech usernames",
+            "image_prompt": "Minimalist avatar",
+            "bio_prompt": "Short catchy bio, tech enthusiast, max 80 chars",
+            "platform": "tiktok",
+            "account_count": 2,
+        })
+
         db_cursor.execute("""
             INSERT INTO gm_aipub_ai_tasks (plan_id, task_type, external_service, input, status, progress, retry_count, sequence, created_at)
-            VALUES (%s, 'account_grooming', 'laozhang',
-                    '{"text_prompt":"Creative tech usernames","image_prompt":"Minimalist avatar"}'::jsonb,
-                    'processing', 0, 0, 0, NOW())
-        """, (self.plan_id,))
+            VALUES (%s, 'account_grooming', 'laozhang', %s::jsonb, 'processing', 0, 0, 0, NOW())
+        """, (self.plan_id, ai_task_input))
 
         db_cursor.execute("""
             UPDATE gm_aipub_plans SET status = 'ai_processing', updated_at = NOW() WHERE id = %s
         """, (self.plan_id,))
         db_cursor.connection.commit()
 
-        # Verify
+        # Verify plan status
         db_cursor.execute("SELECT status FROM gm_aipub_plans WHERE id = %s", (self.plan_id,))
         assert db_cursor.fetchone()["status"] == "ai_processing"
 
+        # Verify AI task input contains bio_prompt
         db_cursor.execute(
-            "SELECT task_type, status FROM gm_aipub_ai_tasks WHERE plan_id = %s", (self.plan_id,))
+            "SELECT task_type, status, input FROM gm_aipub_ai_tasks WHERE plan_id = %s", (self.plan_id,))
         ai_task = db_cursor.fetchone()
         assert ai_task["task_type"] == "account_grooming"
         assert ai_task["status"] == "processing"
-        print(f"  Step 2 OK: plan=ai_processing, ai_task=account_grooming/processing")
+        task_input = ai_task["input"] if isinstance(ai_task["input"], dict) else json.loads(ai_task["input"])
+        assert "bio_prompt" in task_input, "AI task input should contain bio_prompt"
+        assert task_input["bio_prompt"] == "Short catchy bio, tech enthusiast, max 80 chars"
+        print(f"  Step 2 OK: plan=ai_processing, ai_task=account_grooming/processing, bio_prompt=present")
 
     def test_lifecycle_03_ai_task_completes(self, db_cursor):
-        """Step 3: Simulate AI task completing with grooming results."""
+        """Step 3: Simulate AI task completing with grooming results including bio."""
         if not self.plan_id:
             pytest.skip("No plan")
 
@@ -283,8 +326,16 @@ class TestGroomingDBLifecycle:
             "type": "account_grooming",
             "accounts_processed": 2,
             "results": [
-                {"generated_name": "TechNova2026", "avatar_url": "https://oss.example.com/avatar_1.png"},
-                {"generated_name": "PixelDrift_X", "avatar_url": "https://oss.example.com/avatar_2.png"}
+                {
+                    "generated_name": "TechNova2026",
+                    "avatar_url": "https://oss.example.com/avatar_1.png",
+                    "generated_bio": "Tech lover & creative mind | Building the future"
+                },
+                {
+                    "generated_name": "PixelDrift_X",
+                    "avatar_url": "https://oss.example.com/avatar_2.png",
+                    "generated_bio": "Digital nomad exploring the pixel universe"
+                }
             ]
         })
 
@@ -304,7 +355,9 @@ class TestGroomingDBLifecycle:
         assert r["accounts_processed"] == 2
         assert len(r["results"]) == 2
         assert r["results"][0]["generated_name"] == "TechNova2026"
-        print(f"  Step 3 OK: ai_task completed, {r['accounts_processed']} accounts in result")
+        assert r["results"][0]["generated_bio"] == "Tech lover & creative mind | Building the future"
+        assert r["results"][1]["generated_bio"] == "Digital nomad exploring the pixel universe"
+        print(f"  Step 3 OK: ai_task completed, {r['accounts_processed']} accounts with name+bio")
 
     def test_lifecycle_04_pub_tasks_created(self, db_cursor):
         """Step 4: Simulate publish tasks created for each account."""
@@ -323,11 +376,15 @@ class TestGroomingDBLifecycle:
 
         names = ["TechNova2026", "PixelDrift_X"]
         urls = ["https://oss.example.com/avatar_1.png", "https://oss.example.com/avatar_2.png"]
+        bios = ["Tech lover & creative mind | Building the future",
+                "Digital nomad exploring the pixel universe"]
 
         for i, acc in enumerate(accounts[:2]):
             content = json.dumps({
                 "generated_name": names[i] if i < len(names) else f"user_{acc['id']}",
-                "avatar_url": urls[i] if i < len(urls) else None
+                "avatar_url": urls[i] if i < len(urls) else None,
+                "avatar_prompt": "realistic portrait, tech style",
+                "generated_bio": bios[i] if i < len(bios) else "",
             })
             db_cursor.execute("""
                 INSERT INTO gm_aipub_tasks (plan_id, social_account_id, content, status, created_at)
@@ -343,7 +400,7 @@ class TestGroomingDBLifecycle:
         db_cursor.execute("SELECT status FROM gm_aipub_plans WHERE id = %s", (self.plan_id,))
         assert db_cursor.fetchone()["status"] == "ready"
 
-        db_cursor.execute("SELECT content, status FROM gm_aipub_tasks WHERE plan_id = %s", (self.plan_id,))
+        db_cursor.execute("SELECT content, status FROM gm_aipub_tasks WHERE plan_id = %s ORDER BY id", (self.plan_id,))
         tasks = db_cursor.fetchall()
         assert len(tasks) >= 1
         for t in tasks:
@@ -351,8 +408,12 @@ class TestGroomingDBLifecycle:
             c = t["content"] if isinstance(t["content"], dict) else json.loads(t["content"])
             assert "generated_name" in c, f"content missing generated_name: {c}"
             assert "avatar_url" in c, f"content missing avatar_url: {c}"
+            assert "generated_bio" in c, f"content missing generated_bio: {c}"
             assert len(c["generated_name"]) > 0, "generated_name should not be empty"
-        print(f"  Step 4 OK: {len(tasks)} pub_tasks created, plan=ready")
+            assert len(c["generated_bio"]) > 0, "generated_bio should not be empty"
+            assert len(c["generated_bio"]) <= 80, f"generated_bio should be max 80 chars, got {len(c['generated_bio'])}"
+            print(f"    task: name='{c['generated_name']}', bio='{c['generated_bio']}'")
+        print(f"  Step 4 OK: {len(tasks)} pub_tasks with name+avatar+bio, plan=ready")
 
     def test_lifecycle_05_detail_shows_results(self, auth_client):
         """Step 5: API detail with ?include=all should return plan + publish_tasks with grooming content."""
@@ -380,23 +441,27 @@ class TestGroomingDBLifecycle:
         assert pub_tasks is not None, "publish_tasks should be included with ?include=all"
         assert len(pub_tasks) >= 1, f"Should have at least 1 publish task, got {len(pub_tasks)}"
 
-        # Verify each publish task has grooming content
+        # Verify each publish task has grooming content including bio
         for task in pub_tasks:
             content = task.get("content", {})
             assert "generated_name" in content, f"publish_task {task['id']} missing generated_name"
             assert "avatar_url" in content, f"publish_task {task['id']} missing avatar_url"
+            assert "generated_bio" in content, f"publish_task {task['id']} missing generated_bio"
             assert len(content["generated_name"]) > 0, f"generated_name should not be empty"
+            assert len(content["generated_bio"]) > 0, f"generated_bio should not be empty"
             print(f"    publish_task {task['id']}: name='{content['generated_name']}', "
-                  f"avatar_url={'present' if content.get('avatar_url') else 'null'}, "
-                  f"avatar_prompt={'present' if content.get('avatar_prompt') else 'null'}")
+                  f"bio='{content.get('generated_bio', '')[:40]}...', "
+                  f"avatar_url={'present' if content.get('avatar_url') else 'null'}")
 
-        # Verify ai_input is visible
+        # Verify ai_input contains bio_prompt
         ai_input = data_full.get("ai_input")
         if ai_input:
-            assert "text_prompt" in ai_input or "image_prompt" in ai_input, \
-                "ai_input should contain prompts"
+            assert "text_prompt" in ai_input, "ai_input should contain text_prompt"
+            assert "image_prompt" in ai_input, "ai_input should contain image_prompt"
+            assert "bio_prompt" in ai_input, "ai_input should contain bio_prompt"
+            print(f"    ai_input: text_prompt=present, image_prompt=present, bio_prompt=present")
 
-        print(f"  Step 5 OK: API detail with include=all returns {len(pub_tasks)} publish_tasks")
+        print(f"  Step 5 OK: API detail returns {len(pub_tasks)} publish_tasks with name+bio+avatar")
 
     def test_lifecycle_06_delete_cascades(self, auth_client, db_cursor):
         """Step 6: DELETE plan cascades to ai_tasks and pub_tasks."""
@@ -437,7 +502,7 @@ class TestGroomingErrors:
             "plan_type": "account_grooming",
             "platform_id": PLATFORM_TIKTOK,
             "content_type": "profile",
-            "ai_input": {"text_prompt": "test", "image_prompt": "test"},
+            "ai_input": {"text_prompt": "test", "image_prompt": "test", "bio_prompt": "test bio"},
         }
         resp = auth_client.post("/api/v1/publish_plans", json=payload)
         assert resp.status_code in [400, 422, 500], \
