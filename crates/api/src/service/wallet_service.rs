@@ -87,6 +87,7 @@ impl WalletService {
             external_txn_id: None,
             reference_id: None,
             description: Some(format!("Top up via {}", dto.payment_method)),
+            reference_type: None,
         };
 
         let transaction = self

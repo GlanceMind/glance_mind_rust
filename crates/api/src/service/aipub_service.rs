@@ -174,6 +174,72 @@ impl AipubService {
             }
         }
 
+        // =====================================================================
+        // Billing: Freeze budget for plans that require AI generation
+        // =====================================================================
+        // Only freeze if the plan needs AI processing (not direct content).
+        // The stored procedure handles idempotency and balance validation.
+        if dto.content.is_none() {
+            let plan_type_enum = PlanType::parse(&plan.plan_type);
+            let freeze_result = match plan_type_enum {
+                Some(PlanType::AccountGrooming) => {
+                    // 1 chat (batch name+bio) + N images (one avatar per account)
+                    let account_ids = self.repo.get_group_account_ids(plan.group_id.unwrap_or(0)).await
+                        .unwrap_or_default();
+                    let n = account_ids.len() as i32;
+                    if n > 0 {
+                        Some(self.repo.freeze_budget(
+                            user_id, 1, n, 0,
+                            plan.chat_ai_model_id, plan.image_ai_model_id, None,
+                            "aipub_plan", plan.id,
+                        ).await)
+                    } else {
+                        None // No accounts, no billing
+                    }
+                }
+                Some(PlanType::BatchText) => {
+                    // N chats (one content variation per account)
+                    let account_ids = self.repo.get_group_account_ids(plan.group_id.unwrap_or(0)).await
+                        .unwrap_or_default();
+                    let n = account_ids.len() as i32;
+                    if n > 0 {
+                        Some(self.repo.freeze_budget(
+                            user_id, n, 0, 0,
+                            plan.chat_ai_model_id, None, None,
+                            "aipub_plan", plan.id,
+                        ).await)
+                    } else {
+                        None
+                    }
+                }
+                Some(PlanType::SingleVideo) => {
+                    // 1 chat (content gen) + 1 video (video gen)
+                    Some(self.repo.freeze_budget(
+                        user_id, 1, 0, 1,
+                        plan.chat_ai_model_id, None, plan.video_ai_model_id,
+                        "aipub_plan", plan.id,
+                    ).await)
+                }
+                None => None,
+            };
+
+            // If freeze failed, rollback (delete plan) and return error
+            if let Some(Err(e)) = freeze_result {
+                tracing::warn!("Budget freeze failed for plan {}: {:?}", plan.id, e);
+                self.repo.delete_plan(plan.id).await.ok();
+                return Err(ApiError::InsufficientBalance);
+            }
+
+            // Reload plan to get updated billing fields
+            if freeze_result.is_some() {
+                if let Ok(updated_plan) = self.repo.find_plan_by_id(plan.id).await {
+                    response.billing_status = updated_plan.billing_status;
+                    response.frozen_cost = updated_plan.frozen_cost;
+                    response.consumed_cost = updated_plan.consumed_cost;
+                }
+            }
+        }
+
         // NOTE: AI tasks are now created by the Scheduler, not by the API.
         // The Scheduler will pick up pending plans and create ai_tasks.
         // 
@@ -473,6 +539,14 @@ impl AipubService {
             return Err(ApiError::BusinessError(BusinessError::InvalidInput(
                 "Cannot delete plan that is in progress".to_string(),
             )));
+        }
+
+        // If billing is frozen, finalize first to refund remaining
+        if plan.billing_status == "frozen" {
+            self.repo
+                .finalize_plan(plan_id, PlanStatus::Failed.as_str())
+                .await
+                .ok();
         }
 
         self.repo
@@ -819,14 +893,9 @@ impl AipubService {
             .await
             .map_err(|e| ApiError::from(DbError::SomethingWentWrong(e.to_string())))?;
 
-        // Update plan status to failed
-        let plan_update = UpdateAipubPlan {
-            status: Some(PlanStatus::Failed.as_str().to_string()),
-            updated_at: Some(Utc::now()),
-            ..Default::default()
-        };
+        // Use fn_finalize_plan for atomic status update + billing refund
         self.repo
-            .update_plan(ai_task.plan_id, plan_update)
+            .finalize_plan(ai_task.plan_id, PlanStatus::Failed.as_str())
             .await
             .ok();
 
@@ -1038,7 +1107,11 @@ impl AipubService {
         Ok(count)
     }
 
-    /// Check and update plan completion status
+    /// Check and update plan completion status.
+    /// Uses fn_finalize_plan stored procedure which atomically:
+    /// - Updates plan status to completed/failed
+    /// - Refunds remaining frozen budget
+    /// - Sets billing_status to 'settled'
     async fn check_and_update_plan_completion(&self, plan_id: i32) -> Result<(), ApiError> {
         let stats = self
             .repo
@@ -1065,12 +1138,8 @@ impl AipubService {
                 PlanStatus::Completed.as_str()
             };
 
-            let update = UpdateAipubPlan {
-                status: Some(new_status.to_string()),
-                updated_at: Some(Utc::now()),
-                ..Default::default()
-            };
-            self.repo.update_plan(plan_id, update).await.ok();
+            // Use fn_finalize_plan for atomic status update + billing settlement
+            self.repo.finalize_plan(plan_id, new_status).await.ok();
         }
 
         Ok(())

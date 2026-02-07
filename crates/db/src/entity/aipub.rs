@@ -2,6 +2,7 @@
 //! 自动发布模块实体定义
 
 use crate::schema::{gm_aipub_ai_tasks, gm_aipub_plans, gm_aipub_tasks};
+use bigdecimal::BigDecimal;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -34,6 +35,14 @@ pub struct AipubPlan {
     /// Plan type: batch_text, single_video, or account_grooming
     pub plan_type: String,
     pub image_ai_model_id: Option<i32>,
+    /// Billing state: none=no billing, frozen=budget frozen, settled=finalized
+    pub billing_status: String,
+    /// Total frozen amount (set at creation, immutable)
+    pub frozen_cost: BigDecimal,
+    /// Consumed amount (incremented per sub-task completion)
+    pub consumed_cost: BigDecimal,
+    /// Freeze timestamp for reconciliation timeout detection
+    pub frozen_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Insertable)]

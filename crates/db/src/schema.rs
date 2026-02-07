@@ -436,18 +436,23 @@ diesel::table! {
         ai_task_types -> Nullable<Array<Nullable<Text>>>,
         ai_service_config -> Nullable<Jsonb>,
         ai_input -> Nullable<Jsonb>,
+        chat_ai_model_id -> Nullable<Int4>,
+        video_ai_model_id -> Nullable<Int4>,
         content -> Nullable<Jsonb>,
         #[max_length = 20]
         status -> Varchar,
         created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
-        chat_ai_model_id -> Nullable<Int4>,
-        video_ai_model_id -> Nullable<Int4>,
-        #[max_length = 200]
-        name -> Nullable<Varchar>,
         #[max_length = 20]
         plan_type -> Varchar,
+        #[max_length = 200]
+        name -> Nullable<Varchar>,
         image_ai_model_id -> Nullable<Int4>,
+        #[max_length = 20]
+        billing_status -> Varchar,
+        frozen_cost -> Numeric,
+        consumed_cost -> Numeric,
+        frozen_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -488,11 +493,11 @@ diesel::table! {
         reply_prompt -> Nullable<Text>,
         created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
-        dm_template -> Nullable<Text>,
         dm_prompt -> Nullable<Text>,
         reply_post_prompt -> Nullable<Text>,
         #[max_length = 255]
         name -> Nullable<Varchar>,
+        dm_template -> Nullable<Text>,
     }
 }
 
@@ -529,8 +534,8 @@ diesel::table! {
         actual_consumption -> Numeric,
         is_frozen -> Bool,
         search_options -> Nullable<Jsonb>,
-        auto_reply_post -> Bool,
         auto_reply_comments -> Bool,
+        auto_reply_post -> Bool,
         completed_reason -> Nullable<Text>,
     }
 }
@@ -628,12 +633,15 @@ diesel::table! {
 diesel::table! {
     gm_email_verifications (id) {
         id -> Int4,
-        email -> Text,
-        code -> Text,
+        #[max_length = 255]
+        email -> Varchar,
+        #[max_length = 6]
+        code -> Varchar,
         expires_at -> Timestamptz,
         verified -> Bool,
         created_at -> Timestamptz,
-        ip_address -> Nullable<Text>,
+        #[max_length = 45]
+        ip_address -> Nullable<Varchar>,
         user_agent -> Nullable<Text>,
     }
 }
@@ -905,6 +913,7 @@ diesel::table! {
         created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
         completed_at -> Nullable<Timestamptz>,
+        model_id -> Nullable<Int4>,
         #[max_length = 255]
         title -> Nullable<Varchar>,
         #[max_length = 20]
@@ -913,7 +922,6 @@ diesel::table! {
         video_seconds -> Nullable<Varchar>,
         #[max_length = 20]
         video_size -> Nullable<Varchar>,
-        model_id -> Nullable<Int4>,
     }
 }
 
@@ -930,6 +938,8 @@ diesel::table! {
         description -> Nullable<Text>,
         created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
+        #[max_length = 50]
+        reference_type -> Nullable<Varchar>,
     }
 }
 
@@ -957,6 +967,7 @@ diesel::joinable!(gm_aipub_plans -> gm_platforms (platform_id));
 diesel::joinable!(gm_aipub_plans -> gm_social_accounts (social_account_id));
 diesel::joinable!(gm_aipub_plans -> gm_social_groups (group_id));
 diesel::joinable!(gm_aipub_plans -> gm_users (user_id));
+diesel::joinable!(gm_aipub_tasks -> gm_aipub_ai_tasks (ai_task_id));
 diesel::joinable!(gm_aipub_tasks -> gm_social_accounts (social_account_id));
 diesel::joinable!(gm_campaign_accounts -> gm_campaigns (campaign_id));
 diesel::joinable!(gm_campaign_accounts -> gm_social_accounts (account_id));

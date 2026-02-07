@@ -17,6 +17,8 @@ pub struct WalletTransaction {
     pub reference_id: Option<i32>,
     pub description: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// Business type: campaign, aipub_plan, etc.
+    pub reference_type: Option<String>,
 }
 
 #[derive(Insertable, Serialize, Deserialize)]
@@ -30,4 +32,6 @@ pub struct NewWalletTransaction {
     pub external_txn_id: Option<String>,
     pub reference_id: Option<i32>,
     pub description: Option<String>,
+    /// Business type: campaign, aipub_plan, etc.
+    pub reference_type: Option<String>,
 }

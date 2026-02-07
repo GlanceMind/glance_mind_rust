@@ -73,7 +73,11 @@ INSERT INTO gm_pricing_rules (id, platform_id, action_type, cost_points) VALUES
 -- Twitter pricing
 (13, 5, 'SCAN_POST', 0.50),
 (14, 5, 'AI_ANALYZE', 1.00),
-(15, 5, 'REPLY_COMMENT', 2.00)
+(15, 5, 'REPLY_COMMENT', 2.00),
+-- Global pricing (platform_id IS NULL) for billing system
+(16, NULL, 'AI_ANALYZE', 1.00),
+(17, NULL, 'IMAGE', 5.00),
+(18, NULL, 'VIDEO_GENERATE', 200.00)
 ON CONFLICT (action_type, platform_id) DO UPDATE SET
     cost_points = EXCLUDED.cost_points;
 

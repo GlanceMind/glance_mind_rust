@@ -575,4 +575,72 @@ impl AipubRepository {
             .select(name)
             .first(&mut conn)
     }
+
+    // =========================================================================
+    // Billing Methods (call stored procedures)
+    // =========================================================================
+
+    /// Freeze estimated budget for a plan. Returns frozen amount.
+    /// Stored procedure handles: idempotency, row locking, balance validation.
+    pub async fn freeze_budget(
+        &self,
+        user_id: i32,
+        chat_count: i32,
+        image_count: i32,
+        video_count: i32,
+        chat_model_id: Option<i32>,
+        image_model_id: Option<i32>,
+        video_model_id: Option<i32>,
+        ref_type: &str,
+        ref_id: i32,
+    ) -> Result<bigdecimal::BigDecimal, DieselError> {
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|_| DieselError::BrokenTransactionManager)?;
+
+        let result: bigdecimal::BigDecimal = diesel::sql_query(
+            "SELECT fn_freeze_budget($1, $2, $3, $4, $5, $6, $7, $8, $9) as frozen_amount"
+        )
+        .bind::<diesel::sql_types::Integer, _>(user_id)
+        .bind::<diesel::sql_types::Integer, _>(chat_count)
+        .bind::<diesel::sql_types::Integer, _>(image_count)
+        .bind::<diesel::sql_types::Integer, _>(video_count)
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(chat_model_id)
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(image_model_id)
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(video_model_id)
+        .bind::<diesel::sql_types::VarChar, _>(ref_type)
+        .bind::<diesel::sql_types::Integer, _>(ref_id)
+        .get_result::<FrozenAmountRow>(&mut conn)?
+        .frozen_amount;
+
+        Ok(result)
+    }
+
+    /// Finalize a plan: update status + refund remaining frozen.
+    /// Stored procedure handles: idempotency, row locking, refund calculation.
+    pub async fn finalize_plan(
+        &self,
+        plan_id: i32,
+        new_status: &str,
+    ) -> Result<(), DieselError> {
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|_| DieselError::BrokenTransactionManager)?;
+
+        diesel::sql_query("SELECT fn_finalize_plan($1, $2)")
+            .bind::<diesel::sql_types::Integer, _>(plan_id)
+            .bind::<diesel::sql_types::VarChar, _>(new_status)
+            .execute(&mut conn)?;
+
+        Ok(())
+    }
+}
+
+/// Helper struct for reading fn_freeze_budget result
+#[derive(diesel::QueryableByName)]
+struct FrozenAmountRow {
+    #[diesel(sql_type = diesel::sql_types::Numeric)]
+    frozen_amount: bigdecimal::BigDecimal,
 }

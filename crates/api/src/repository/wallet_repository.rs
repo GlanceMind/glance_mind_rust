@@ -190,6 +190,7 @@ impl WalletRepository {
                 external_txn_id: None,
                 reference_id: None,
                 description: Some(description),
+                reference_type: None,
             };
 
             let transaction = diesel::insert_into(wallet_transactions::table)

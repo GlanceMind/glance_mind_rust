@@ -1,6 +1,7 @@
 //! AI Publish Module DTOs
 //! 自动发布模块数据传输对象
 
+use bigdecimal::BigDecimal;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -67,6 +68,13 @@ pub struct PlanResponseDto {
     pub publish_tasks_count: Option<i64>,
     pub completed_count: Option<i64>,
     pub failed_count: Option<i64>,
+    // Billing
+    /// Billing state: "none" / "frozen" / "settled"
+    pub billing_status: String,
+    /// Total frozen amount
+    pub frozen_cost: BigDecimal,
+    /// Consumed amount (incremented per sub-task)
+    pub consumed_cost: BigDecimal,
 }
 
 /// Plan detail response (with tasks)
@@ -154,6 +162,9 @@ impl From<glance_mind_db::entity::aipub::AipubPlan> for PlanResponseDto {
             publish_tasks_count: None,
             completed_count: None,
             failed_count: None,
+            billing_status: plan.billing_status,
+            frozen_cost: plan.frozen_cost,
+            consumed_cost: plan.consumed_cost,
         }
     }
 }
