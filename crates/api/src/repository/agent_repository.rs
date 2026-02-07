@@ -1106,6 +1106,7 @@ impl AgentRepository {
     }
 
     /// Helper to convert i16 status to string
+    #[allow(dead_code)]
     fn status_i16_to_string(status: i16) -> String {
         match status {
             0 => "pending".to_string(),

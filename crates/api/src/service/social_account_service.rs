@@ -232,7 +232,7 @@ impl SocialAccountService {
         // Parse profile range
         let (prefix, start_num, end_num) = self.parse_profile_range(&dto.profile_start, &dto.profile_end)?;
         
-        let total_count = (end_num - start_num + 1) as i32;
+        let total_count = end_num - start_num + 1;
         
         // Validate: max 100 accounts per batch
         if total_count > 100 {

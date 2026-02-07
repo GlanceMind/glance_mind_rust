@@ -113,8 +113,10 @@ impl std::fmt::Display for PlanStatus {
 /// Plan Type enum - distinguishes between batch text and single video plans
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum PlanType {
     /// Batch text generation for a group (multiple accounts, text posts only)
+    #[default]
     BatchText,
     /// Single video generation for one account (video + content)
     SingleVideo,
@@ -151,11 +153,6 @@ impl PlanType {
     }
 }
 
-impl Default for PlanType {
-    fn default() -> Self {
-        PlanType::BatchText
-    }
-}
 
 impl std::fmt::Display for PlanType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

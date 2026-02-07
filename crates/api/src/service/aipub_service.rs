@@ -11,7 +11,7 @@ use crate::repository::aipub_repository::AipubRepository;
 use chrono::Utc;
 use diesel::result::Error as DieselError;
 use glance_mind_db::entity::aipub::{
-    AiTaskStatus, AiTaskType, NewAipubAiTask, NewAipubPlan, NewAipubTask, PlanStatus, PlanType,
+    AiTaskStatus, AiTaskType, NewAipubPlan, NewAipubTask, PlanStatus, PlanType,
     PublishTaskStatus, UpdateAipubAiTask, UpdateAipubPlan, UpdateAipubTask,
 };
 use serde_json::json;

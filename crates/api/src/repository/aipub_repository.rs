@@ -51,6 +51,7 @@ impl AipubRepository {
             .first(&mut conn)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn find_plans_by_user(
         &self,
         user_id_param: i32,

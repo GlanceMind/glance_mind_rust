@@ -1530,6 +1530,7 @@ mod tests {
         let test_prompt = "A serene Japanese garden with cherry blossoms in spring";
 
         // (model, size, quality, style, response_format)
+        #[allow(clippy::type_complexity)]
         let models: Vec<(&str, &str, Option<&str>, Option<&str>, Option<&str>)> = vec![
             ("gpt-4o-image", "1024x1024", None, None, Some("url")),
             ("sora-image", "1024x1024", None, None, Some("url")),

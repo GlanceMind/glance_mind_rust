@@ -15,6 +15,7 @@ use bigdecimal::BigDecimal;
 #[derive(Clone)]
 pub struct CampaignService {
     repo: CampaignRepository,
+    #[allow(dead_code)]
     wallet_repo: WalletRepository,
 }
 

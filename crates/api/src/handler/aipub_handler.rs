@@ -225,7 +225,7 @@ pub async fn update_publish_task_status(
 
 /// POST /public/aipub/publish_tasks/:id/heartbeat - Task heartbeat
 pub async fn task_heartbeat(
-    State(state): State<UserState>,
+    State(_state): State<UserState>,
     Path(task_id): Path<i32>,
     Json(_payload): Json<TaskHeartbeatDto>,
 ) -> Result<impl IntoResponse, ApiError> {

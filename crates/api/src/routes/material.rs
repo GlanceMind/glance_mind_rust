@@ -1,7 +1,7 @@
 use crate::handler::material_handler;
 use crate::state::user_state::UserState;
 use axum::{
-    routing::{delete, get, post, put},
+    routing::{get, post},
     Router,
 };
 

@@ -102,6 +102,7 @@ impl CampaignRepository {
             .get_result(&mut conn)
     }
 
+    #[allow(dead_code)]
     pub async fn update_status_and_freeze(
         &self,
         id: i32,

@@ -20,7 +20,7 @@ const TEST_PASSWORD: &str = "Lifeng941010";
 async fn login() -> Result<String, Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
     let response = client
-        .post(&format!("{}/auth/login", BASE_URL))
+        .post(format!("{}/auth/login", BASE_URL))
         .json(&json!({
             "identifier": TEST_USERNAME,
             "password": TEST_PASSWORD
@@ -43,7 +43,7 @@ async fn test_batch_create_accounts_small_range() {
     
     let client = reqwest::Client::new();
     let response = client
-        .post(&format!("{}/accounts/batch", BASE_URL))
+        .post(format!("{}/accounts/batch", BASE_URL))
         .header("Authorization", format!("Bearer {}", token))
         .header("Content-Type", "application/json")
         .json(&json!({
@@ -78,7 +78,7 @@ async fn test_batch_create_accounts_max_limit() {
     
     let client = reqwest::Client::new();
     let response = client
-        .post(&format!("{}/accounts/batch", BASE_URL))
+        .post(format!("{}/accounts/batch", BASE_URL))
         .header("Authorization", format!("Bearer {}", token))
         .header("Content-Type", "application/json")
         .json(&json!({
@@ -110,7 +110,7 @@ async fn test_batch_create_accounts_exceed_limit() {
     
     let client = reqwest::Client::new();
     let response = client
-        .post(&format!("{}/accounts/batch", BASE_URL))
+        .post(format!("{}/accounts/batch", BASE_URL))
         .header("Authorization", format!("Bearer {}", token))
         .header("Content-Type", "application/json")
         .json(&json!({
@@ -147,7 +147,7 @@ async fn test_batch_create_accounts_invalid_range() {
     
     let client = reqwest::Client::new();
     let response = client
-        .post(&format!("{}/accounts/batch", BASE_URL))
+        .post(format!("{}/accounts/batch", BASE_URL))
         .header("Authorization", format!("Bearer {}", token))
         .header("Content-Type", "application/json")
         .json(&json!({
@@ -176,7 +176,7 @@ async fn test_batch_create_accounts_mismatched_prefix() {
     
     let client = reqwest::Client::new();
     let response = client
-        .post(&format!("{}/accounts/batch", BASE_URL))
+        .post(format!("{}/accounts/batch", BASE_URL))
         .header("Authorization", format!("Bearer {}", token))
         .header("Content-Type", "application/json")
         .json(&json!({
@@ -214,7 +214,7 @@ async fn test_batch_create_accounts_with_group() {
 
     // First, create a group or get an existing group
     let group_response = client
-        .get(&format!("{}/social-groups?page=1&page_size=1", BASE_URL))
+        .get(format!("{}/social-groups?page=1&page_size=1", BASE_URL))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -236,7 +236,7 @@ async fn test_batch_create_accounts_with_group() {
     if let Some(gid) = group_id {
         // Create accounts with group
         let response = client
-            .post(&format!("{}/accounts/batch", BASE_URL))
+            .post(format!("{}/accounts/batch", BASE_URL))
             .header("Authorization", format!("Bearer {}", token))
             .header("Content-Type", "application/json")
             .json(&json!({
@@ -271,7 +271,7 @@ async fn test_batch_create_verify_usernames() {
 
     // Create 3 accounts for easy verification
     let response = client
-        .post(&format!("{}/accounts/batch", BASE_URL))
+        .post(format!("{}/accounts/batch", BASE_URL))
         .header("Authorization", format!("Bearer {}", token))
         .header("Content-Type", "application/json")
         .json(&json!({
@@ -298,7 +298,7 @@ async fn test_batch_create_verify_usernames() {
         
         // Get account details (assuming there's a detail endpoint or list with filter)
         let list_response = client
-            .get(&format!("{}/accounts?page=1&page_size=100", BASE_URL))
+            .get(format!("{}/accounts?page=1&page_size=100", BASE_URL))
             .header("Authorization", format!("Bearer {}", token))
             .send()
             .await
@@ -336,7 +336,7 @@ async fn test_batch_create_complete_flow() {
 
     println!("Step 1: Get initial account count...");
     let initial_stats = client
-        .get(&format!("{}/accounts/statistics", BASE_URL))
+        .get(format!("{}/accounts/statistics", BASE_URL))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -348,7 +348,7 @@ async fn test_batch_create_complete_flow() {
 
     println!("Step 2: Batch create 5 accounts...");
     let create_response = client
-        .post(&format!("{}/accounts/batch", BASE_URL))
+        .post(format!("{}/accounts/batch", BASE_URL))
         .header("Authorization", format!("Bearer {}", token))
         .header("Content-Type", "application/json")
         .json(&json!({
@@ -370,7 +370,7 @@ async fn test_batch_create_complete_flow() {
 
     println!("Step 3: Verify new account count...");
     let final_stats = client
-        .get(&format!("{}/accounts/statistics", BASE_URL))
+        .get(format!("{}/accounts/statistics", BASE_URL))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -387,7 +387,7 @@ async fn test_batch_create_complete_flow() {
     for id_value in created_ids {
         let account_id = id_value.as_i64().expect("Invalid ID");
         let delete_response = client
-            .delete(&format!("{}/accounts/{}", BASE_URL, account_id))
+            .delete(format!("{}/accounts/{}", BASE_URL, account_id))
             .header("Authorization", format!("Bearer {}", token))
             .send()
             .await

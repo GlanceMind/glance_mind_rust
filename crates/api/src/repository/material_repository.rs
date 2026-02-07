@@ -105,6 +105,7 @@ impl MaterialRepository {
     }
 
     /// Update material
+    #[allow(clippy::too_many_arguments)]
     pub async fn update(
         &self,
         id: i32,

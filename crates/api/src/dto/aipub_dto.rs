@@ -143,7 +143,7 @@ impl From<glance_mind_db::entity::aipub::AipubPlan> for PlanResponseDto {
             plan_type: plan.plan_type,
             ai_task_types: plan
                 .ai_task_types
-                .map(|v| v.into_iter().filter_map(|s| s).collect()),
+                .map(|v| v.into_iter().flatten().collect()),
             ai_service_config: plan.ai_service_config,
             ai_input: plan.ai_input,
             content: plan.content,

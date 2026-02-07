@@ -26,7 +26,7 @@ const TEST_PASSWORD: &str = "Lifeng94101";
 async fn login() -> Result<String, Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
     let response = client
-        .post(&format!("{}/auth/login", BASE_URL))
+        .post(format!("{}/auth/login", BASE_URL))
         .json(&json!({
             "identifier": TEST_USERNAME,
             "password": TEST_PASSWORD
@@ -60,7 +60,7 @@ async fn test_upload_video_to_oss() {
         .part("file", multipart::Part::bytes(video_data).file_name("test.mp4").mime_str("video/mp4").unwrap());
 
     let response = client
-        .post(&format!("{}/oss/upload-video", BASE_URL))
+        .post(format!("{}/oss/upload-video", BASE_URL))
         .header("Authorization", format!("Bearer {}", token))
         .multipart(form)
         .send()
@@ -92,7 +92,7 @@ async fn test_create_material_with_ai_analysis() {
         .part("file", multipart::Part::bytes(video_data).file_name("test.mp4").mime_str("video/mp4").unwrap());
 
     let upload_response = client
-        .post(&format!("{}/oss/upload-video", BASE_URL))
+        .post(format!("{}/oss/upload-video", BASE_URL))
         .header("Authorization", format!("Bearer {}", token))
         .multipart(form)
         .send()
@@ -108,7 +108,7 @@ async fn test_create_material_with_ai_analysis() {
     // Create material (will trigger AI analysis)
     // Note: title and tag are required fields
     let create_response = client
-        .post(&format!("{}/materials", BASE_URL))
+        .post(format!("{}/materials", BASE_URL))
         .header("Authorization", format!("Bearer {}", token))
         .header("Content-Type", "application/json")
         .json(&json!({
@@ -148,7 +148,7 @@ async fn test_list_materials() {
     
     let client = reqwest::Client::new();
     let response = client
-        .get(&format!("{}/materials?page=1&page_size=10", BASE_URL))
+        .get(format!("{}/materials?page=1&page_size=10", BASE_URL))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -169,7 +169,7 @@ async fn test_list_material_tags() {
     
     let client = reqwest::Client::new();
     let response = client
-        .get(&format!("{}/material-tags", BASE_URL))
+        .get(format!("{}/material-tags", BASE_URL))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -190,7 +190,7 @@ async fn test_favorite_from_video_case() {
     // First, get a video_case task_no
     let client = reqwest::Client::new();
     let list_response = client
-        .get(&format!("{}/video-cases?page=1&page_size=1", BASE_URL))
+        .get(format!("{}/video-cases?page=1&page_size=1", BASE_URL))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -211,7 +211,7 @@ async fn test_favorite_from_video_case() {
 
     // Favorite the video_case
     let favorite_response = client
-        .post(&format!("{}/video-cases/{}/favorite", BASE_URL, task_no))
+        .post(format!("{}/video-cases/{}/favorite", BASE_URL, task_no))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -242,7 +242,7 @@ async fn test_create_material_missing_required_fields() {
         .part("file", multipart::Part::bytes(video_data).file_name("test.mp4").mime_str("video/mp4").unwrap());
 
     let upload_response = client
-        .post(&format!("{}/oss/upload-video", BASE_URL))
+        .post(format!("{}/oss/upload-video", BASE_URL))
         .header("Authorization", format!("Bearer {}", token))
         .multipart(form)
         .send()
@@ -257,8 +257,8 @@ async fn test_create_material_missing_required_fields() {
 
     // Try to create material without title (should be handled by frontend validation)
     // Backend will accept it but frontend should require it
-    let create_response = client
-        .post(&format!("{}/materials", BASE_URL))
+    let _create_response = client
+        .post(format!("{}/materials", BASE_URL))
         .header("Authorization", format!("Bearer {}", token))
         .header("Content-Type", "application/json")
         .json(&json!({
@@ -295,7 +295,7 @@ async fn test_complete_material_flow() {
         .part("file", multipart::Part::bytes(video_data).file_name("test.mp4").mime_str("video/mp4").unwrap());
 
     let upload_response = client
-        .post(&format!("{}/oss/upload-video", BASE_URL))
+        .post(format!("{}/oss/upload-video", BASE_URL))
         .header("Authorization", format!("Bearer {}", token))
         .multipart(form)
         .send()
@@ -309,7 +309,7 @@ async fn test_complete_material_flow() {
     // Step 2: Create material (triggers AI analysis)
     println!("Step 2: Creating material (AI analysis will run)...");
     let create_response = client
-        .post(&format!("{}/materials", BASE_URL))
+        .post(format!("{}/materials", BASE_URL))
         .header("Authorization", format!("Bearer {}", token))
         .header("Content-Type", "application/json")
         .json(&json!({
@@ -333,7 +333,7 @@ async fn test_complete_material_flow() {
     // Step 3: List materials
     println!("Step 3: Listing materials...");
     let list_response = client
-        .get(&format!("{}/materials?page=1&page_size=10", BASE_URL))
+        .get(format!("{}/materials?page=1&page_size=10", BASE_URL))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -347,7 +347,7 @@ async fn test_complete_material_flow() {
     // Step 4: Get material detail
     println!("Step 4: Getting material detail...");
     let detail_response = client
-        .get(&format!("{}/materials/{}", BASE_URL, material_id))
+        .get(format!("{}/materials/{}", BASE_URL, material_id))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -361,7 +361,7 @@ async fn test_complete_material_flow() {
     // Step 5: Update material
     println!("Step 5: Updating material...");
     let update_response = client
-        .put(&format!("{}/materials/{}", BASE_URL, material_id))
+        .put(format!("{}/materials/{}", BASE_URL, material_id))
         .header("Authorization", format!("Bearer {}", token))
         .header("Content-Type", "application/json")
         .json(&json!({
@@ -380,7 +380,7 @@ async fn test_complete_material_flow() {
     // Step 6: Delete material
     println!("Step 6: Deleting material...");
     let delete_response = client
-        .delete(&format!("{}/materials/{}", BASE_URL, material_id))
+        .delete(format!("{}/materials/{}", BASE_URL, material_id))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await

@@ -202,6 +202,7 @@ fn default_platform() -> String {
 
 /// Optimized response structure: campaign config extracted, comments as array
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Default)]
 pub struct DeviceCommentsResponse {
     /// Campaign configuration (returned once)
     pub campaign: CampaignConfig,
@@ -213,6 +214,7 @@ pub struct DeviceCommentsResponse {
 
 /// Campaign auto-interaction configuration
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Default)]
 pub struct CampaignConfig {
     pub campaign_id: i32,
     pub auto_like: bool,
@@ -819,6 +821,7 @@ impl AiTaskResult {
 /// - Text-only content: Only set `content_prompt`
 /// - Legacy API calls: Only set `prompt` (both tasks will use this)
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Default)]
 pub struct AiPubInput {
     /// Video generation prompt - describes the visual content, scenes, transitions, and style
     /// Used by video AI models (e.g., Sora, Veo) to generate video content
@@ -845,17 +848,6 @@ pub struct AiPubInput {
     pub account_images: Option<std::collections::HashMap<String, AiPubImageConfig>>,
 }
 
-impl Default for AiPubInput {
-    fn default() -> Self {
-        Self {
-            video_prompt: String::new(),
-            content_prompt: String::new(),
-            prompt: String::new(),
-            default_images: None,
-            account_images: None,
-        }
-    }
-}
 
 impl AiPubInput {
     /// Create a new AiPubInput with just a legacy prompt (for backward compatibility)
@@ -1009,19 +1001,6 @@ impl AiPubTaskContent {
 // Default implementations
 // ============================================================
 
-impl Default for CampaignConfig {
-    fn default() -> Self {
-        Self {
-            campaign_id: 0,
-            auto_like: false,
-            auto_follow: false,
-            auto_dm: false,
-            auto_reply_comments: false,
-            auto_reply_post: false,
-            profile_name: None,
-        }
-    }
-}
 
 impl Default for Pagination {
     fn default() -> Self {
@@ -1034,15 +1013,6 @@ impl Default for Pagination {
     }
 }
 
-impl Default for DeviceCommentsResponse {
-    fn default() -> Self {
-        Self {
-            campaign: CampaignConfig::default(),
-            comments: Vec::new(),
-            pagination: Pagination::default(),
-        }
-    }
-}
 
 // ============================================================
 // Builder methods for DeviceCommentsResponse
