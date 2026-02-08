@@ -108,13 +108,48 @@ impl WalletService {
     pub async fn get_order_status(
         &self,
         order_id: i32,
-        _user_id: i32,
+        user_id: i32,
     ) -> Result<TopUpResponseDto, ApiError> {
-        // Mock implementation - in real system, query payment gateway
+        // 1. Query the transaction
+        let transaction = self
+            .repo
+            .get_transaction_by_id(order_id)
+            .await
+            .map_err(|e| match e {
+                diesel::result::Error::NotFound => {
+                    ApiError::NotFound(format!("Order {} not found", order_id))
+                }
+                _ => ApiError::InternalServerError("Failed to query order".to_string()),
+            })?;
+
+        // 2. Verify ownership - CRITICAL SECURITY CHECK
+        if transaction.user_id != user_id {
+            tracing::warn!(
+                "User {} attempted to access order {} owned by user {}",
+                user_id,
+                order_id,
+                transaction.user_id
+            );
+            return Err(ApiError::Forbidden(
+                "You do not have permission to view this order".to_string(),
+            ));
+        }
+
+        // 3. Determine order status based on transaction type
+        let status_message = match transaction.type_.as_str() {
+            "RECHARGE" => {
+                // Check if there's a corresponding payment record
+                // For now, return pending status
+                "Order is PENDING payment".to_string()
+            }
+            _ => format!("Transaction status: {}", transaction.type_),
+        };
+
+        // 4. Return order status
         Ok(TopUpResponseDto {
             transaction_id: order_id,
-            payment_url: None,
-            message: "Order status is PENDING".to_string(),
+            payment_url: None, // Payment URL would be generated during creation
+            message: status_message,
         })
     }
 

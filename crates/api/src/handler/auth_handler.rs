@@ -155,77 +155,77 @@ pub async fn google_auth(
     Ok(api_ok!(token_data))
 }
 
-/// Verify Google ID token
+/// Verify Google ID token with proper signature verification
 ///
-/// This is a simplified verification that decodes the JWT without full signature verification.
-/// For production, you should verify the signature using Google's public keys.
+/// This function fetches Google's public keys and verifies the JWT signature
 async fn verify_google_token(id_token: &str) -> Result<GoogleTokenPayload, ApiError> {
-    // Decode the token header to get the key ID
-    let _header = decode_header(id_token)
+    // 1. Decode token header to get key ID (kid)
+    let header = decode_header(id_token)
         .map_err(|e| ApiError::Unauthorized(format!("Invalid token format: {}", e)))?;
 
-    // For production: fetch Google's public keys and verify signature
-    // URL: https://www.googleapis.com/oauth2/v3/certs
-    // For now, we'll do a basic decode without signature verification
-    // This is acceptable since the token comes directly from Google's OAuth flow
+    let kid = header
+        .kid
+        .ok_or_else(|| ApiError::Unauthorized("Missing key ID in token header".to_string()))?;
 
-    // Decode without verification (for development/testing)
-    // In production, you should verify with Google's public keys
-    let token_data = decode::<GoogleTokenPayload>(
-        id_token,
-        &DecodingKey::from_secret(&[]), // Empty key for insecure decode
-        &Validation::new(Algorithm::RS256),
-    );
+    // 2. Fetch Google's public keys (JWKS)
+    let jwks_url = "https://www.googleapis.com/oauth2/v3/certs";
+    let jwks_response = reqwest::get(jwks_url)
+        .await
+        .map_err(|e| ApiError::InternalServerError(format!("Failed to fetch JWKS: {}", e)))?
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| ApiError::InternalServerError(format!("Failed to parse JWKS: {}", e)))?;
 
-    // If strict verification fails, try lenient decode
-    let payload = if let Ok(data) = token_data {
-        data.claims
-    } else {
-        // Fallback: decode token manually (less secure but works)
-        decode_google_token_manually(id_token)?
-    };
+    // 3. Find the matching key from JWKS
+    let jwks_keys = jwks_response["keys"]
+        .as_array()
+        .ok_or_else(|| ApiError::Unauthorized("Invalid JWKS format".to_string()))?;
 
-    // Verify issuer
-    if payload.iss != "accounts.google.com" && payload.iss != "https://accounts.google.com" {
-        return Err(ApiError::Unauthorized("Invalid token issuer".to_string()));
-    }
+    let matching_key = jwks_keys
+        .iter()
+        .find(|key| key["kid"].as_str() == Some(&kid))
+        .ok_or_else(|| ApiError::Unauthorized("Key ID not found in JWKS".to_string()))?;
 
-    // Verify expiration
+    // 4. Extract RSA components (n and e)
+    let n = matching_key["n"]
+        .as_str()
+        .ok_or_else(|| ApiError::Unauthorized("Missing 'n' in JWK".to_string()))?;
+    let e = matching_key["e"]
+        .as_str()
+        .ok_or_else(|| ApiError::Unauthorized("Missing 'e' in JWK".to_string()))?;
+
+    // 5. Create decoding key from RSA components
+    let decoding_key = DecodingKey::from_rsa_components(n, e)
+        .map_err(|e| ApiError::Unauthorized(format!("Invalid RSA key: {}", e)))?;
+
+    // 6. Configure validation
+    let expected_client_id = std::env::var("GOOGLE_CLIENT_ID").unwrap_or_else(|_| {
+        "681668668825-ponbo5o1acr4mokia310aumd8ch70jdn.apps.googleusercontent.com".to_string()
+    });
+
+    let mut validation = Validation::new(Algorithm::RS256);
+    validation.set_audience(&[&expected_client_id]);
+    validation.set_issuer(&["accounts.google.com", "https://accounts.google.com"]);
+
+    // 7. Verify signature and decode payload
+    let token_data =
+        decode::<GoogleTokenPayload>(id_token, &decoding_key, &validation).map_err(|e| {
+            tracing::error!("Google token verification failed: {:?}", e);
+            ApiError::Unauthorized(format!("Invalid Google token: {}", e))
+        })?;
+
+    // 8. Additional validation
+    let payload = token_data.claims;
+
+    // Verify expiration (should already be checked by jsonwebtoken, but double-check)
     let now = chrono::Utc::now().timestamp();
     if payload.exp < now {
         return Err(ApiError::Unauthorized("Token expired".to_string()));
     }
 
-    // Verify audience (your Google Client ID)
-    let expected_client_id =
-        "681668668825-ponbo5o1acr4mokia310aumd8ch70jdn.apps.googleusercontent.com";
-    if payload.aud != expected_client_id {
-        return Err(ApiError::Unauthorized("Invalid token audience".to_string()));
-    }
-
-    Ok(payload)
-}
-
-/// Manually decode Google ID token (JWT) without signature verification
-///
-/// WARNING: This is less secure and should only be used for development
-/// or when the token comes directly from Google's trusted OAuth flow
-fn decode_google_token_manually(id_token: &str) -> Result<GoogleTokenPayload, ApiError> {
-    use base64::{engine::general_purpose, Engine as _};
-
-    let parts: Vec<&str> = id_token.split('.').collect();
-    if parts.len() != 3 {
-        return Err(ApiError::Unauthorized("Invalid token format".to_string()));
-    }
-
-    // Decode the payload (second part)
-    let payload_encoded = parts[1];
-    let payload_decoded = general_purpose::URL_SAFE_NO_PAD
-        .decode(payload_encoded)
-        .map_err(|e| ApiError::Unauthorized(format!("Failed to decode token: {}", e)))?;
-
-    let payload: GoogleTokenPayload = serde_json::from_slice(&payload_decoded)
-        .map_err(|e| ApiError::Unauthorized(format!("Failed to parse token payload: {}", e)))?;
-
+    tracing::info!(
+        "Google OAuth token verified successfully for email: {}",
+        payload.email
+    );
     Ok(payload)
 }

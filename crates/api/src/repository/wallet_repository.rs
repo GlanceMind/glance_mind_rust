@@ -77,6 +77,18 @@ impl WalletRepository {
         Ok((items, total))
     }
 
+    /// Get a single transaction by ID (for authorization checks)
+    pub async fn get_transaction_by_id(
+        &self,
+        transaction_id: i32,
+    ) -> Result<WalletTransaction, DieselError> {
+        let mut conn = self.pool.get().expect("Connection error");
+        wallet_transactions::table
+            .find(transaction_id)
+            .select(WalletTransaction::as_select())
+            .first(&mut conn)
+    }
+
     pub async fn create_transaction(
         &self,
         transaction: NewWalletTransaction,
