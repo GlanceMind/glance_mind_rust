@@ -45,7 +45,7 @@ impl AipubService {
         // Validate plan_type
         if PlanType::parse(&plan_type).is_none() {
             return Err(ApiError::BusinessError(BusinessError::InvalidInput(
-                format!("Invalid plan_type: {}. Must be 'batch_text', 'single_video', or 'account_grooming'", plan_type),
+                format!("Invalid plan_type: {}. Supported: batch_text, single_video, account_grooming, reddit_text, reddit_image, reddit_link", plan_type),
             )));
         }
 
@@ -96,7 +96,60 @@ impl AipubService {
                     )));
                 }
             }
-            None => {}
+            Some(pt) if pt.is_reddit() => {
+                // All Reddit types require group_id (batch posting to multiple accounts)
+                if dto.group_id.is_none() {
+                    return Err(ApiError::BusinessError(BusinessError::InvalidInput(
+                        format!("{} plan requires group_id", plan_type),
+                    )));
+                }
+                // Validate reddit_config in ai_input
+                if let Some(ref ai_input) = dto.ai_input {
+                    let reddit_config = &ai_input["reddit_config"];
+                    if reddit_config.is_null() {
+                        return Err(ApiError::BusinessError(BusinessError::InvalidInput(
+                            format!("{} plan requires ai_input.reddit_config", plan_type),
+                        )));
+                    }
+                    // subreddit is required for all Reddit types
+                    if reddit_config["subreddit"].as_str().unwrap_or("").is_empty() {
+                        return Err(ApiError::BusinessError(BusinessError::InvalidInput(
+                            "Reddit plan requires reddit_config.subreddit".to_string(),
+                        )));
+                    }
+                    // reddit_link requires link_url
+                    if pt == PlanType::RedditLink {
+                        if reddit_config["link_url"].as_str().unwrap_or("").is_empty() {
+                            return Err(ApiError::BusinessError(BusinessError::InvalidInput(
+                                "reddit_link plan requires reddit_config.link_url".to_string(),
+                            )));
+                        }
+                    }
+                    // reddit_image requires either image_prompt (AI gen) or uploaded_image_urls
+                    if pt == PlanType::RedditImage {
+                        let has_image_prompt = reddit_config["image_prompt"].as_str().map_or(false, |s| !s.is_empty());
+                        let has_uploaded = reddit_config["uploaded_image_urls"].as_array().map_or(false, |a| !a.is_empty());
+                        if !has_image_prompt && !has_uploaded {
+                            return Err(ApiError::BusinessError(BusinessError::InvalidInput(
+                                "reddit_image plan requires reddit_config.image_prompt or reddit_config.uploaded_image_urls".to_string(),
+                            )));
+                        }
+                    }
+                } else {
+                    return Err(ApiError::BusinessError(BusinessError::InvalidInput(
+                        format!("{} plan requires ai_input with reddit_config", plan_type),
+                    )));
+                }
+                // content_prompt is required for all Reddit types
+                if let Some(ref ai_input) = dto.ai_input {
+                    if ai_input["content_prompt"].as_str().unwrap_or("").is_empty() {
+                        return Err(ApiError::BusinessError(BusinessError::InvalidInput(
+                            "Reddit plan requires ai_input.content_prompt".to_string(),
+                        )));
+                    }
+                }
+            }
+            _ => {}
         }
 
         // Determine initial status based on whether AI tasks are needed
@@ -114,6 +167,23 @@ impl AipubService {
                 Some(PlanType::BatchText) => Some(vec![AiTaskType::ContentGen.as_str().to_string()]),
                 Some(PlanType::SingleVideo) => Some(vec![AiTaskType::ContentGen.as_str().to_string(), AiTaskType::VideoGen.as_str().to_string()]),
                 Some(PlanType::AccountGrooming) => Some(vec![AiTaskType::AccountGrooming.as_str().to_string()]),
+                Some(PlanType::RedditText) | Some(PlanType::RedditLink) => {
+                    Some(vec![AiTaskType::ContentGen.as_str().to_string()])
+                }
+                Some(PlanType::RedditImage) => {
+                    // If image_prompt is provided, need image_gen; otherwise just content_gen
+                    let has_ai_image = dto.ai_input.as_ref()
+                        .and_then(|ai| ai["reddit_config"]["image_prompt"].as_str())
+                        .map_or(false, |s| !s.is_empty());
+                    if has_ai_image {
+                        Some(vec![
+                            AiTaskType::ContentGen.as_str().to_string(),
+                            AiTaskType::ImageGen.as_str().to_string(),
+                        ])
+                    } else {
+                        Some(vec![AiTaskType::ContentGen.as_str().to_string()])
+                    }
+                }
                 None => None,
             }
         });
@@ -219,6 +289,33 @@ impl AipubService {
                         plan.chat_ai_model_id, None, plan.video_ai_model_id,
                         "aipub_plan", plan.id,
                     ).await)
+                }
+                Some(PlanType::RedditText) | Some(PlanType::RedditLink) => {
+                    // 1 chat call generates N variations (one per account)
+                    Some(self.repo.freeze_budget(
+                        user_id, 1, 0, 0,
+                        plan.chat_ai_model_id, None, None,
+                        "aipub_plan", plan.id,
+                    ).await)
+                }
+                Some(PlanType::RedditImage) => {
+                    // 1 chat + N images (one per account, if AI-generated)
+                    let account_ids = self.repo.get_group_account_ids(plan.group_id.unwrap_or(0)).await
+                        .unwrap_or_default();
+                    let n = account_ids.len() as i32;
+                    let has_ai_image = plan.ai_input.as_ref()
+                        .and_then(|ai| ai["reddit_config"]["image_prompt"].as_str())
+                        .map_or(false, |s| !s.is_empty());
+                    let image_count = if has_ai_image { n } else { 0 };
+                    if n > 0 {
+                        Some(self.repo.freeze_budget(
+                            user_id, 1, image_count, 0,
+                            plan.chat_ai_model_id, plan.image_ai_model_id, None,
+                            "aipub_plan", plan.id,
+                        ).await)
+                    } else {
+                        None
+                    }
                 }
                 None => None,
             };

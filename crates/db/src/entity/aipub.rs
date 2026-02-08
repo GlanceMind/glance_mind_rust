@@ -119,7 +119,7 @@ impl std::fmt::Display for PlanStatus {
     }
 }
 
-/// Plan Type enum - distinguishes between batch text and single video plans
+/// Plan Type enum - determines processing strategy and platform-specific behavior
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
@@ -131,6 +131,12 @@ pub enum PlanType {
     SingleVideo,
     /// Account grooming: generate profile names + avatars for a group
     AccountGrooming,
+    /// Reddit text post (title + body)
+    RedditText,
+    /// Reddit image post (title + body + AI-generated or uploaded images)
+    RedditImage,
+    /// Reddit link post (title + link URL + optional body)
+    RedditLink,
 }
 
 impl PlanType {
@@ -139,6 +145,9 @@ impl PlanType {
             PlanType::BatchText => "batch_text",
             PlanType::SingleVideo => "single_video",
             PlanType::AccountGrooming => "account_grooming",
+            PlanType::RedditText => "reddit_text",
+            PlanType::RedditImage => "reddit_image",
+            PlanType::RedditLink => "reddit_link",
         }
     }
 
@@ -147,6 +156,9 @@ impl PlanType {
             "batch_text" => Some(PlanType::BatchText),
             "single_video" => Some(PlanType::SingleVideo),
             "account_grooming" => Some(PlanType::AccountGrooming),
+            "reddit_text" => Some(PlanType::RedditText),
+            "reddit_image" => Some(PlanType::RedditImage),
+            "reddit_link" => Some(PlanType::RedditLink),
             _ => None,
         }
     }
@@ -158,7 +170,22 @@ impl PlanType {
 
     /// Returns true if this plan type targets a group (multiple accounts)
     pub fn targets_group(&self) -> bool {
-        matches!(self, PlanType::BatchText | PlanType::AccountGrooming)
+        matches!(
+            self,
+            PlanType::BatchText
+                | PlanType::AccountGrooming
+                | PlanType::RedditText
+                | PlanType::RedditImage
+                | PlanType::RedditLink
+        )
+    }
+
+    /// Returns true if this is a Reddit plan type
+    pub fn is_reddit(&self) -> bool {
+        matches!(
+            self,
+            PlanType::RedditText | PlanType::RedditImage | PlanType::RedditLink
+        )
     }
 }
 
@@ -346,8 +373,9 @@ pub struct UpdateAipubTask {
 }
 
 /// Publish Task Status enum
-/// DB CHECK: ('pending','video_pending','video_processing','ready',
-///            'processing','completed','failed')
+/// DB CHECK: ('pending','video_pending','video_processing',
+///            'media_pending','media_processing',
+///            'ready','processing','completed','failed')
 /// Source of truth: aipub.proto PublishTaskStatus
 /// Includes historical video-pipeline states for backward compatibility.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -358,6 +386,10 @@ pub enum PublishTaskStatus {
     VideoPending,
     /// Historical: video being generated
     VideoProcessing,
+    /// Generic: waiting for any media generation (image/video/etc.)
+    MediaPending,
+    /// Generic: media being generated
+    MediaProcessing,
     /// Ready for executor to pick up
     Ready,
     /// Executor is processing
@@ -373,6 +405,8 @@ impl PublishTaskStatus {
             PublishTaskStatus::Pending => "pending",
             PublishTaskStatus::VideoPending => "video_pending",
             PublishTaskStatus::VideoProcessing => "video_processing",
+            PublishTaskStatus::MediaPending => "media_pending",
+            PublishTaskStatus::MediaProcessing => "media_processing",
             PublishTaskStatus::Ready => "ready",
             PublishTaskStatus::Processing => "processing",
             PublishTaskStatus::Completed => "completed",
@@ -385,6 +419,8 @@ impl PublishTaskStatus {
             "pending" => Some(PublishTaskStatus::Pending),
             "video_pending" => Some(PublishTaskStatus::VideoPending),
             "video_processing" => Some(PublishTaskStatus::VideoProcessing),
+            "media_pending" => Some(PublishTaskStatus::MediaPending),
+            "media_processing" => Some(PublishTaskStatus::MediaProcessing),
             "ready" => Some(PublishTaskStatus::Ready),
             "processing" => Some(PublishTaskStatus::Processing),
             "completed" => Some(PublishTaskStatus::Completed),
