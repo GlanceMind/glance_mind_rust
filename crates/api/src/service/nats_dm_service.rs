@@ -4,8 +4,23 @@ use async_nats::jetstream::{self, kv, stream};
 use async_nats::Client as NatsClient;
 use chrono::Utc;
 use futures::StreamExt;
+use serde::Serialize;
 use std::collections::HashMap;
 use uuid::Uuid;
+
+/// Command payload published to `dm.cmd.{device_id}` for executor consumption.
+#[derive(Debug, Serialize)]
+struct DmReplyCommand<'a> {
+    cmd_id: String,
+    conv_id: &'a str,
+    social_account_id: i32,
+    platform_id: i32,
+    profile_name: &'a str,
+    remote_username: &'a str,
+    content: &'a str,
+    content_type: &'a str,
+    timestamp: String,
+}
 
 /// NATS JetStream DM Service
 ///
@@ -14,6 +29,7 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct NatsDmService {
     js: jetstream::Context,
+    /// Retained to keep the NATS connection alive; `js` borrows it internally.
     #[allow(dead_code)]
     client: NatsClient,
 }
@@ -66,27 +82,25 @@ impl NatsDmService {
             .await
             .map_err(|e| ApiError::InternalServerError(format!("DM_EVENTS init: {e}")))?;
 
-        // dm_conversations KV bucket
-        let _ = self.js.create_key_value(kv::Config {
-            bucket: "dm_conversations".to_string(),
-            storage: stream::StorageType::File,
-            ..Default::default()
-        }).await; // ignore AlreadyExists error
-
-        // dm_device_heartbeat KV bucket with TTL
-        let _ = self.js.create_key_value(kv::Config {
-            bucket: "dm_device_heartbeat".to_string(),
-            storage: stream::StorageType::Memory,
-            max_age: std::time::Duration::from_secs(120),
-            ..Default::default()
-        }).await;
-
-        // dm_monitor_config KV bucket (executor uploads config snapshots)
-        let _ = self.js.create_key_value(kv::Config {
-            bucket: "dm_monitor_config".to_string(),
-            storage: stream::StorageType::File,
-            ..Default::default()
-        }).await;
+        // KV buckets (ignore AlreadyExists, log other errors)
+        for (bucket, storage, max_age) in [
+            ("dm_conversations", stream::StorageType::File, None),
+            ("dm_device_heartbeat", stream::StorageType::Memory, Some(std::time::Duration::from_secs(120))),
+            ("dm_monitor_config", stream::StorageType::File, None),
+        ] {
+            let cfg = kv::Config {
+                bucket: bucket.to_string(),
+                storage,
+                max_age: max_age.unwrap_or_default(),
+                ..Default::default()
+            };
+            if let Err(e) = self.js.create_key_value(cfg).await {
+                let msg = e.to_string();
+                if !msg.contains("already") {
+                    tracing::warn!("KV bucket {bucket} create: {e}");
+                }
+            }
+        }
 
         tracing::info!("NATS DM infrastructure initialized (3 streams + 3 KV buckets)");
         Ok(())
@@ -301,21 +315,24 @@ impl NatsDmService {
         content_type: &str,
     ) -> Result<DmReplyResponse, ApiError> {
         let cmd_id = Uuid::new_v4().to_string();
-        let cmd = serde_json::json!({
-            "cmd_id": cmd_id,
-            "conv_id": conv_id,
-            "social_account_id": social_account_id,
-            "platform_id": platform_id,
-            "profile_name": profile_name,
-            "remote_username": remote_username,
-            "content": content,
-            "content_type": content_type,
-            "timestamp": Utc::now().to_rfc3339(),
-        });
+        let cmd = DmReplyCommand {
+            cmd_id: cmd_id.clone(),
+            conv_id,
+            social_account_id,
+            platform_id,
+            profile_name,
+            remote_username,
+            content,
+            content_type,
+            timestamp: Utc::now().to_rfc3339(),
+        };
+
+        let payload = serde_json::to_vec(&cmd)
+            .map_err(|e| ApiError::InternalServerError(format!("Serialize cmd: {e}")))?;
 
         let subject = format!("dm.cmd.{device_id}");
         self.js
-            .publish(subject, serde_json::to_vec(&cmd).unwrap().into())
+            .publish(subject, payload.into())
             .await
             .map_err(|e| ApiError::InternalServerError(format!("Publish cmd: {e}")))?
             .await
@@ -420,7 +437,11 @@ impl NatsDmService {
         &self,
         _user_id: i32,
     ) -> Result<DmNatsTokenResponse, ApiError> {
-        let token = std::env::var("NATS_TOKEN").unwrap_or_default();
+        // TODO: implement per-user NATS JWT for fine-grained access control.
+        // Currently returns the shared server token. Each user gets identical access.
+        let token = std::env::var("NATS_TOKEN").map_err(|_| {
+            ApiError::InternalServerError("NATS_TOKEN not configured".into())
+        })?;
         let expires_at = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
         Ok(DmNatsTokenResponse { token, expires_at })
     }

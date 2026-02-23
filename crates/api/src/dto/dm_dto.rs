@@ -1,9 +1,14 @@
+use crate::error::api_error::ApiError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 // ============================================================
 // Shared DM types (matching NATS data and frontend types)
 // ============================================================
+
+const MAX_REPLY_CONTENT_LEN: usize = 5000;
+const VALID_REPLY_MODES: &[&str] = &["manual", "auto"];
+const VALID_CONV_STATUSES: &[&str] = &["active", "muted", "archived"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DmMessageDto {
@@ -103,6 +108,21 @@ pub struct DmReplyRequest {
     pub content_type: String,
 }
 
+impl DmReplyRequest {
+    pub fn validate(&self) -> Result<(), ApiError> {
+        let trimmed = self.content.trim();
+        if trimmed.is_empty() {
+            return Err(ApiError::BadRequest("Reply content must not be empty".into()));
+        }
+        if trimmed.len() > MAX_REPLY_CONTENT_LEN {
+            return Err(ApiError::BadRequest(
+                format!("Reply content exceeds {MAX_REPLY_CONTENT_LEN} characters"),
+            ));
+        }
+        Ok(())
+    }
+}
+
 fn default_content_type() -> String {
     "text".to_string()
 }
@@ -119,6 +139,26 @@ fn default_manual() -> String {
 pub struct DmSettingsRequest {
     pub reply_mode: Option<String>,
     pub status: Option<String>,
+}
+
+impl DmSettingsRequest {
+    pub fn validate(&self) -> Result<(), ApiError> {
+        if let Some(ref mode) = self.reply_mode {
+            if !VALID_REPLY_MODES.contains(&mode.as_str()) {
+                return Err(ApiError::BadRequest(
+                    format!("Invalid reply_mode '{mode}', must be one of: {}", VALID_REPLY_MODES.join(", ")),
+                ));
+            }
+        }
+        if let Some(ref status) = self.status {
+            if !VALID_CONV_STATUSES.contains(&status.as_str()) {
+                return Err(ApiError::BadRequest(
+                    format!("Invalid status '{status}', must be one of: {}", VALID_CONV_STATUSES.join(", ")),
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 // ============================================================
@@ -168,7 +208,7 @@ pub struct DmPlatformStats {
 // Monitor Config (stored in NATS KV dm_monitor_config)
 // ============================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DmMonitorConfigDto {
     #[serde(default)]
     pub device_id: String,
@@ -184,6 +224,20 @@ pub struct DmMonitorConfigDto {
     pub platforms: Vec<String>,
     #[serde(default)]
     pub updated_at: String,
+}
+
+impl Default for DmMonitorConfigDto {
+    fn default() -> Self {
+        Self {
+            device_id: String::new(),
+            enabled: false,
+            poll_interval_seconds: default_poll_interval(),
+            max_concurrent_monitors: default_max_concurrent(),
+            inbox_linger_seconds: default_inbox_linger(),
+            platforms: Vec::new(),
+            updated_at: String::new(),
+        }
+    }
 }
 
 fn default_poll_interval() -> i32 {

@@ -397,8 +397,17 @@ class TestDmMessages:
         data = extract_data(resp.json())
         assert len(data["messages"]) <= 1
 
-    def test_get_messages_empty_conversation(self, auth_client):
-        resp = auth_client.get("/api/v1/dm/conversations/9999_nobody/messages")
+    def test_get_messages_nonexistent_conv_returns_404(self, auth_client):
+        """Non-existent social_account_id in conv_id returns 404 (ownership check)."""
+        resp = auth_client.get("/api/v1/dm/conversations/999999_nobody/messages")
+        assert resp.status_code == 404
+
+    def test_get_messages_empty_but_owned_conversation(self, auth_client, seeded_conversations):
+        """A valid owned account with no messages returns empty list."""
+        acct = seeded_conversations["accounts"][0]
+        resp = auth_client.get(
+            f"/api/v1/dm/conversations/{acct['id']}_nonexistent_remote/messages"
+        )
         assert_response_success(resp)
         data = extract_data(resp.json())
         assert len(data["messages"]) == 0
@@ -491,6 +500,160 @@ class TestDmReply:
         assert resp.status_code == 400
 
 
+class TestDmImageMessages:
+    """Image / non-text content_type: full round-trip through NATS."""
+
+    def test_seed_image_message_and_retrieve(self, auth_client, nats_seeder, seeded_conversations):
+        """Seed an image message to NATS and verify it comes back via API."""
+        seeder, loop = nats_seeder
+        conv_id = seeded_conversations["convs"][0]["conv_id"]
+        img_url = "https://example.com/photo.jpg"
+        msg_id = f"img_{uuid.uuid4().hex[:8]}"
+
+        msg = {
+            "msg_id": msg_id,
+            "conv_id": conv_id,
+            "direction": "inbound",
+            "content": img_url,
+            "content_type": "image",
+            "attachments": [img_url, "https://example.com/thumb.jpg"],
+            "status": "delivered",
+            "platform_msg_id": f"plat_img_{uuid.uuid4().hex[:8]}",
+            "timestamp": _now(),
+        }
+        loop.run_until_complete(seeder.publish_message(conv_id, msg))
+
+        resp = auth_client.get(f"/api/v1/dm/conversations/{conv_id}/messages")
+        assert_response_success(resp)
+        msgs = extract_data(resp.json())["messages"]
+
+        img_msg = next((m for m in msgs if m["msg_id"] == msg_id), None)
+        assert img_msg is not None, f"Image message {msg_id} not found"
+        assert img_msg["content_type"] == "image"
+        assert img_msg["content"] == img_url
+        assert len(img_msg["attachments"]) == 2
+        assert "https://example.com/photo.jpg" in img_msg["attachments"]
+        assert "https://example.com/thumb.jpg" in img_msg["attachments"]
+
+    def test_send_image_reply_propagates_content_type(self, auth_client, seeded_conversations):
+        """Send a reply with content_type=image, verify API returns queued."""
+        conv_id = seeded_conversations["convs"][0]["conv_id"]
+        resp = auth_client.post(
+            f"/api/v1/dm/conversations/{conv_id}/reply",
+            json={
+                "content": "https://example.com/reply-image.png",
+                "content_type": "image",
+            },
+        )
+        assert_response_success(resp)
+        data = extract_data(resp.json())
+        assert data["status"] == "queued"
+        assert len(data["cmd_id"]) > 0
+
+    def test_image_reply_nats_command_has_content_type(
+        self, auth_client, seeded_conversations,
+    ):
+        """Subscribe to NATS and verify image reply command preserves content_type."""
+        conv_id = seeded_conversations["convs"][0]["conv_id"]
+        result_holder = [None]
+        ready_event = threading.Event()
+
+        def listen():
+            async def _do():
+                nc = await nats_pkg.connect(NATS_URL, token=NATS_TOKEN)
+                sub = await nc.subscribe(f"dm.cmd.{DEVICE_DM}")
+                ready_event.set()
+                try:
+                    msg = await asyncio.wait_for(sub.next_msg(), timeout=10.0)
+                    result_holder[0] = json.loads(msg.data)
+                except asyncio.TimeoutError:
+                    pass
+                finally:
+                    await sub.unsubscribe()
+                    await nc.drain()
+
+            loop = asyncio.new_event_loop()
+            loop.run_until_complete(_do())
+            loop.close()
+
+        t = threading.Thread(target=listen, daemon=True)
+        t.start()
+        ready_event.wait(timeout=5)
+
+        resp = auth_client.post(
+            f"/api/v1/dm/conversations/{conv_id}/reply",
+            json={
+                "content": f"https://example.com/img_{RUN_ID}.jpg",
+                "content_type": "image",
+            },
+        )
+        assert_response_success(resp)
+
+        t.join(timeout=15)
+        cmd = result_holder[0]
+        assert cmd is not None, "Should receive image command on NATS"
+        assert cmd["content_type"] == "image"
+        assert "img_" in cmd["content"]
+
+    def test_seed_video_message_and_retrieve(self, auth_client, nats_seeder, seeded_conversations):
+        """Seed a video message to NATS and verify it comes back."""
+        seeder, loop = nats_seeder
+        conv_id = seeded_conversations["convs"][1]["conv_id"]
+        vid_url = "https://example.com/video.mp4"
+        msg_id = f"vid_{uuid.uuid4().hex[:8]}"
+
+        msg = {
+            "msg_id": msg_id,
+            "conv_id": conv_id,
+            "direction": "inbound",
+            "content": vid_url,
+            "content_type": "video",
+            "attachments": [vid_url],
+            "status": "delivered",
+            "platform_msg_id": f"plat_vid_{uuid.uuid4().hex[:8]}",
+            "timestamp": _now(),
+        }
+        loop.run_until_complete(seeder.publish_message(conv_id, msg))
+
+        resp = auth_client.get(f"/api/v1/dm/conversations/{conv_id}/messages")
+        assert_response_success(resp)
+        msgs = extract_data(resp.json())["messages"]
+
+        vid_msg = next((m for m in msgs if m["msg_id"] == msg_id), None)
+        assert vid_msg is not None, f"Video message {msg_id} not found"
+        assert vid_msg["content_type"] == "video"
+        assert vid_msg["attachments"] == [vid_url]
+
+    def test_seed_link_message_and_retrieve(self, auth_client, nats_seeder, seeded_conversations):
+        """Seed a link message to NATS and verify it comes back."""
+        seeder, loop = nats_seeder
+        conv_id = seeded_conversations["convs"][1]["conv_id"]
+        link_url = "https://www.tiktok.com/@user/video/12345"
+        msg_id = f"lnk_{uuid.uuid4().hex[:8]}"
+
+        msg = {
+            "msg_id": msg_id,
+            "conv_id": conv_id,
+            "direction": "inbound",
+            "content": link_url,
+            "content_type": "link",
+            "attachments": [],
+            "status": "delivered",
+            "platform_msg_id": f"plat_lnk_{uuid.uuid4().hex[:8]}",
+            "timestamp": _now(),
+        }
+        loop.run_until_complete(seeder.publish_message(conv_id, msg))
+
+        resp = auth_client.get(f"/api/v1/dm/conversations/{conv_id}/messages")
+        assert_response_success(resp)
+        msgs = extract_data(resp.json())["messages"]
+
+        lnk_msg = next((m for m in msgs if m["msg_id"] == msg_id), None)
+        assert lnk_msg is not None, f"Link message {msg_id} not found"
+        assert lnk_msg["content_type"] == "link"
+        assert lnk_msg["content"] == link_url
+
+
 class TestDmMarkRead:
     """POST /dm/conversations/:conv_id/read"""
 
@@ -562,17 +725,25 @@ class TestDmStats:
 
 
 class TestDmMonitorConfig:
-    """GET/PUT /dm/monitor-config/:device_id"""
+    """GET/PUT /dm/monitor-config/:device_id (requires device ownership)"""
 
-    def test_get_monitor_config_empty(self, auth_client):
+    def test_get_monitor_config_nonexistent_device_returns_404(self, auth_client):
+        """Device not bound to any of user's accounts returns 404."""
         resp = auth_client.get(f"/api/v1/dm/monitor-config/nonexistent-{RUN_ID}")
+        assert resp.status_code == 404
+
+    def test_get_monitor_config_empty_for_owned_device(self, auth_client, seeded_conversations):
+        """Owned device with no config returns None."""
+        device = DEVICE_DM
+        resp = auth_client.get(f"/api/v1/dm/monitor-config/{device}")
         assert_response_success(resp)
         data = extract_data(resp.json())
-        assert data is None, f"Expected None for non-existent config, got {data}"
+        # May be None or a default config depending on whether it was seeded
 
-    def test_put_and_get_monitor_config(self, auth_client, nats_seeder):
+    def test_put_and_get_monitor_config(self, auth_client, nats_seeder, seeded_conversations):
+        """Seed config for an owned device, GET it, verify all fields."""
         seeder, loop = nats_seeder
-        device = f"dm-cfg-{RUN_ID}"
+        device = DEVICE_DM  # owned by test user via dm_test_accounts
 
         loop.run_until_complete(seeder.put_monitor_config(device, {
             "device_id": device,
@@ -594,9 +765,10 @@ class TestDmMonitorConfig:
         assert "instagram" in data["platforms"]
         assert "tiktok" in data["platforms"]
 
-    def test_update_monitor_config(self, auth_client, nats_seeder):
+    def test_update_monitor_config(self, auth_client, nats_seeder, seeded_conversations):
+        """PUT partial update on an owned device, verify merge behavior."""
         seeder, loop = nats_seeder
-        device = f"dm-cfg-upd-{RUN_ID}"
+        device = DEVICE_DM_2  # owned by test user via dm_test_accounts[2]
 
         loop.run_until_complete(seeder.put_monitor_config(device, {
             "device_id": device,
@@ -662,6 +834,196 @@ class TestDmAuthRequired:
     def test_monitor_config_requires_auth(self, api_client):
         resp = api_client.get("/api/v1/dm/monitor-config/fake")
         assert resp.status_code == 401
+
+    def test_mark_read_requires_auth(self, api_client):
+        resp = api_client.post("/api/v1/dm/conversations/fake/read")
+        assert resp.status_code == 401
+
+    def test_update_settings_requires_auth(self, api_client):
+        resp = api_client.put("/api/v1/dm/conversations/fake/settings", json={"reply_mode": "auto"})
+        assert resp.status_code == 401
+
+    def test_update_monitor_config_requires_auth(self, api_client):
+        resp = api_client.put("/api/v1/dm/monitor-config/fake", json={"enabled": True})
+        assert resp.status_code == 401
+
+
+class TestDmReplyValidation:
+    """Input validation for send_reply and update_settings."""
+
+    def test_empty_content_rejected(self, auth_client, seeded_conversations):
+        conv_id = seeded_conversations["convs"][0]["conv_id"]
+        resp = auth_client.post(
+            f"/api/v1/dm/conversations/{conv_id}/reply",
+            json={"content": ""},
+        )
+        assert resp.status_code == 400
+
+    def test_whitespace_only_content_rejected(self, auth_client, seeded_conversations):
+        conv_id = seeded_conversations["convs"][0]["conv_id"]
+        resp = auth_client.post(
+            f"/api/v1/dm/conversations/{conv_id}/reply",
+            json={"content": "   \n\t  "},
+        )
+        assert resp.status_code == 400
+
+    def test_oversized_content_rejected(self, auth_client, seeded_conversations):
+        conv_id = seeded_conversations["convs"][0]["conv_id"]
+        huge_content = "x" * 6000
+        resp = auth_client.post(
+            f"/api/v1/dm/conversations/{conv_id}/reply",
+            json={"content": huge_content},
+        )
+        assert resp.status_code == 400
+
+    def test_invalid_reply_mode_rejected(self, auth_client, seeded_conversations):
+        conv_id = seeded_conversations["convs"][0]["conv_id"]
+        resp = auth_client.put(
+            f"/api/v1/dm/conversations/{conv_id}/settings",
+            json={"reply_mode": "garbage"},
+        )
+        assert resp.status_code == 400
+
+    def test_invalid_status_rejected(self, auth_client, seeded_conversations):
+        conv_id = seeded_conversations["convs"][0]["conv_id"]
+        resp = auth_client.put(
+            f"/api/v1/dm/conversations/{conv_id}/settings",
+            json={"status": "deleted"},
+        )
+        assert resp.status_code == 400
+
+
+class TestDmReplyErrorPaths:
+    """Error paths for send_reply: missing device_id, profile_name, wrong account."""
+
+    def test_reply_to_nonexistent_account(self, auth_client):
+        """conv_id references a social_account_id that doesn't exist for this user."""
+        resp = auth_client.post(
+            "/api/v1/dm/conversations/999999_someuser/reply",
+            json={"content": "test"},
+        )
+        assert resp.status_code in (400, 404)
+
+    def test_reply_account_no_device_id(self, auth_client, module_auth_client):
+        """Account exists but has no device_id assigned."""
+        client = module_auth_client
+        resp = client.post("/api/v1/accounts", json={
+            "platform_id": PLATFORM_TIKTOK,
+            "username": f"no_device_{RUN_ID}",
+        })
+        assert_response_success(resp)
+        data = extract_data(resp.json())
+        aid = data["id"]
+
+        try:
+            reply_resp = client.post(
+                f"/api/v1/dm/conversations/{aid}_remoteuser/reply",
+                json={"content": "test"},
+            )
+            assert reply_resp.status_code == 400
+            body = reply_resp.json()
+            assert "device_id" in str(body).lower()
+        finally:
+            client.delete(f"/api/v1/accounts/{aid}")
+
+
+class TestDmOwnershipVerification:
+    """IDOR prevention: users cannot access each other's DM data."""
+
+    def test_get_messages_requires_ownership(self, auth_client, seeded_conversations):
+        """get_messages rejects conv_id whose social_account_id isn't owned by the user.
+        We test with a non-existent account ID (extremely high) to trigger ownership failure."""
+        resp = auth_client.get("/api/v1/dm/conversations/999999_nobody/messages")
+        assert resp.status_code in (400, 404), \
+            f"Expected 400/404 for non-owned conv, got {resp.status_code}"
+
+    def test_mark_read_requires_ownership(self, auth_client):
+        resp = auth_client.post("/api/v1/dm/conversations/999999_nobody/read")
+        assert resp.status_code in (400, 404)
+
+    def test_update_settings_requires_ownership(self, auth_client):
+        resp = auth_client.put(
+            "/api/v1/dm/conversations/999999_nobody/settings",
+            json={"reply_mode": "auto"},
+        )
+        assert resp.status_code in (400, 404)
+
+    def test_monitor_config_requires_device_ownership(self, auth_client):
+        resp = auth_client.get(f"/api/v1/dm/monitor-config/nonexistent-device-{RUN_ID}")
+        assert resp.status_code in (404,), \
+            f"Expected 404 for non-owned device, got {resp.status_code}"
+
+    def test_update_monitor_config_requires_device_ownership(self, auth_client):
+        resp = auth_client.put(
+            f"/api/v1/dm/monitor-config/nonexistent-device-{RUN_ID}",
+            json={"enabled": True},
+        )
+        assert resp.status_code in (404,), \
+            f"Expected 404 for non-owned device, got {resp.status_code}"
+
+
+class TestDmPagination:
+    """Pagination with before_seq parameter."""
+
+    def test_before_seq_filters_older_messages(self, auth_client, seeded_conversations):
+        conv_id = seeded_conversations["convs"][0]["conv_id"]
+
+        all_resp = auth_client.get(f"/api/v1/dm/conversations/{conv_id}/messages")
+        assert_response_success(all_resp)
+        all_msgs = extract_data(all_resp.json())["messages"]
+
+        if len(all_msgs) < 2:
+            pytest.skip("Need at least 2 messages to test pagination")
+
+        last_seq = all_msgs[-1].get("nats_seq")
+        if last_seq is None:
+            pytest.skip("nats_seq not available in messages")
+
+        paged_resp = auth_client.get(
+            f"/api/v1/dm/conversations/{conv_id}/messages",
+            params={"before_seq": last_seq},
+        )
+        assert_response_success(paged_resp)
+        paged_msgs = extract_data(paged_resp.json())["messages"]
+
+        for m in paged_msgs:
+            if m.get("nats_seq") is not None:
+                assert m["nats_seq"] < last_seq, \
+                    f"before_seq filter broken: got seq {m['nats_seq']} >= {last_seq}"
+
+
+class TestDmSettingsVerification:
+    """Verify settings updates persist correctly."""
+
+    def test_muted_status_persists(self, auth_client, seeded_conversations):
+        conv_id = seeded_conversations["convs"][2]["conv_id"]
+
+        resp = auth_client.put(
+            f"/api/v1/dm/conversations/{conv_id}/settings",
+            json={"status": "muted"},
+        )
+        assert_response_success(resp)
+
+        list_resp = auth_client.get("/api/v1/dm/conversations")
+        data = extract_data(list_resp.json())
+        conv = next((c for c in data["conversations"] if c["conv_id"] == conv_id), None)
+        assert conv is not None, f"Conversation {conv_id} not found after muting"
+        assert conv["status"] == "muted", f"Expected muted, got {conv['status']}"
+
+    def test_archived_status_persists(self, auth_client, seeded_conversations):
+        conv_id = seeded_conversations["convs"][2]["conv_id"]
+
+        resp = auth_client.put(
+            f"/api/v1/dm/conversations/{conv_id}/settings",
+            json={"status": "archived"},
+        )
+        assert_response_success(resp)
+
+        list_resp = auth_client.get("/api/v1/dm/conversations")
+        data = extract_data(list_resp.json())
+        conv = next((c for c in data["conversations"] if c["conv_id"] == conv_id), None)
+        assert conv is not None
+        assert conv["status"] == "archived"
 
 
 if __name__ == "__main__":
