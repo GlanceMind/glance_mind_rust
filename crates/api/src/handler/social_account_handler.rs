@@ -14,7 +14,7 @@ use glance_mind_db::entity::user::User;
 pub async fn list_accounts(
     Extension(user): Extension<User>,
     Extension(state): Extension<UserState>,
-    Query(req): Query<crate::dto::common::PageRequest>,
+    Query(req): Query<crate::dto::social_account_dto::AccountListRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let response = state
         .social_account_service

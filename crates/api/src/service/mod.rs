@@ -23,3 +23,4 @@ pub mod user_service;
 pub mod video_case_service;
 pub mod video_service;
 pub(crate) mod wallet_service;
+pub mod nats_dm_service;

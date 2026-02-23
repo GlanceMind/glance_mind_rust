@@ -1,6 +1,33 @@
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 
+// Account List Request DTO (dedicated query params for account listing)
+#[derive(Debug, Deserialize)]
+pub struct AccountListRequest {
+    #[serde(default = "default_page")]
+    pub page: i64,
+    #[serde(default = "default_page_size")]
+    pub page_size: i64,
+    /// Optional group_id filter
+    pub group_id: Option<i32>,
+    /// Filter by username (partial match, case-insensitive)
+    pub username: Option<String>,
+    /// Filter by platform_id (exact match)
+    pub platform_id: Option<i32>,
+    /// Filter by status (exact match, e.g. ACTIVE, RISK_CONTROL, UNAVAILABLE)
+    pub status: Option<String>,
+    /// Filter by device_id / uuid (partial match, case-insensitive)
+    pub device_id: Option<String>,
+}
+
+fn default_page() -> i64 {
+    1
+}
+
+fn default_page_size() -> i64 {
+    10
+}
+
 // Social Group DTOs
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SocialGroupDto {

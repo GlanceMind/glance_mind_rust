@@ -23,3 +23,4 @@ pub(crate) mod user;
 pub mod video;
 pub mod video_case;
 pub(crate) mod wallet;
+pub mod dm;

@@ -17,6 +17,27 @@ services:
       timeout: 5s
       retries: 5
 
+  nats:
+    image: nats:2.10-alpine
+    container_name: glance-mind-nats
+    restart: always
+    command: -c /etc/nats/nats.conf
+    environment:
+      NATS_TOKEN: ${NATS_TOKEN:-glancemind-dev-token}
+    ports:
+      - "4222:4222"   # TCP  (API server connects via async-nats)
+      - "8080:8080"   # WebSocket (Frontend connects via nats.ws)
+      - "8222:8222"   # HTTP monitoring dashboard
+    volumes:
+      - nats_data:/data/nats
+      - ./nats.conf:/etc/nats/nats.conf:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
   backend:
     build:
       context: ../..
@@ -31,6 +52,9 @@ services:
       DATABASE_URL: postgres://aihub_user:aihub_password@db:5432/aihub_db
       PORT: 8000
       JWT_SECRET: your_jwt_secret_key
+      # NATS (DM Group Control)
+      NATS_URL: nats://nats:4222
+      NATS_TOKEN: ${NATS_TOKEN:-glancemind-dev-token}
       # LaoZhang API Configuration (required for video generation)
       LAOZHANG_BASE_URL: ${LAOZHANG_BASE_URL:-https://api.laozhang.ai}
       LAOZHANG_API_KEY: ${LAOZHANG_API_KEY}
@@ -39,8 +63,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      nats:
+        condition: service_healthy
 
 volumes:
   postgres_data:
     external: true
     name: glance_mind_api_postgres_data
+  nats_data:

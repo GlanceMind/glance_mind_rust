@@ -3,6 +3,8 @@ use crate::config::database::Database;
 use crate::middleware::auth as auth_middleware;
 use crate::middleware::charging;
 use crate::routes::{register, user};
+#[allow(unused_imports)]
+use crate::service::nats_dm_service::NatsDmService;
 use crate::state::auth_state::AuthState;
 // use crate::state::token_state::TokenState;
 use crate::state::user_state::UserState;
@@ -12,10 +14,15 @@ use std::sync::Arc;
 use tower::ServiceBuilder;
 use tower_http::trace::TraceLayer;
 
-pub fn routes(db_conn: Arc<Database>) -> Router {
+pub fn routes(db_conn: Arc<Database>, nats_dm_service: Option<NatsDmService>) -> Router {
     let merged_router = {
         let auth_state = AuthState::new(&db_conn);
-        let user_state = UserState::new(&db_conn);
+        let mut user_state = UserState::new(&db_conn);
+
+        // Inject NATS DM service if available
+        if let Some(svc) = nats_dm_service {
+            user_state.set_nats_dm_service(svc);
+        }
 
         // /api/v1
         Router::new()
@@ -305,6 +312,20 @@ pub fn routes(db_conn: Arc<Database>) -> Router {
             // AI Publish Public Routes (for Executor - no auth for now)
             .merge(
                 crate::routes::aipub::aipub_public_routes()
+                    .with_state(user_state.clone()),
+            )
+            // DM Group Control Routes (requires auth)
+            .nest(
+                "/dm",
+                crate::routes::dm::routes()
+                    .layer(
+                        ServiceBuilder::new()
+                            .layer(middleware::from_fn_with_state(
+                                user_state.clone(),
+                                auth_middleware::auth,
+                            ))
+                            .layer(axum::Extension(user_state.clone())),
+                    )
                     .with_state(user_state.clone()),
             )
             .merge(Router::new().route("/health", get(|| async { "Healthy..." })))

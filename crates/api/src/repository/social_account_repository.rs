@@ -23,45 +23,62 @@ impl SocialAccountRepository {
         page: i64,
         page_size: i64,
         group_id: Option<i32>,
+        username: Option<String>,
+        platform_id: Option<i32>,
+        status: Option<String>,
+        device_id: Option<String>,
     ) -> Result<(Vec<SocialAccount>, i64), DieselError> {
         let mut conn = self.pool.get().expect("Connection error");
 
-        // Build query with optional group_id filter
-        let total: i64 = if let Some(gid) = group_id {
-            social_accounts::table
-                .filter(social_accounts::user_id.eq(user_id))
-                .filter(social_accounts::group_id.eq(gid))
-                .filter(social_accounts::status.ne("DELETED"))
-                .count()
-                .get_result(&mut conn)?
-        } else {
-            social_accounts::table
-                .filter(social_accounts::user_id.eq(user_id))
-                .filter(social_accounts::status.ne("DELETED"))
-                .count()
-                .get_result(&mut conn)?
-        };
+        // Build base query with dynamic filters using into_boxed()
+        let mut count_query = social_accounts::table
+            .filter(social_accounts::user_id.eq(user_id))
+            .filter(social_accounts::status.ne("DELETED"))
+            .into_boxed();
 
-        let items = if let Some(gid) = group_id {
-            social_accounts::table
-                .filter(social_accounts::user_id.eq(user_id))
-                .filter(social_accounts::group_id.eq(gid))
-                .filter(social_accounts::status.ne("DELETED"))
-                .order(social_accounts::created_at.desc())
-                .limit(page_size)
-                .offset((page - 1) * page_size)
-                .select(SocialAccount::as_select())
-                .load(&mut conn)?
-        } else {
-            social_accounts::table
-                .filter(social_accounts::user_id.eq(user_id))
-                .filter(social_accounts::status.ne("DELETED"))
-                .order(social_accounts::created_at.desc())
-                .limit(page_size)
-                .offset((page - 1) * page_size)
-                .select(SocialAccount::as_select())
-                .load(&mut conn)?
-        };
+        let mut items_query = social_accounts::table
+            .filter(social_accounts::user_id.eq(user_id))
+            .filter(social_accounts::status.ne("DELETED"))
+            .into_boxed();
+
+        // Apply optional filters
+        if let Some(gid) = group_id {
+            count_query = count_query.filter(social_accounts::group_id.eq(gid));
+            items_query = items_query.filter(social_accounts::group_id.eq(gid));
+        }
+
+        if let Some(ref name) = username {
+            let pattern = format!("%{}%", name);
+            count_query = count_query.filter(social_accounts::username.ilike(pattern.clone()));
+            items_query = items_query.filter(social_accounts::username.ilike(pattern));
+        }
+
+        if let Some(pid) = platform_id {
+            count_query = count_query.filter(social_accounts::platform_id.eq(pid));
+            items_query = items_query.filter(social_accounts::platform_id.eq(pid));
+        }
+
+        if let Some(ref s) = status {
+            count_query = count_query.filter(social_accounts::status.eq(s.clone()));
+            items_query = items_query.filter(social_accounts::status.eq(s.clone()));
+        }
+
+        if let Some(ref did) = device_id {
+            let pattern = format!("%{}%", did);
+            count_query =
+                count_query.filter(social_accounts::device_id.ilike(pattern.clone()));
+            items_query =
+                items_query.filter(social_accounts::device_id.ilike(pattern));
+        }
+
+        let total: i64 = count_query.count().get_result(&mut conn)?;
+
+        let items = items_query
+            .order(social_accounts::created_at.desc())
+            .limit(page_size)
+            .offset((page - 1) * page_size)
+            .select(SocialAccount::as_select())
+            .load(&mut conn)?;
 
         Ok((items, total))
     }

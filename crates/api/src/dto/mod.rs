@@ -19,4 +19,5 @@ pub mod upload_task_dto;
 pub mod user_dto;
 pub mod video_case_dto;
 pub mod video_dto;
+pub mod dm_dto;
 pub(crate) mod wallet_dto;

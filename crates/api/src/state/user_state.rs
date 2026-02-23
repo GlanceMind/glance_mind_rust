@@ -25,6 +25,7 @@ use crate::service::upload_task_service::UploadTaskService;
 use crate::service::user_service::UserService;
 use crate::service::video_case_service::VideoCaseService;
 use crate::service::video_service::VideoService;
+use crate::service::nats_dm_service::NatsDmService;
 use crate::service::wallet_service::WalletService;
 use std::sync::Arc;
 
@@ -52,6 +53,8 @@ pub struct UserState {
     pub aipub_service: AipubService,
     pub material_service: MaterialService,
     pub charging_manager: ChargingManager,
+    /// NATS DM service (None if NATS is not configured)
+    pub nats_dm_service: Option<NatsDmService>,
 }
 
 impl UserState {
@@ -102,6 +105,12 @@ impl UserState {
                 VideoCaseService::new(db_conn.pool.clone()),
             ),
             charging_manager,
+            nats_dm_service: None, // Initialized async in lib.rs::run()
         }
+    }
+
+    /// Set the NATS DM service (called from lib.rs after async NATS connection).
+    pub fn set_nats_dm_service(&mut self, service: NatsDmService) {
+        self.nats_dm_service = Some(service);
     }
 }

@@ -24,3 +24,4 @@ pub mod user_handler;
 pub mod video_case_handler;
 pub mod video_handler;
 pub(crate) mod wallet_handler;
+pub mod dm_handler;

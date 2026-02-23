@@ -24,11 +24,20 @@ impl SocialAccountService {
     pub async fn list_accounts(
         &self,
         user_id: i32,
-        req: crate::dto::common::PageRequest,
+        req: crate::dto::social_account_dto::AccountListRequest,
     ) -> Result<crate::dto::common::PageResponse<SocialAccountDto>, ApiError> {
         let (accounts, total) = self
             .repo
-            .find_by_user(user_id, req.page, req.page_size, req.group_id)
+            .find_by_user(
+                user_id,
+                req.page,
+                req.page_size,
+                req.group_id,
+                req.username,
+                req.platform_id,
+                req.status,
+                req.device_id,
+            )
             .await
             .map_err(|_| ApiError::InternalServerError("Failed to list accounts".to_string()))?;
 
@@ -39,6 +48,23 @@ impl SocialAccountService {
             req.page,
             req.page_size,
         ))
+    }
+
+    /// Get a single social account by ID, verifying user ownership.
+    pub async fn get_account_by_id(
+        &self,
+        account_id: i32,
+        user_id: i32,
+    ) -> Result<SocialAccount, ApiError> {
+        let account = self
+            .repo
+            .find_by_id(account_id)
+            .await
+            .map_err(|_| ApiError::NotFound(format!("Social account {} not found", account_id)))?;
+        if account.user_id != user_id {
+            return Err(ApiError::Forbidden("Not your account".into()));
+        }
+        Ok(account)
     }
 
     pub async fn create_account(
