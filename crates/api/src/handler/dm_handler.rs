@@ -29,17 +29,27 @@ fn parse_conv_id(conv_id: &str) -> Result<(i32, &str), ApiError> {
     Ok((social_account_id, parts[1]))
 }
 
-/// Verify `conv_id` belongs to the authenticated user by checking account ownership.
+/// Verify `conv_id` belongs to the authenticated user.
+///
+/// For real social accounts (id >= 0): checks database ownership.
+/// For auto-generated accounts (id < 0): checks NATS KV existence under user prefix.
 async fn verify_conv_ownership(
     state: &UserState,
     conv_id: &str,
     user_id: i32,
 ) -> Result<i32, ApiError> {
     let (social_account_id, _) = parse_conv_id(conv_id)?;
-    state
-        .social_account_service
-        .get_account_by_id(social_account_id, user_id)
-        .await?;
+    if social_account_id < 0 {
+        // Auto-generated account (from executor): verify via NATS KV
+        let nats_dm = require_nats_dm(state)?;
+        nats_dm.verify_conv_exists(user_id, conv_id).await?;
+    } else {
+        // Real DB account: verify via database
+        state
+            .social_account_service
+            .get_account_by_id(social_account_id, user_id)
+            .await?;
+    }
     Ok(social_account_id)
 }
 
@@ -102,27 +112,36 @@ pub async fn send_reply(
     req.validate()?;
 
     let (social_account_id, remote_username) = parse_conv_id(&conv_id)?;
-    let account = state
-        .social_account_service
-        .get_account_by_id(social_account_id, user.id)
-        .await?;
 
-    let device_id = account
-        .device_id
-        .as_deref()
-        .ok_or_else(|| ApiError::BadRequest("Account has no device_id assigned".into()))?;
-    let profile_name = account
-        .profile_name
-        .as_deref()
-        .ok_or_else(|| ApiError::BadRequest("Account has no profile_name assigned".into()))?;
+    let (device_id, platform_id, profile_name);
+    if social_account_id < 0 {
+        // Auto-generated account: get info from NATS KV conversation metadata
+        let conv = nats_dm.get_conversation_meta(user.id, &conv_id).await?;
+        device_id = conv.device_id;
+        platform_id = conv.platform_id;
+        profile_name = conv.my_profile_name;
+    } else {
+        // Real DB account: get info from database
+        let account = state
+            .social_account_service
+            .get_account_by_id(social_account_id, user.id)
+            .await?;
+        device_id = account
+            .device_id
+            .unwrap_or_default();
+        platform_id = account.platform_id;
+        profile_name = account
+            .profile_name
+            .unwrap_or_default();
+    }
 
     let response = nats_dm
         .send_reply(
             &conv_id,
-            device_id,
+            &device_id,
             social_account_id,
-            account.platform_id,
-            profile_name,
+            platform_id,
+            &profile_name,
             remote_username,
             &req.content,
             &req.content_type,

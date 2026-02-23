@@ -505,6 +505,40 @@ impl NatsDmService {
         Ok(cfg)
     }
 
+    /// Verify that a conversation exists in NATS KV under the given user_id.
+    /// Used for auto-generated accounts (negative social_account_id) that don't
+    /// exist in the database.
+    pub async fn verify_conv_exists(&self, user_id: i32, conv_id: &str) -> Result<(), ApiError> {
+        let kv = self.js.get_key_value("dm_conversations").await
+            .map_err(|e| ApiError::InternalServerError(format!("KV open: {e}")))?;
+
+        let key = format!("{user_id}.{conv_id}");
+        match kv.get(&key).await {
+            Ok(Some(_)) => Ok(()),
+            Ok(None) => Err(ApiError::NotFound(format!("Conversation {conv_id} not found"))),
+            Err(e) => Err(ApiError::InternalServerError(format!("KV get: {e}"))),
+        }
+    }
+
+    /// Get conversation metadata from NATS KV.
+    /// Used by send_reply for auto-generated accounts to retrieve device_id, platform_id, etc.
+    pub async fn get_conversation_meta(
+        &self,
+        user_id: i32,
+        conv_id: &str,
+    ) -> Result<ConversationMetaDto, ApiError> {
+        let kv = self.js.get_key_value("dm_conversations").await
+            .map_err(|e| ApiError::InternalServerError(format!("KV open: {e}")))?;
+
+        let key = format!("{user_id}.{conv_id}");
+        match kv.get(&key).await {
+            Ok(Some(bytes)) => serde_json::from_slice::<ConversationMetaDto>(&bytes)
+                .map_err(|e| ApiError::InternalServerError(format!("Deserialize: {e}"))),
+            Ok(None) => Err(ApiError::NotFound(format!("Conversation {conv_id} not found"))),
+            Err(e) => Err(ApiError::InternalServerError(format!("KV get: {e}"))),
+        }
+    }
+
     // =========================================================================
     // Internal helpers
     // =========================================================================
