@@ -198,8 +198,8 @@ jobs:
           echo "OSS_ACCESS_KEY_SECRET=${{ secrets.OSS_ACCESS_KEY_SECRET }}" >> .env
           echo "OSS_ENDPOINT=${{ vars.OSS_ENDPOINT }}" >> .env
           echo "OSS_BUCKET=${{ vars.OSS_BUCKET }}" >> .env
-          # NATS (DM Group Control)
-          echo "NATS_URL=${{ secrets.NATS_URL }}" >> .env
+          # NATS (DM Group Control — 通过域名连接独立 NATS)
+          echo "NATS_URL=${{ vars.NATS_URL }}" >> .env
           echo "NATS_TOKEN=${{ secrets.NATS_TOKEN }}" >> .env
 
       - name: Create BuildKit cache directory
