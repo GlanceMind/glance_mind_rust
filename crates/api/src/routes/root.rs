@@ -357,10 +357,10 @@ pub fn routes(db_conn: Arc<Database>, nats_dm_service: Option<NatsDmService>) ->
                     )
                     .with_state(user_state.clone()),
             )
-            .merge(Router::new().route("/health", get(|| async { "Healthy..." })))
     };
 
     Router::new()
+        .route("/health", get(|| async { "Healthy..." }))
         .nest("/api/v1", merged_router)
         .layer(TraceLayer::new_for_http())
 }
