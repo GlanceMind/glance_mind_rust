@@ -123,6 +123,7 @@ impl UserRepositoryTrait for UserRepository {
             is_active: true,
             created_at: chrono::Utc::now(),
             updated_at: None,
+            permissions: None,
         };
 
         task::spawn_blocking(move || {

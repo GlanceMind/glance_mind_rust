@@ -2,6 +2,7 @@ use super::auth;
 use crate::config::database::Database;
 use crate::middleware::auth as auth_middleware;
 use crate::middleware::charging;
+use crate::middleware::permission;
 use crate::routes::{register, user};
 #[allow(unused_imports)]
 use crate::service::nats_dm_service::NatsDmService;
@@ -53,6 +54,9 @@ pub fn routes(db_conn: Arc<Database>, nats_dm_service: Option<NatsDmService>) ->
                             .layer(middleware::from_fn_with_state(
                                 user_state.clone(),
                                 auth_middleware::auth,
+                            ))
+                            .layer(middleware::from_fn(
+                                permission::permission_middleware,
                             ))
                             .layer(axum::Extension(user_state.campaign_service.clone()))
                             .layer(axum::Extension(user_state.agent_service.clone()))
@@ -154,6 +158,9 @@ pub fn routes(db_conn: Arc<Database>, nats_dm_service: Option<NatsDmService>) ->
                                 user_state.clone(),
                                 auth_middleware::auth,
                             ))
+                            .layer(middleware::from_fn(
+                                permission::permission_middleware,
+                            ))
                             .layer(middleware::from_fn_with_state(
                                 user_state.clone(),
                                 charging::charging_middleware,
@@ -170,6 +177,9 @@ pub fn routes(db_conn: Arc<Database>, nats_dm_service: Option<NatsDmService>) ->
                             .layer(middleware::from_fn_with_state(
                                 user_state.clone(),
                                 auth_middleware::auth,
+                            ))
+                            .layer(middleware::from_fn(
+                                permission::permission_middleware,
                             ))
                             .layer(middleware::from_fn_with_state(
                                 user_state.clone(),
@@ -200,6 +210,10 @@ pub fn routes(db_conn: Arc<Database>, nats_dm_service: Option<NatsDmService>) ->
                             user_state.clone(),
                             auth_middleware::auth,
                         ))
+                        .layer(middleware::from_fn_with_state(
+                            user_state.clone(),
+                            permission::permission_middleware,
+                        ))
                         .layer(axum::Extension(user_state.clone())),
                 ),
             )
@@ -211,6 +225,9 @@ pub fn routes(db_conn: Arc<Database>, nats_dm_service: Option<NatsDmService>) ->
                             .layer(middleware::from_fn_with_state(
                                 user_state.clone(),
                                 auth_middleware::auth,
+                            ))
+                            .layer(middleware::from_fn(
+                                permission::permission_middleware,
                             ))
                             .layer(middleware::from_fn_with_state(
                                 user_state.clone(),
@@ -254,6 +271,9 @@ pub fn routes(db_conn: Arc<Database>, nats_dm_service: Option<NatsDmService>) ->
                                 user_state.clone(),
                                 auth_middleware::auth,
                             ))
+                            .layer(middleware::from_fn(
+                                permission::permission_middleware,
+                            ))
                             .layer(middleware::from_fn_with_state(
                                 user_state.clone(),
                                 charging::charging_middleware,
@@ -275,6 +295,9 @@ pub fn routes(db_conn: Arc<Database>, nats_dm_service: Option<NatsDmService>) ->
                                 user_state.clone(),
                                 auth_middleware::auth,
                             ))
+                            .layer(middleware::from_fn(
+                                permission::permission_middleware,
+                            ))
                             .layer(axum::Extension(user_state.clone())),
                     )
                     .with_state(user_state.clone()),
@@ -291,7 +314,7 @@ pub fn routes(db_conn: Arc<Database>, nats_dm_service: Option<NatsDmService>) ->
                             .layer(axum::Extension(user_state.clone())),
                     ),
             )
-            // AI Publish User Routes (requires auth)
+            // AI Publish User Routes (requires auth + permission)
             .merge(
                 crate::routes::aipub::aipub_user_routes()
                     .layer(
@@ -299,6 +322,9 @@ pub fn routes(db_conn: Arc<Database>, nats_dm_service: Option<NatsDmService>) ->
                             .layer(middleware::from_fn_with_state(
                                 user_state.clone(),
                                 auth_middleware::auth,
+                            ))
+                            .layer(middleware::from_fn(
+                                permission::permission_middleware,
                             ))
                             .layer(axum::Extension(user_state.clone())),
                     )
@@ -314,7 +340,7 @@ pub fn routes(db_conn: Arc<Database>, nats_dm_service: Option<NatsDmService>) ->
                 crate::routes::aipub::aipub_public_routes()
                     .with_state(user_state.clone()),
             )
-            // DM Group Control Routes (requires auth)
+            // DM Group Control Routes (requires auth + permission)
             .nest(
                 "/dm",
                 crate::routes::dm::routes()
@@ -323,6 +349,9 @@ pub fn routes(db_conn: Arc<Database>, nats_dm_service: Option<NatsDmService>) ->
                             .layer(middleware::from_fn_with_state(
                                 user_state.clone(),
                                 auth_middleware::auth,
+                            ))
+                            .layer(middleware::from_fn(
+                                permission::permission_middleware,
                             ))
                             .layer(axum::Extension(user_state.clone())),
                     )

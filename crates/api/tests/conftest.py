@@ -217,10 +217,22 @@ def get_or_create_test_token() -> str:
 
 
 @pytest.fixture
-def auth_client():
-    """Create an authenticated API client with test user."""
+def auth_client(db_connection):
+    """Create an authenticated API client with test user.
+    
+    Grants all permissions (bits=15) so existing tests aren't blocked
+    by the permission middleware. Permission-specific tests override
+    this via set_permissions().
+    """
     try:
         token = get_or_create_test_token()
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "UPDATE gm_users SET permissions = 15 WHERE id = %s",
+            (TEST_USER_ID,),
+        )
+        db_connection.commit()
+        cursor.close()
         return APIClient(API_BASE_URL, token)
     except Exception as e:
         pytest.skip(f"Auth client not available: {e}")

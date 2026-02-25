@@ -56,6 +56,9 @@ pub enum ErrorCode {
     /// Verification code expired
     VerificationCodeExpired = 4005,
 
+    /// Permission denied (feature not enabled)
+    PermissionDenied = 4050,
+
     /// Insufficient balance
     InsufficientBalance = 4100,
     /// Charge failed
@@ -140,6 +143,9 @@ impl ErrorCode {
             ErrorCode::InvalidVerificationCode => "Invalid verification code",
             ErrorCode::VerificationCodeExpired => "Verification code expired",
 
+            // Business logic errors - Permission related
+            ErrorCode::PermissionDenied => "Feature not enabled",
+
             // Business logic errors - Wallet related
             ErrorCode::InsufficientBalance => "Insufficient balance",
             ErrorCode::ChargeFailed => "Charge failed",
@@ -203,6 +209,9 @@ impl ErrorCode {
             ErrorCode::InvalidVerificationCode => "Invalid verification code",
             ErrorCode::VerificationCodeExpired => "Verification code expired",
 
+            // Business logic errors - Permission related
+            ErrorCode::PermissionDenied => "Feature not enabled, please contact support",
+
             // Business logic errors - Wallet related
             ErrorCode::InsufficientBalance => "Insufficient balance, please top up",
             ErrorCode::ChargeFailed => "Charge failed",
@@ -259,6 +268,7 @@ impl ErrorCode {
             | ErrorCode::PromoCodeNotFound => StatusCode::NOT_FOUND,
             ErrorCode::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             ErrorCode::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
+            ErrorCode::PermissionDenied => StatusCode::FORBIDDEN,
             ErrorCode::InsufficientBalance => StatusCode::PAYMENT_REQUIRED,
 
             // Business logic errors

@@ -47,6 +47,10 @@ pub enum ApiError {
     #[error("Verification code expired")]
     VerificationCodeExpired,
 
+    // ============ Business Errors - Permission Related ============
+    #[error("Permission denied: {0}")]
+    PermissionDenied(String),
+
     // ============ Business Errors - Wallet Related ============
     #[error("Insufficient balance")]
     InsufficientBalance,
@@ -153,6 +157,9 @@ impl ApiError {
             ApiError::InvalidVerificationCode => ErrorCode::InvalidVerificationCode,
             ApiError::VerificationCodeExpired => ErrorCode::VerificationCodeExpired,
 
+            // Permission related
+            ApiError::PermissionDenied(_) => ErrorCode::PermissionDenied,
+
             // Wallet related
             ApiError::InsufficientBalance => ErrorCode::InsufficientBalance,
             ApiError::ChargeFailed(_) => ErrorCode::ChargeFailed,
@@ -205,6 +212,7 @@ impl ApiError {
             ApiError::NotFound(msg) => format!("Resource not found: {}", msg),
             ApiError::Unauthorized(msg) => format!("Unauthorized: {}", msg),
             ApiError::ValidationError(msg) => format!("Validation failed: {}", msg),
+            ApiError::PermissionDenied(feature) => format!("Feature not enabled: {}", feature),
             ApiError::ChargeFailed(msg) => format!("Charge failed: {}", msg),
             ApiError::PricingRuleNotFound(action) => format!("Pricing rule not found: {}", action),
             ApiError::AiServiceError(msg) => format!("AI service error: {}", msg),

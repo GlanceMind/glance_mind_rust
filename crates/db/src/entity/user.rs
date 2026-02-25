@@ -30,6 +30,7 @@ pub struct User {
     pub created_at: DateTime<Utc>,
     pub updated_at: Option<DateTime<Utc>>,
     pub username: Option<String>,
+    pub permissions: i64,
 }
 
 #[derive(Insertable, Debug, Clone, Serialize, Deserialize)]
@@ -48,4 +49,5 @@ pub struct NewUser {
     pub created_at: DateTime<Utc>,
     pub updated_at: Option<DateTime<Utc>>,
     pub username: Option<String>,
+    pub permissions: Option<i64>,
 }

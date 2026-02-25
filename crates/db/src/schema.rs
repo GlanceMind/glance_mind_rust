@@ -882,6 +882,7 @@ diesel::table! {
         invited_by -> Nullable<Varchar>,
         #[max_length = 50]
         username -> Nullable<Varchar>,
+        permissions -> Int8,
     }
 }
 
