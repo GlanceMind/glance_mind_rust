@@ -136,14 +136,7 @@ pub async fn upload_video(
     Extension(user): Extension<User>,
     mut multipart: Multipart,
 ) -> Result<ApiResult<UploadVideoResponse>, ApiError> {
-    // Check if OSS is configured
-    if !OssConfig::is_configured() {
-        return Err(ApiError::InternalServerError(
-            "OSS service not configured".to_string(),
-        ));
-    }
-
-    // Parse multipart form data
+    // Parse multipart form data first to validate request
     let mut video_data: Option<Vec<u8>> = None;
     let mut video_filename: Option<String> = None;
     let mut video_content_type: Option<String> = None;
@@ -176,7 +169,7 @@ pub async fn upload_video(
     let filename = video_filename.unwrap_or_else(|| "video.mp4".to_string());
     let content_type = video_content_type.unwrap_or_else(|| "video/mp4".to_string());
 
-    // Validate content type
+    // Validate content type before checking OSS availability
     if !ALLOWED_VIDEO_CONTENT_TYPES.contains(&content_type.as_str()) {
         return Err(ApiError::BusinessError(BusinessError::InvalidFileType(
             content_type,
@@ -188,6 +181,13 @@ pub async fn upload_video(
         return Err(ApiError::BusinessError(BusinessError::FileTooLarge(
             MAX_VIDEO_FILE_SIZE,
         )));
+    }
+
+    // Check if OSS is configured (after input validation)
+    if !OssConfig::is_configured() {
+        return Err(ApiError::InternalServerError(
+            "OSS service not configured".to_string(),
+        ));
     }
 
     info!(

@@ -15,6 +15,8 @@ pub fn material_routes() -> Router<UserState> {
                 .put(material_handler::update_material)
                 .delete(material_handler::delete_material),
         )
+        // Re-analyze material prompt
+        .route("/materials/:id/analyze", post(material_handler::re_analyze_material))
         // Collect tags from video_cases
         .route("/material-tags", get(material_handler::list_tags))
         // Favorite from video_case

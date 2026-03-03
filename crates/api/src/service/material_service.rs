@@ -11,13 +11,20 @@ use chrono::Utc;
 use diesel::result::Error as DieselError;
 use glance_mind_db::entity::material::NewUserMaterial;
 use std::sync::Arc;
-use tracing::{info, warn};
+use tokio::sync::Semaphore;
+use tracing::{error, info, warn};
+
+const AI_ANALYSIS_TIMEOUT_SECS: u64 = 120;
+const AI_ANALYSIS_MAX_RETRIES: u32 = 3;
+const AI_ANALYSIS_BASE_DELAY_SECS: u64 = 5;
+const AI_ANALYSIS_MAX_CONCURRENT: usize = 2;
 
 #[derive(Clone)]
 pub struct MaterialService {
     material_repo: MaterialRepository,
     video_case_service: VideoCaseService,
     laozhang_client: LaoZhangClient,
+    analysis_semaphore: Arc<Semaphore>,
 }
 
 impl MaterialService {
@@ -30,52 +37,149 @@ impl MaterialService {
             material_repo: MaterialRepository::new(db_conn.pool.clone()),
             video_case_service,
             laozhang_client,
+            analysis_semaphore: Arc::new(Semaphore::new(AI_ANALYSIS_MAX_CONCURRENT)),
         }
     }
 
-    /// Analyze video using AI to generate prompt
-    async fn analyze_video_for_prompt(&self, video_url: &str) -> Option<String> {
-        // Use gemini-2.5-flash for faster analysis (can be changed to gemini-2.5-pro for better quality)
-        let model = "gemini-2.5-flash";
-        let analysis_prompt = "请详细描述这个视频的内容、风格、主题和关键元素，用于后续AI视频生成。要求描述具体、详细，包含视觉元素、动作、情感和整体氛围。";
+    fn is_retryable_error(err: &ApiError) -> bool {
+        let msg = format!("{:?}", err);
+        msg.contains("429") || msg.contains("Too Many Requests") || msg.contains("rate")
+            || msg.contains("负载已饱和") || msg.contains("503") || msg.contains("Service Unavailable")
+    }
 
-        info!("Starting AI video analysis for prompt generation: video_url='{}'", video_url);
+    /// Spawn background AI analysis task with retry and concurrency limiting
+    fn spawn_background_analysis(&self, material_id: i32, video_url: String) {
+        let laozhang_client = self.laozhang_client.clone();
+        let material_repo = self.material_repo.clone();
+        let semaphore = self.analysis_semaphore.clone();
 
-        match self
-            .laozhang_client
-            .analyze_video(model, video_url, analysis_prompt, Some(2000))
+        tokio::spawn(async move {
+            let _permit = match semaphore.acquire().await {
+                Ok(p) => p,
+                Err(_) => {
+                    error!("Analysis semaphore closed: material_id={}", material_id);
+                    return;
+                }
+            };
+
+            let model = "gemini-2.5-flash";
+            let analysis_prompt = "请详细描述这个视频的内容、风格、主题和关键元素，用于后续AI视频生成。要求描述具体、详细，包含视觉元素、动作、情感和整体氛围。";
+
+            info!(
+                "Background AI analysis started: material_id={}, video_url='{}'",
+                material_id,
+                &video_url[..video_url.len().min(80)]
+            );
+
+            for attempt in 0..=AI_ANALYSIS_MAX_RETRIES {
+                if attempt > 0 {
+                    let delay = AI_ANALYSIS_BASE_DELAY_SECS * 2u64.pow(attempt - 1);
+                    info!(
+                        "Retrying AI analysis: material_id={}, attempt={}/{}, delay={}s",
+                        material_id, attempt, AI_ANALYSIS_MAX_RETRIES, delay
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                }
+
+                let analysis_result = tokio::time::timeout(
+                    std::time::Duration::from_secs(AI_ANALYSIS_TIMEOUT_SECS),
+                    laozhang_client.analyze_video(model, &video_url, analysis_prompt, Some(2000)),
+                )
+                .await;
+
+                match analysis_result {
+                    Ok(Ok(prompt)) => {
+                        info!(
+                            "Background AI analysis completed: material_id={}, prompt_len={}, attempts={}",
+                            material_id, prompt.len(), attempt + 1
+                        );
+                        if let Err(e) = material_repo.update_prompt(material_id, prompt).await {
+                            error!(
+                                "Failed to update material prompt: material_id={}, error={}",
+                                material_id, e
+                            );
+                        }
+                        return;
+                    }
+                    Ok(Err(ref e)) if Self::is_retryable_error(e) && attempt < AI_ANALYSIS_MAX_RETRIES => {
+                        warn!(
+                            "Retryable AI analysis error: material_id={}, attempt={}/{}, error={}",
+                            material_id, attempt + 1, AI_ANALYSIS_MAX_RETRIES, e
+                        );
+                        continue;
+                    }
+                    Ok(Err(e)) => {
+                        warn!(
+                            "Background AI analysis failed (non-retryable): material_id={}, error={}",
+                            material_id, e
+                        );
+                        return;
+                    }
+                    Err(_) if attempt < AI_ANALYSIS_MAX_RETRIES => {
+                        warn!(
+                            "AI analysis timed out, will retry: material_id={}, attempt={}/{}",
+                            material_id, attempt + 1, AI_ANALYSIS_MAX_RETRIES
+                        );
+                        continue;
+                    }
+                    Err(_) => {
+                        warn!(
+                            "Background AI analysis timed out after all retries: material_id={}, timeout={}s",
+                            material_id, AI_ANALYSIS_TIMEOUT_SECS
+                        );
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
+    /// Manually trigger re-analysis for a material with missing prompt
+    pub async fn re_analyze_material(
+        &self,
+        id: i32,
+        user_id: i32,
+    ) -> Result<MaterialDetail, ApiError> {
+        let material = self
+            .material_repo
+            .find_by_id_and_user(id, user_id)
             .await
-        {
-            Ok(prompt) => {
-                info!("AI video analysis completed successfully, prompt length: {}", prompt.len());
-                Some(prompt)
-            }
-            Err(e) => {
-                warn!("AI video analysis failed: {}, continuing without prompt", e);
-                None // Return None if analysis fails, material can still be created
-            }
-        }
+            .map_err(|e| match e {
+                DieselError::NotFound => ApiError::BusinessError(
+                    crate::error::business_error::BusinessError::ResourceNotFound("Material".to_string()),
+                ),
+                _ => ApiError::from(DbError::SomethingWentWrong(e.to_string())),
+            })?;
+
+        info!(
+            "Manual re-analysis triggered: material_id={}, user_id={}, has_prompt={}",
+            id, user_id, material.prompt.is_some()
+        );
+
+        self.spawn_background_analysis(id, material.video_url.clone());
+
+        Ok(MaterialDetail::from(material))
     }
 
     /// Create a new material
+    /// Material is created immediately; AI video analysis runs in the background.
     pub async fn create_material(
         &self,
         user_id: i32,
         request: CreateMaterialRequest,
     ) -> Result<MaterialDetail, ApiError> {
-        // Analyze video to generate prompt
-        let prompt = self.analyze_video_for_prompt(&request.video_url).await;
+        let video_url = request.video_url.clone();
 
         let new_material = NewUserMaterial {
             user_id,
             video_url: request.video_url,
-            prompt,
-            thumbnail_url: None, // Can be extracted later if needed
-            tag: Some(request.tag), // Required tag
-            title: Some(request.title), // Required title
+            prompt: None,
+            thumbnail_url: None,
+            tag: Some(request.tag),
+            title: Some(request.title),
             description: request.description,
-            duration: None, // Can be extracted from video later if needed
-            file_size: None, // Can be extracted from video later if needed
+            duration: None,
+            file_size: None,
             is_active: Some(true),
             created_at: Utc::now(),
             updated_at: None,
@@ -87,7 +191,12 @@ impl MaterialService {
             .await
             .map_err(|e| ApiError::from(DbError::SomethingWentWrong(e.to_string())))?;
 
-        info!("Material created successfully: id={}, user_id={}", material.id, user_id);
+        info!(
+            "Material created successfully: id={}, user_id={}",
+            material.id, user_id
+        );
+
+        self.spawn_background_analysis(material.id, video_url);
 
         Ok(MaterialDetail::from(material))
     }
@@ -138,18 +247,15 @@ impl MaterialService {
     }
 
     /// Update material
+    /// If video URL changed, background AI re-analysis is triggered.
     pub async fn update_material(
         &self,
         id: i32,
         user_id: i32,
         request: UpdateMaterialRequest,
     ) -> Result<MaterialDetail, ApiError> {
-        // If video URL changed, re-analyze to generate new prompt
-        let prompt = if let Some(ref video_url) = request.video_url {
-            Some(self.analyze_video_for_prompt(video_url).await)
-        } else {
-            None
-        };
+        let video_url_changed = request.video_url.is_some();
+        let new_video_url = request.video_url.clone();
 
         let material = self
             .material_repo
@@ -157,7 +263,7 @@ impl MaterialService {
                 id,
                 user_id,
                 request.video_url,
-                prompt.flatten(),
+                None, // prompt will be updated by background task if video changed
                 request.tag,
                 request.title,
                 request.description,
@@ -165,10 +271,18 @@ impl MaterialService {
             .await
             .map_err(|e| match e {
                 DieselError::NotFound => ApiError::BusinessError(
-                    crate::error::business_error::BusinessError::ResourceNotFound("Material".to_string()),
+                    crate::error::business_error::BusinessError::ResourceNotFound(
+                        "Material".to_string(),
+                    ),
                 ),
                 _ => ApiError::from(DbError::SomethingWentWrong(e.to_string())),
             })?;
+
+        if video_url_changed {
+            if let Some(url) = new_video_url {
+                self.spawn_background_analysis(id, url);
+            }
+        }
 
         Ok(MaterialDetail::from(material))
     }

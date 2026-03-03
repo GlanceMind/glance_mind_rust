@@ -88,6 +88,20 @@ pub async fn list_tags(
     Ok(ApiResult::ok(response))
 }
 
+/// Re-analyze material (trigger AI analysis retry)
+/// POST /api/v1/materials/:id/analyze
+pub async fn re_analyze_material(
+    State(state): State<UserState>,
+    Extension(user): Extension<User>,
+    Path(id): Path<i32>,
+) -> Result<ApiResult<crate::dto::material_dto::MaterialDetail>, ApiError> {
+    let material = state
+        .material_service
+        .re_analyze_material(id, user.id)
+        .await?;
+    Ok(ApiResult::ok(material))
+}
+
 /// Favorite material from video_case
 /// POST /api/v1/video-cases/:task_no/favorite
 pub async fn favorite_from_video_case(
