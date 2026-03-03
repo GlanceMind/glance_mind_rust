@@ -1,5 +1,6 @@
 pub mod agent_analysis_handler;
 pub mod agent_handler;
+pub mod ai_chat_handler;
 pub mod ai_handler;
 pub mod aipub_handler;
 pub mod auth_handler;

@@ -1,6 +1,7 @@
 pub mod agent;
 pub(crate) mod agent_analysis;
 pub mod ai;
+pub mod ai_chat;
 pub mod aipub;
 pub(crate) mod auth;
 pub(crate) mod campaign;

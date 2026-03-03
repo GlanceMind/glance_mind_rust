@@ -1,5 +1,7 @@
 pub mod agent_analysis_service;
 pub(crate) mod agent_service;
+pub mod ai_chat;
+pub mod ai_chat_service;
 pub mod ai_service;
 pub mod aipub_service;
 pub mod campaign_service;

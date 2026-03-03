@@ -944,6 +944,90 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    gm_ai_conversations (id) {
+        id -> Int4,
+        user_id -> Int4,
+        #[max_length = 255]
+        title -> Varchar,
+        #[max_length = 20]
+        status -> Varchar,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    gm_ai_messages (id) {
+        id -> Int4,
+        conversation_id -> Int4,
+        #[max_length = 20]
+        role -> Varchar,
+        content -> Text,
+        tool_calls -> Nullable<Jsonb>,
+        #[max_length = 100]
+        tool_call_id -> Nullable<Varchar>,
+        plan_id -> Nullable<Int4>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_ai_plans (id) {
+        id -> Int4,
+        conversation_id -> Int4,
+        message_id -> Nullable<Int4>,
+        user_id -> Int4,
+        #[max_length = 255]
+        title -> Varchar,
+        description -> Text,
+        #[max_length = 20]
+        status -> Varchar,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    gm_ai_plan_steps (id) {
+        id -> Int4,
+        plan_id -> Int4,
+        step_order -> Int4,
+        #[max_length = 100]
+        tool_name -> Varchar,
+        tool_params -> Jsonb,
+        description -> Text,
+        #[max_length = 20]
+        status -> Varchar,
+        result -> Nullable<Jsonb>,
+        error_message -> Nullable<Text>,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    gm_ai_tool_audit_logs (id) {
+        id -> Int4,
+        user_id -> Int4,
+        conversation_id -> Nullable<Int4>,
+        #[max_length = 100]
+        tool_name -> Varchar,
+        #[max_length = 20]
+        safety_level -> Varchar,
+        success -> Bool,
+        error_message -> Nullable<Text>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::joinable!(gm_ai_conversations -> gm_users (user_id));
+diesel::joinable!(gm_ai_messages -> gm_ai_conversations (conversation_id));
+diesel::joinable!(gm_ai_plan_steps -> gm_ai_plans (plan_id));
+diesel::joinable!(gm_ai_plans -> gm_ai_conversations (conversation_id));
+diesel::joinable!(gm_ai_plans -> gm_users (user_id));
+diesel::joinable!(gm_ai_tool_audit_logs -> gm_users (user_id));
+
 diesel::joinable!(gm_agent_comments -> gm_agent_videos (video_db_id));
 diesel::joinable!(gm_agent_comments -> gm_campaigns (campaign_id));
 diesel::joinable!(gm_agent_facebook_comments -> gm_agent_facebook_posts (post_db_id));
@@ -1002,6 +1086,11 @@ diesel::joinable!(gm_wallet_transactions -> gm_users (user_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     gm_admin_users,
+    gm_ai_conversations,
+    gm_ai_messages,
+    gm_ai_plan_steps,
+    gm_ai_plans,
+    gm_ai_tool_audit_logs,
     gm_agent_comments,
     gm_agent_facebook_comments,
     gm_agent_facebook_posts,

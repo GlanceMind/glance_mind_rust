@@ -357,6 +357,20 @@ pub fn routes(db_conn: Arc<Database>, nats_dm_service: Option<NatsDmService>) ->
                     )
                     .with_state(user_state.clone()),
             )
+            // AI Chat Mode Routes (requires auth)
+            .nest(
+                "/ai-chat",
+                crate::routes::ai_chat::routes()
+                    .layer(
+                        ServiceBuilder::new()
+                            .layer(middleware::from_fn_with_state(
+                                user_state.clone(),
+                                auth_middleware::auth,
+                            ))
+                            .layer(axum::Extension(user_state.clone())),
+                    )
+                    .with_state(user_state.clone()),
+            )
     };
 
     Router::new()

@@ -25,6 +25,8 @@ use crate::service::upload_task_service::UploadTaskService;
 use crate::service::user_service::UserService;
 use crate::service::video_case_service::VideoCaseService;
 use crate::service::video_service::VideoService;
+use crate::service::ai_chat::AiChatRepository;
+use crate::service::ai_chat_service::AiChatService;
 use crate::service::nats_dm_service::NatsDmService;
 use crate::service::wallet_service::WalletService;
 use std::sync::Arc;
@@ -55,6 +57,7 @@ pub struct UserState {
     pub charging_manager: ChargingManager,
     /// NATS DM service (None if NATS is not configured)
     pub nats_dm_service: Option<NatsDmService>,
+    pub ai_chat_service: AiChatService,
 }
 
 impl UserState {
@@ -106,6 +109,7 @@ impl UserState {
             ),
             charging_manager,
             nats_dm_service: None, // Initialized async in lib.rs::run()
+            ai_chat_service: AiChatService::new(AiChatRepository::new(db_conn.clone())),
         }
     }
 

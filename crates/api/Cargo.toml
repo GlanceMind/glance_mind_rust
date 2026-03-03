@@ -60,8 +60,11 @@ redis = "1.0.2"
 async-nats = "0.37"
 futures = "0.3"
 
+# Streaming
+tokio-stream = "0.1"
+
 # HTTP Client
-reqwest = { version = "0.11.22", features = ["json", "multipart"] }
+reqwest = { version = "0.11.22", features = ["json", "multipart", "stream"] }
 
 # AI
 rig-core = "0.27.0"

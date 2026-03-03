@@ -1,5 +1,6 @@
 pub mod agent_analysis_dto;
 pub mod agent_dto;
+pub mod ai_chat_dto;
 pub mod ai_dto;
 pub mod aipub_dto;
 pub mod campaign_dto;

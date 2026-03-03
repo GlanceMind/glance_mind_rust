@@ -79,6 +79,9 @@ class APIClient:
     def delete(self, path: str, **kwargs) -> requests.Response:
         return self.session.delete(f"{self.base_url}{path}", **kwargs)
 
+    def patch(self, path: str, **kwargs) -> requests.Response:
+        return self.session.patch(f"{self.base_url}{path}", **kwargs)
+
 
 def extract_data(response_json: dict):
     """Extract data from wrapped API response format.
