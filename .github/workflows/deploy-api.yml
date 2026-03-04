@@ -186,9 +186,10 @@ jobs:
           echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> .env
           echo "JWT_TTL_IN_MINUTES=${{ vars.JWT_TTL_IN_MINUTES }}" >> .env
           echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" >> .env
-          echo "AGENT_API_KEY=${{ secrets.AGENT_API_KEY }}" >> .env
-          echo "AGENT_BASE_URL=${{ secrets.AGENT_BASE_URL }}" >> .env
+          echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
+          echo "OPENAI_BASE_URL=${{ secrets.OPENAI_BASE_URL }}" >> .env
           echo "LAOZHANG_API_KEY=${{ secrets.LAOZHANG_API_KEY }}" >> .env
+          echo "LAOZHANG_BASE_URL=${{ secrets.LAOZHANG_BASE_URL }}" >> .env
           echo "TIKHUB_API_KEY=${{ secrets.TIKHUB_API_KEY }}" >> .env
           echo "TIKHUB_BASE_URL=${{ secrets.TIKHUB_BASE_URL }}" >> .env
           echo "RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}" >> .env

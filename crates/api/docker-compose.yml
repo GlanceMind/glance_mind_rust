@@ -55,7 +55,10 @@ services:
       # NATS (DM Group Control)
       NATS_URL: nats://nats:4222
       NATS_TOKEN: ${NATS_TOKEN:-glancemind-dev-token}
-      # LaoZhang API Configuration (required for video generation)
+      # AI API Configuration (timicc - text/chat)
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://timicc.com/v1}
+      # LaoZhang API Configuration (video/image generation only)
       LAOZHANG_BASE_URL: ${LAOZHANG_BASE_URL:-https://api.laozhang.ai}
       LAOZHANG_API_KEY: ${LAOZHANG_API_KEY}
       RESEND_API_KEY: ${RESEND_API_KEY}

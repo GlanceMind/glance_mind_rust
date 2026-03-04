@@ -87,13 +87,16 @@ SELECT setval('pricing_rules_id_seq', (SELECT MAX(id) FROM gm_pricing_rules));
 -- 4. AI Models (for campaign configuration)
 -- ============================================================================
 INSERT INTO gm_ai_models (id, name, provider, model_key, model_type, cost_multiplier, is_active) VALUES
-(1, 'GPT-4o', 'openai', 'gpt-4o', 'chat', 1.0, true),
-(2, 'GPT-4o-mini', 'openai', 'gpt-4o-mini', 'chat', 0.5, true),
-(3, 'Claude-3.5-Sonnet', 'anthropic', 'claude-3-5-sonnet-20241022', 'chat', 1.2, true),
-(4, 'Veo-2', 'google', 'veo-2', 'video', 5.0, true)
+(1, 'Claude Haiku', 'anthropic', 'claude-haiku-4-5-20251001', 'chat', 0.3, true),
+(2, 'Claude Sonnet', 'anthropic', 'claude-sonnet-4-6', 'chat', 1.0, true),
+(3, 'GPT-5.2', 'openai', 'gpt-5.2', 'chat', 1.2, true),
+(4, 'Claude Opus', 'anthropic', 'claude-opus-4-6', 'chat', 2.0, true),
+(5, 'Veo-2', 'google', 'veo-2', 'video', 5.0, true)
 ON CONFLICT (id) DO UPDATE SET
     name = EXCLUDED.name,
-    model_key = EXCLUDED.model_key;
+    provider = EXCLUDED.provider,
+    model_key = EXCLUDED.model_key,
+    cost_multiplier = EXCLUDED.cost_multiplier;
 
 SELECT setval('ai_models_id_seq', (SELECT MAX(id) FROM gm_ai_models));
 

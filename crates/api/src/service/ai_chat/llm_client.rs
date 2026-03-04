@@ -66,12 +66,11 @@ struct PartialToolCall {
 
 impl LlmClient {
     pub fn new() -> Self {
-        let api_key = env::var("AI_CHAT_API_KEY").unwrap_or_else(|_| {
-            "sk-f81f39493806fbca390e6c2087d59a991760a4f770bde7ac857405d69146cfab".into()
-        });
+        let api_key =
+            env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set in environment");
         let base_url =
-            env::var("AI_CHAT_BASE_URL").unwrap_or_else(|_| "https://timicc.com/v1".into());
-        let model = env::var("AI_CHAT_MODEL").unwrap_or_else(|_| "claude-sonnet-4-6".into());
+            env::var("OPENAI_BASE_URL").unwrap_or_else(|_| "https://timicc.com/v1".into());
+        let model = env::var("AI_CHAT_MODEL").unwrap_or_else(|_| "gpt-5.2".into());
 
         Self {
             client: Client::new(),
