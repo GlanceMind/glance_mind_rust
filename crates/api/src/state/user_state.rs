@@ -13,6 +13,7 @@ use crate::service::config_service::ConfigService;
 use crate::service::crawler_service::CrawlerService;
 use crate::service::dashboard_service::DashboardService;
 use crate::service::email_verification_service::EmailVerificationService;
+use crate::service::jimeng_client::JimengClient;
 use crate::service::laozhang_client::LaoZhangClient;
 use crate::service::material_service::MaterialService;
 use crate::service::platform_service::PlatformService;
@@ -70,6 +71,23 @@ impl UserState {
         let laozhang_client = LaoZhangClient::new(laozhang_api_key.clone(), laozhang_base_url.clone());
         let laozhang_client_for_material = LaoZhangClient::new(laozhang_api_key, laozhang_base_url);
 
+        // Initialize JimengClient (optional - only if env vars are set)
+        let jimeng_client = {
+            let ak = std::env::var("JIMENG_ACCESS_KEY_ID").ok();
+            let sk = std::env::var("JIMENG_SECRET_ACCESS_KEY").ok();
+            let base_url = std::env::var("JIMENG_BASE_URL").ok();
+            match (ak, sk) {
+                (Some(ak), Some(sk)) if !ak.is_empty() && !sk.is_empty() => {
+                    tracing::info!("Jimeng client initialized");
+                    Some(JimengClient::new(ak, sk, base_url))
+                }
+                _ => {
+                    tracing::info!("Jimeng client not configured (JIMENG_ACCESS_KEY_ID/JIMENG_SECRET_ACCESS_KEY not set)");
+                    None
+                }
+            }
+        };
+
         // Initialize ChargingManager
         let pricing_repo = PricingRepository::new(db_conn.pool.clone());
         let ai_model_repo = AiModelRepository::new(db_conn.pool.clone());
@@ -97,6 +115,7 @@ impl UserState {
                 db_conn.pool.clone(),
                 WalletRepository::new(db_conn.pool.clone()),
                 laozhang_client,
+                jimeng_client,
                 ConfigService::new(db_conn),
             ),
             video_case_service: VideoCaseService::new(db_conn.pool.clone()),

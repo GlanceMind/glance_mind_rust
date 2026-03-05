@@ -2,6 +2,7 @@ use bigdecimal::BigDecimal;
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::PgConnection;
 
+use crate::dto::jimeng_dto::{JimengResolution, JimengVideoParams};
 use crate::dto::laozhang_dto::{CreateVideoFromImageRequest, CreateVideoFromTextRequest};
 use crate::dto::video_dto::{
     CreateVideoRequest, CreateVideoResponse, VideoTaskListResponse, VideoTaskResponse,
@@ -10,6 +11,7 @@ use crate::error::{api_error::ApiError, business_error::BusinessError};
 use crate::repository::video_repository::VideoRepository;
 use crate::repository::wallet_repository::WalletRepository;
 use crate::service::config_service::ConfigService;
+use crate::service::jimeng_client::{is_jimeng_model, JimengClient};
 use crate::service::laozhang_client::LaoZhangClient;
 use glance_mind_db::entity::ai_model::AiModel;
 use glance_mind_db::entity::video::NewVideoGenerationTask;
@@ -20,6 +22,7 @@ pub struct VideoService {
     #[allow(dead_code)]
     wallet_repo: WalletRepository,
     laozhang_client: LaoZhangClient,
+    jimeng_client: Option<JimengClient>,
     #[allow(dead_code)]
     config_service: ConfigService,
 }
@@ -29,12 +32,14 @@ impl VideoService {
         db_pool: Pool<ConnectionManager<PgConnection>>,
         wallet_repo: WalletRepository,
         laozhang_client: LaoZhangClient,
+        jimeng_client: Option<JimengClient>,
         config_service: ConfigService,
     ) -> Self {
         Self {
             db_pool,
             wallet_repo,
             laozhang_client,
+            jimeng_client,
             config_service,
         }
     }
@@ -137,6 +142,20 @@ impl VideoService {
         );
 
         // Note: Fee calculation and deduction already handled by charging_middleware
+
+        // Route to Jimeng if model is jimeng-*
+        if is_jimeng_model(&model_key) {
+            return self
+                .create_video_jimeng(
+                    user_id,
+                    &model_key,
+                    &request,
+                    image_data.or(start_frame_data),
+                    end_frame_data,
+                    &ai_model_info,
+                )
+                .await;
+        }
 
         // Call LaoZhang API - Select different API call based on mode
         let task_response = if is_dual_image {
@@ -353,5 +372,116 @@ impl VideoService {
             video_seconds: task.video_seconds,
             video_size: task.video_size,
         })
+    }
+
+    /// Jimeng video generation path
+    #[allow(clippy::too_many_arguments)]
+    async fn create_video_jimeng(
+        &self,
+        user_id: i32,
+        model_key: &str,
+        request: &CreateVideoRequest,
+        image_data: Option<Vec<u8>>,
+        _end_frame_data: Option<Vec<u8>>,
+        ai_model_info: &Option<AiModel>,
+    ) -> Result<CreateVideoResponse, ApiError> {
+        let jimeng = self.jimeng_client.as_ref().ok_or_else(|| {
+            ApiError::InternalServerError("Jimeng client not configured".to_string())
+        })?;
+
+        let resolution = Self::detect_jimeng_resolution(model_key);
+        let seconds: i32 = request.seconds.parse().unwrap_or(5);
+
+        let params = JimengVideoParams {
+            prompt: request.prompt.clone().unwrap_or_default(),
+            resolution,
+            seconds,
+            aspect_ratio: if image_data.is_none() { Some(self.detect_aspect_ratio(request)) } else { None },
+            image_base64: image_data.map(|d| JimengClient::encode_image(&d)),
+        };
+
+        tracing::info!(
+            "Jimeng video: model={}, resolution={}, seconds={}, has_image={}",
+            model_key, resolution.label(), seconds, params.image_base64.is_some()
+        );
+
+        let handle = jimeng.create_video(params).await?;
+        let task_id = handle.task_id;
+
+        // Save task to database
+        let mut conn = self
+            .db_pool
+            .get()
+            .map_err(|_| ApiError::InternalServerError("Database connection failed".to_string()))?;
+
+        use crate::middleware::charging::ActionType;
+        use diesel::prelude::*;
+        use glance_mind_db::schema::gm_pricing_rules::dsl::*;
+
+        let base_cost = gm_pricing_rules
+            .filter(action_type.eq(ActionType::VideoGenerate.as_str()))
+            .filter(platform_id.is_null())
+            .select(cost_points)
+            .first::<BigDecimal>(&mut conn)
+            .map_err(|_| {
+                ApiError::InternalServerError("Failed to query pricing rule".to_string())
+            })?;
+
+        let actual_cost = if let Some(ref model) = ai_model_info {
+            &base_cost * &model.cost_multiplier
+        } else {
+            base_cost
+        };
+
+        let model_name = ai_model_info.as_ref().map(|m| m.name.clone());
+
+        let new_task = NewVideoGenerationTask {
+            user_id,
+            task_id: task_id.clone(),
+            prompt: request.prompt.clone(),
+            media_id: None,
+            status: "pending".to_string(),
+            cost_points: actual_cost.clone(),
+            wallet_transaction_id: None,
+            model_id: request.ai_model_id,
+            title: request.title.clone(),
+            orientation: Some(request.orientation.as_str().to_string()),
+            video_seconds: Some(request.seconds.clone()),
+            video_size: Some(request.size.clone()),
+        };
+
+        VideoRepository::create_task(&mut conn, new_task).map_err(|_| {
+            ApiError::InternalServerError("Failed to create task record".to_string())
+        })?;
+
+        Ok(CreateVideoResponse {
+            task_id,
+            status: "pending".to_string(),
+            cost_points: actual_cost,
+            estimated_time: "2-5 minutes".to_string(),
+            ai_model_name: model_name,
+            expires_at: None,
+        })
+    }
+
+    /// Map model_key to Jimeng resolution tier.
+    /// "jimeng-video-3.0-720p"  → V30_720p (default)
+    /// "jimeng-video-3.0-1080p" → V30_1080p
+    /// "jimeng-video-3.0-pro"   → V30Pro
+    fn detect_jimeng_resolution(model_key: &str) -> JimengResolution {
+        if model_key.contains("pro") {
+            JimengResolution::V30Pro
+        } else if model_key.contains("1080") {
+            JimengResolution::V30_1080p
+        } else {
+            JimengResolution::V30_720p
+        }
+    }
+
+    fn detect_aspect_ratio(&self, request: &CreateVideoRequest) -> String {
+        match request.orientation {
+            crate::dto::video_dto::VideoOrientation::Portrait => "9:16".to_string(),
+            crate::dto::video_dto::VideoOrientation::Landscape => "16:9".to_string(),
+        }
     }
 }

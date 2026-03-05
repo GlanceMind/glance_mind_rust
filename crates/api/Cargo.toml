@@ -77,9 +77,10 @@ resend-rs = "0.20.0-rc.1"
 # HTML parsing (knowledge base RAG)
 scraper = "0.22"
 
-# OSS (using reqwest directly with HMAC signing)
+# OSS + Jimeng (using reqwest directly with HMAC signing)
 hmac = "0.12"
 sha1 = "0.10"
+sha2 = "0.10"
 
 [dev-dependencies]
 tower.workspace = true

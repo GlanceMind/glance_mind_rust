@@ -91,7 +91,9 @@ INSERT INTO gm_ai_models (id, name, provider, model_key, model_type, cost_multip
 (2, 'GPT-5.2', 'openai', 'gpt-5.2', 'chat', 1.0, true),
 (3, 'Claude Haiku Thinking', 'anthropic', 'claude-haiku-4-5-20251001-thinking', 'chat', 0.8, true),
 (4, 'Grok 4', 'xai', 'grok-4', 'chat', 1.5, true),
-(5, 'Veo-2', 'google', 'veo-2', 'video', 5.0, true)
+(5, 'Veo-2', 'google', 'veo-2', 'video', 5.0, true),
+(6, 'Jimeng 3.0 720P', 'jimeng', 'jimeng-video-3.0-720p', 'video', 2.0, true),
+(7, 'Jimeng 3.0 1080P', 'jimeng', 'jimeng-video-3.0-1080p', 'video', 3.0, true)
 ON CONFLICT (id) DO UPDATE SET
     name = EXCLUDED.name,
     provider = EXCLUDED.provider,

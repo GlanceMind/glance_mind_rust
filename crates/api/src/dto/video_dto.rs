@@ -47,14 +47,14 @@ impl CreateVideoRequest {
             .seconds
             .parse()
             .map_err(|_| "seconds must be a valid number".to_string())?;
-        if seconds_val != 10 && seconds_val != 15 {
-            return Err("seconds can only be 10 or 15".to_string());
+        if ![5, 10, 15].contains(&seconds_val) {
+            return Err("seconds can only be 5, 10, or 15".to_string());
         }
 
-        // Validate size
-        let valid_sizes = ["1280x720", "720x1280"];
+        // Validate size (extended for Jimeng aspect ratios)
+        let valid_sizes = ["1280x720", "720x1280", "720x720", "960x720", "720x960", "1260x540"];
         if !valid_sizes.contains(&self.size.as_str()) {
-            return Err("size can only be 1280x720 or 720x1280".to_string());
+            return Err(format!("invalid size: {}", self.size));
         }
 
         Ok(())

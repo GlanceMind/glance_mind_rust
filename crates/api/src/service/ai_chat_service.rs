@@ -216,8 +216,10 @@ impl AiChatService {
             if model.model_type != "chat" {
                 return Err(ApiError::BadRequest(format!("AI model '{}' is not a chat model", model.name)));
             }
+            tracing::info!("AI Chat using model override: {} (id={})", model.model_key, mid);
             Some(model.model_key)
         } else {
+            tracing::info!("AI Chat using default model (no override)");
             None
         };
 

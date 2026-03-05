@@ -202,6 +202,9 @@ jobs:
           # NATS (DM Group Control — 通过域名连接独立 NATS)
           echo "NATS_URL=${{ vars.NATS_URL }}" >> .env
           echo "NATS_TOKEN=${{ secrets.NATS_TOKEN }}" >> .env
+          # Jimeng (Volcengine AI Video 3.0)
+          echo "JIMENG_ACCESS_KEY_ID=${{ secrets.JIMENG_ACCESS_KEY_ID }}" >> .env
+          echo "JIMENG_SECRET_ACCESS_KEY=${{ secrets.JIMENG_SECRET_ACCESS_KEY }}" >> .env
 
       - name: Create BuildKit cache directory
         run: |
