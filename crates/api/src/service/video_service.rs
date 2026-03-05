@@ -13,6 +13,7 @@ use crate::repository::wallet_repository::WalletRepository;
 use crate::service::config_service::ConfigService;
 use crate::service::jimeng_client::{is_jimeng_model, JimengClient};
 use crate::service::laozhang_client::LaoZhangClient;
+use crate::service::oss_service::{OssConfig, OssService};
 use glance_mind_db::entity::ai_model::AiModel;
 use glance_mind_db::entity::video::{NewVideoGenerationTask, VideoGenerationTask};
 
@@ -25,6 +26,7 @@ pub struct VideoService {
     jimeng_client: Option<JimengClient>,
     #[allow(dead_code)]
     config_service: ConfigService,
+    oss_config: Option<OssConfig>,
 }
 
 impl VideoService {
@@ -35,12 +37,19 @@ impl VideoService {
         jimeng_client: Option<JimengClient>,
         config_service: ConfigService,
     ) -> Self {
+        let oss_config = OssConfig::from_env().ok();
+        if oss_config.is_some() {
+            tracing::info!("VideoService: OSS configured for video persistence");
+        } else {
+            tracing::warn!("VideoService: OSS not configured, Jimeng videos will use temporary CDN URLs");
+        }
         Self {
             db_pool,
             wallet_repo,
             laozhang_client,
             jimeng_client,
             config_service,
+            oss_config,
         }
     }
 
@@ -465,11 +474,11 @@ impl VideoService {
 
     fn is_jimeng_pending(task: &VideoGenerationTask) -> bool {
         matches!(task.status.as_str(), "pending" | "queued" | "processing")
-            && task.task_id.starts_with("jimeng_")
+            && task.generation_id.as_deref().map_or(false, |g| g.starts_with("jimeng_"))
     }
 
     /// Poll Volcengine for a single Jimeng task, update DB if done/failed.
-    /// Returns the updated task row on success, None if polling was skipped or errored.
+    /// When done, downloads the video and uploads to OSS for permanent storage.
     async fn poll_jimeng_task(
         &self,
         conn: &mut crate::repository::video_repository::PgConnection,
@@ -492,12 +501,21 @@ impl VideoService {
         };
 
         if result.is_done() {
-            let video_url = result.get_video_url();
+            let temp_url = result.get_video_url();
             tracing::info!(
-                "Jimeng task {} completed, video_url={:?}",
+                "Jimeng task {} completed, temp_url={:?}",
                 task.task_id,
-                video_url
+                temp_url
             );
+
+            let video_url = match temp_url {
+                Some(ref url) => {
+                    let oss_url = self.persist_video_to_oss(url, task.user_id, &task.task_id).await;
+                    Some(oss_url.unwrap_or_else(|| url.clone()))
+                }
+                None => None,
+            };
+
             VideoRepository::mark_as_succeeded(
                 conn,
                 task.id,
@@ -526,6 +544,70 @@ impl VideoService {
                 None,
             );
             None
+        }
+    }
+
+    /// Download video from temporary CDN URL and re-upload to Aliyun OSS.
+    /// Returns the permanent OSS URL, or None if OSS is not configured or upload fails.
+    async fn persist_video_to_oss(
+        &self,
+        temp_url: &str,
+        user_id: i32,
+        task_id: &str,
+    ) -> Option<String> {
+        let oss_config = self.oss_config.as_ref()?;
+        let oss = OssService::new(oss_config.clone());
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .ok()?;
+
+        tracing::info!("Persisting Jimeng video to OSS: task={}", task_id);
+
+        let resp = match client.get(temp_url).send().await {
+            Ok(r) if r.status().is_success() => r,
+            Ok(r) => {
+                tracing::error!("Jimeng video download HTTP {}: task={}", r.status(), task_id);
+                return None;
+            }
+            Err(e) => {
+                tracing::error!("Jimeng video download failed: task={}, err={}", task_id, e);
+                return None;
+            }
+        };
+
+        let video_bytes = match resp.bytes().await {
+            Ok(b) => b.to_vec(),
+            Err(e) => {
+                tracing::error!("Jimeng video read failed: task={}, err={}", task_id, e);
+                return None;
+            }
+        };
+
+        tracing::info!(
+            "Downloaded Jimeng video: task={}, size={}",
+            task_id,
+            video_bytes.len()
+        );
+
+        let filename = format!("jimeng_{}.mp4", task_id);
+        match oss
+            .upload_video(video_bytes, user_id, filename, "video/mp4".to_string())
+            .await
+        {
+            Ok(result) => {
+                tracing::info!(
+                    "Jimeng video persisted to OSS: task={}, url={}",
+                    task_id,
+                    result.image_url
+                );
+                Some(result.image_url)
+            }
+            Err(e) => {
+                tracing::error!("OSS upload failed: task={}, err={}", task_id, e);
+                None
+            }
         }
     }
 
