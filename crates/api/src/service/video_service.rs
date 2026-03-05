@@ -2,7 +2,7 @@ use bigdecimal::BigDecimal;
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::PgConnection;
 
-use crate::dto::jimeng_dto::{JimengResolution, JimengVideoParams};
+use crate::dto::jimeng_dto::{JimengResolution, JimengTaskHandle, JimengVideoParams};
 use crate::dto::laozhang_dto::{CreateVideoFromImageRequest, CreateVideoFromTextRequest};
 use crate::dto::video_dto::{
     CreateVideoRequest, CreateVideoResponse, VideoTaskListResponse, VideoTaskResponse,
@@ -14,7 +14,7 @@ use crate::service::config_service::ConfigService;
 use crate::service::jimeng_client::{is_jimeng_model, JimengClient};
 use crate::service::laozhang_client::LaoZhangClient;
 use glance_mind_db::entity::ai_model::AiModel;
-use glance_mind_db::entity::video::NewVideoGenerationTask;
+use glance_mind_db::entity::video::{NewVideoGenerationTask, VideoGenerationTask};
 
 #[derive(Clone)]
 pub struct VideoService {
@@ -260,11 +260,12 @@ impl VideoService {
         let new_task = NewVideoGenerationTask {
             user_id,
             task_id: task_response.id.clone(),
+            generation_id: None,
             prompt: request.prompt,
             media_id: None,
             status: "pending".to_string(),
-            cost_points: actual_cost.clone(), // Consistent with charging_middleware calculation
-            wallet_transaction_id: None,      // transaction_id created by charging_middleware
+            cost_points: actual_cost.clone(),
+            wallet_transaction_id: None,
             model_id: request.ai_model_id,
             title: request.title,
             orientation: Some(request.orientation.as_str().to_string()),
@@ -286,7 +287,8 @@ impl VideoService {
         })
     }
 
-    /// Get user's video task list
+    /// Get user's video task list.
+    /// For pending Jimeng tasks, lazily polls Volcengine and updates the DB.
     pub async fn get_user_tasks(
         &self,
         user_id: i32,
@@ -302,27 +304,15 @@ impl VideoService {
             VideoRepository::get_by_user_id(&mut conn, user_id, None, page, page_size)
                 .map_err(|_| ApiError::InternalServerError("Failed to query tasks".to_string()))?;
 
-        let task_responses: Vec<VideoTaskResponse> = tasks
-            .into_iter()
-            .map(|task| VideoTaskResponse {
-                id: task.id,
-                task_id: task.task_id,
-                title: task.title,
-                prompt: task.prompt,
-                status: task.status,
-                progress_pct: task.progress_pct,
-                video_url: task.video_url,
-                thumbnail_url: task.thumbnail_url,
-                cost_points: task.cost_points,
-                error_message: task.error_message,
-                created_at: task.created_at,
-                completed_at: task.completed_at,
-                ai_model_name: None, // TODO: Join query for model name
-                orientation: task.orientation,
-                video_seconds: task.video_seconds,
-                video_size: task.video_size,
-            })
-            .collect();
+        let mut task_responses = Vec::with_capacity(tasks.len());
+        for task in tasks {
+            let final_task = if Self::is_jimeng_pending(&task) {
+                self.poll_jimeng_task(&mut conn, &task).await.unwrap_or(task)
+            } else {
+                task
+            };
+            task_responses.push(Self::task_to_response(final_task));
+        }
 
         Ok(VideoTaskListResponse {
             tasks: task_responses,
@@ -332,7 +322,8 @@ impl VideoService {
         })
     }
 
-    /// Get single video task details
+    /// Get single video task details.
+    /// For pending Jimeng tasks, lazily polls Volcengine and updates the DB.
     pub async fn get_user_task(
         &self,
         user_id: i32,
@@ -343,35 +334,23 @@ impl VideoService {
             .get()
             .map_err(|_| ApiError::InternalServerError("Database connection failed".to_string()))?;
 
-        let task = VideoRepository::get_by_task_id(&mut conn, task_id).map_err(|_| {
+        let mut task = VideoRepository::get_by_task_id(&mut conn, task_id).map_err(|_| {
             ApiError::BusinessError(BusinessError::VideoTaskNotFound(task_id.to_string()))
         })?;
 
-        // Validate task belongs to user
         if task.user_id != user_id {
             return Err(ApiError::BusinessError(
                 BusinessError::VideoTaskPermissionDenied,
             ));
         }
 
-        Ok(VideoTaskResponse {
-            id: task.id,
-            task_id: task.task_id,
-            title: task.title,
-            prompt: task.prompt,
-            status: task.status,
-            progress_pct: task.progress_pct,
-            video_url: task.video_url,
-            thumbnail_url: task.thumbnail_url,
-            cost_points: task.cost_points,
-            error_message: task.error_message,
-            created_at: task.created_at,
-            completed_at: task.completed_at,
-            ai_model_name: None, // TODO: Join query for model name
-            orientation: task.orientation,
-            video_seconds: task.video_seconds,
-            video_size: task.video_size,
-        })
+        if Self::is_jimeng_pending(&task) {
+            if let Some(updated) = self.poll_jimeng_task(&mut conn, &task).await {
+                task = updated;
+            }
+        }
+
+        Ok(Self::task_to_response(task))
     }
 
     /// Jimeng video generation path
@@ -407,6 +386,7 @@ impl VideoService {
 
         let handle = jimeng.create_video(params).await?;
         let task_id = handle.task_id;
+        let req_key = handle.req_key;
 
         // Save task to database
         let mut conn = self
@@ -438,6 +418,7 @@ impl VideoService {
         let new_task = NewVideoGenerationTask {
             user_id,
             task_id: task_id.clone(),
+            generation_id: Some(req_key),
             prompt: request.prompt.clone(),
             media_id: None,
             status: "pending".to_string(),
@@ -465,9 +446,6 @@ impl VideoService {
     }
 
     /// Map model_key to Jimeng resolution tier.
-    /// "jimeng-video-3.0-720p"  → V30_720p (default)
-    /// "jimeng-video-3.0-1080p" → V30_1080p
-    /// "jimeng-video-3.0-pro"   → V30Pro
     fn detect_jimeng_resolution(model_key: &str) -> JimengResolution {
         if model_key.contains("pro") {
             JimengResolution::V30Pro
@@ -482,6 +460,93 @@ impl VideoService {
         match request.orientation {
             crate::dto::video_dto::VideoOrientation::Portrait => "9:16".to_string(),
             crate::dto::video_dto::VideoOrientation::Landscape => "16:9".to_string(),
+        }
+    }
+
+    fn is_jimeng_pending(task: &VideoGenerationTask) -> bool {
+        matches!(task.status.as_str(), "pending" | "queued" | "processing")
+            && task.task_id.starts_with("jimeng_")
+    }
+
+    /// Poll Volcengine for a single Jimeng task, update DB if done/failed.
+    /// Returns the updated task row on success, None if polling was skipped or errored.
+    async fn poll_jimeng_task(
+        &self,
+        conn: &mut crate::repository::video_repository::PgConnection,
+        task: &VideoGenerationTask,
+    ) -> Option<VideoGenerationTask> {
+        let jimeng = self.jimeng_client.as_ref()?;
+        let req_key = task.generation_id.as_deref()?;
+
+        let handle = JimengTaskHandle {
+            task_id: task.task_id.clone(),
+            req_key: req_key.to_string(),
+        };
+
+        let result = match jimeng.get_task_status(&handle).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("Jimeng poll failed for task {}: {}", task.task_id, e);
+                return None;
+            }
+        };
+
+        if result.is_done() {
+            let video_url = result.get_video_url();
+            tracing::info!(
+                "Jimeng task {} completed, video_url={:?}",
+                task.task_id,
+                video_url
+            );
+            VideoRepository::mark_as_succeeded(
+                conn,
+                task.id,
+                Some(task.task_id.clone()),
+                video_url,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .ok()
+        } else if result.is_failed() {
+            tracing::warn!("Jimeng task {} failed: {:?}", task.task_id, result.resp_data);
+            VideoRepository::mark_as_failed(
+                conn,
+                task.id,
+                format!("Jimeng generation failed: {}", result.resp_data.unwrap_or_default()),
+            )
+            .ok()
+        } else {
+            let _ = VideoRepository::update_status(
+                conn,
+                task.id,
+                "processing".to_string(),
+                None,
+            );
+            None
+        }
+    }
+
+    fn task_to_response(task: VideoGenerationTask) -> VideoTaskResponse {
+        VideoTaskResponse {
+            id: task.id,
+            task_id: task.task_id,
+            title: task.title,
+            prompt: task.prompt,
+            status: task.status,
+            progress_pct: task.progress_pct,
+            video_url: task.video_url,
+            thumbnail_url: task.thumbnail_url,
+            cost_points: task.cost_points,
+            error_message: task.error_message,
+            created_at: task.created_at,
+            completed_at: task.completed_at,
+            ai_model_name: None,
+            orientation: task.orientation,
+            video_seconds: task.video_seconds,
+            video_size: task.video_size,
         }
     }
 }

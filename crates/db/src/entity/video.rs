@@ -44,6 +44,7 @@ pub struct VideoGenerationTask {
 pub struct NewVideoGenerationTask {
     pub user_id: i32,
     pub task_id: String,
+    pub generation_id: Option<String>,
     pub prompt: Option<String>,
     pub media_id: Option<String>,
     pub status: String,
