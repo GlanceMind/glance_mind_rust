@@ -18,6 +18,7 @@ pub struct UpdateConversationRequest {
 #[derive(Debug, Deserialize)]
 pub struct SendMessageRequest {
     pub content: String,
+    pub model_id: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]

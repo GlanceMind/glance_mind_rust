@@ -27,4 +27,8 @@ impl PlatformService {
     ) -> Result<Vec<Region>, DieselError> {
         self.repo.find_regions_by_platform(platform_id).await
     }
+
+    pub async fn get_all_regions(&self) -> Result<Vec<Region>, DieselError> {
+        self.repo.find_all_regions().await
+    }
 }

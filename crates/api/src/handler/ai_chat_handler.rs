@@ -88,9 +88,10 @@ pub async fn send_message(
     let service = state.ai_chat_service.clone();
     let user_id = user.id;
     let content = req.content.clone();
+    let model_id = req.model_id;
 
     tokio::spawn(async move {
-        if let Err(e) = service.send_message(conv_id, user_id, &content, &state, tx.clone()).await {
+        if let Err(e) = service.send_message(conv_id, user_id, &content, model_id, &state, tx.clone()).await {
             let _ = tx.send(SseEvent::Error { message: e.to_string() }).await;
         }
     });

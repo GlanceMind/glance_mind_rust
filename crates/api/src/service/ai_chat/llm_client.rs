@@ -66,8 +66,7 @@ struct PartialToolCall {
 
 impl LlmClient {
     pub fn new() -> Self {
-        let api_key =
-            env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set in environment");
+        let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set in environment");
         let base_url =
             env::var("OPENAI_BASE_URL").unwrap_or_else(|_| "https://timicc.com/v1".into());
         let model = env::var("AI_CHAT_MODEL").unwrap_or_else(|_| "gpt-5.2".into());
@@ -87,11 +86,13 @@ impl LlmClient {
         messages: &[ChatMessage],
         tools: &[Value],
         tx: mpsc::Sender<LlmStreamEvent>,
+        model_override: Option<&str>,
     ) -> Result<Option<Vec<ToolCall>>, String> {
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+        let model = model_override.unwrap_or(&self.model);
 
         let mut body = serde_json::json!({
-            "model": self.model,
+            "model": model,
             "messages": messages,
             "stream": true,
             "stream_options": { "include_usage": true },
@@ -150,7 +151,9 @@ impl LlmClient {
                             if let Some(usage) = parsed.get("usage") {
                                 let u = LlmUsage {
                                     prompt_tokens: usage["prompt_tokens"].as_i64().unwrap_or(0),
-                                    completion_tokens: usage["completion_tokens"].as_i64().unwrap_or(0),
+                                    completion_tokens: usage["completion_tokens"]
+                                        .as_i64()
+                                        .unwrap_or(0),
                                     total_tokens: usage["total_tokens"].as_i64().unwrap_or(0),
                                 };
                                 if u.total_tokens > 0 {
@@ -199,9 +202,8 @@ impl LlmClient {
                                                 .and_then(|a| a.as_str())
                                                 .unwrap_or("");
 
-                                            let entry = pending_tool_calls
-                                                .entry(index)
-                                                .or_default();
+                                            let entry =
+                                                pending_tool_calls.entry(index).or_default();
                                             if let Some(ref id_val) = id {
                                                 entry.id = id_val.clone();
                                             }
@@ -221,7 +223,8 @@ impl LlmClient {
                                         }
                                     }
 
-                                    let finish = choice.get("finish_reason").and_then(|f| f.as_str());
+                                    let finish =
+                                        choice.get("finish_reason").and_then(|f| f.as_str());
                                     if matches!(finish, Some("stop") | Some("tool_calls")) {
                                         let _ = tx.send(LlmStreamEvent::Done).await;
                                         return Ok(self.assemble_tool_calls(&pending_tool_calls));
@@ -238,7 +241,10 @@ impl LlmClient {
         Ok(self.assemble_tool_calls(&pending_tool_calls))
     }
 
-    fn assemble_tool_calls(&self, pending: &HashMap<usize, PartialToolCall>) -> Option<Vec<ToolCall>> {
+    fn assemble_tool_calls(
+        &self,
+        pending: &HashMap<usize, PartialToolCall>,
+    ) -> Option<Vec<ToolCall>> {
         if pending.is_empty() {
             return None;
         }
@@ -258,7 +264,11 @@ impl LlmClient {
                 }
             })
             .collect();
-        if calls.is_empty() { None } else { Some(calls) }
+        if calls.is_empty() {
+            None
+        } else {
+            Some(calls)
+        }
     }
 
     /// Non-streaming call kept for simple cases (e.g., title generation).
@@ -267,11 +277,13 @@ impl LlmClient {
         &self,
         messages: &[ChatMessage],
         tools: &[Value],
+        model_override: Option<&str>,
     ) -> Result<(ChatMessage, LlmUsage), String> {
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+        let model = model_override.unwrap_or(&self.model);
 
         let mut body = serde_json::json!({
-            "model": self.model,
+            "model": model,
             "messages": messages,
         });
 
@@ -301,11 +313,14 @@ impl LlmClient {
             .await
             .map_err(|e| format!("Failed to parse LLM response: {}", e))?;
 
-        let usage = result.get("usage").map(|u| LlmUsage {
-            prompt_tokens: u["prompt_tokens"].as_i64().unwrap_or(0),
-            completion_tokens: u["completion_tokens"].as_i64().unwrap_or(0),
-            total_tokens: u["total_tokens"].as_i64().unwrap_or(0),
-        }).unwrap_or_default();
+        let usage = result
+            .get("usage")
+            .map(|u| LlmUsage {
+                prompt_tokens: u["prompt_tokens"].as_i64().unwrap_or(0),
+                completion_tokens: u["completion_tokens"].as_i64().unwrap_or(0),
+                total_tokens: u["total_tokens"].as_i64().unwrap_or(0),
+            })
+            .unwrap_or_default();
 
         let choice = result
             .get("choices")

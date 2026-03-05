@@ -195,6 +195,7 @@ impl AiChatService {
         conv_id: i32,
         user_id: i32,
         content: &str,
+        model_id: Option<i32>,
         state: &UserState,
         tx: mpsc::Sender<SseEvent>,
     ) -> Result<(), ApiError> {
@@ -204,6 +205,21 @@ impl AiChatService {
                 MAX_MESSAGE_LENGTH
             )));
         }
+
+        let model_key: Option<String> = if let Some(mid) = model_id {
+            let model = state.config_service.get_ai_model_by_id(mid).await
+                .map_err(|e| ApiError::DatabaseError(e.to_string()))?
+                .ok_or_else(|| ApiError::BadRequest(format!("AI model id={} not found", mid)))?;
+            if !model.is_active {
+                return Err(ApiError::BadRequest(format!("AI model '{}' is not active", model.name)));
+            }
+            if model.model_type != "chat" {
+                return Err(ApiError::BadRequest(format!("AI model '{}' is not a chat model", model.name)));
+            }
+            Some(model.model_key)
+        } else {
+            None
+        };
 
         self.repo.get_conversation(conv_id, user_id)?
             .ok_or(ApiError::NotFound("Conversation not found".into()))?;
@@ -229,9 +245,10 @@ impl AiChatService {
             let llm = self.llm.clone();
             let msgs_clone = messages.clone();
             let tools_clone = tools.clone();
+            let model_override = model_key.clone();
 
             let stream_handle = tokio::spawn(async move {
-                llm.chat_stream(&msgs_clone, &tools_clone, stream_tx).await
+                llm.chat_stream(&msgs_clone, &tools_clone, stream_tx, model_override.as_deref()).await
             });
 
             let mut text_content = String::new();
