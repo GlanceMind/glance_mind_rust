@@ -547,6 +547,10 @@ impl VideoService {
         }
     }
 
+    fn is_temporary_cdn_url(url: &str) -> bool {
+        url.contains("vvecloud") || url.contains("byted.org") || url.contains("volcvod.com")
+    }
+
     /// Download video from temporary CDN URL and re-upload to Aliyun OSS.
     /// Returns the permanent OSS URL, or None if OSS is not configured or upload fails.
     async fn persist_video_to_oss(
@@ -555,7 +559,21 @@ impl VideoService {
         user_id: i32,
         task_id: &str,
     ) -> Option<String> {
-        let oss_config = self.oss_config.as_ref()?;
+        if !Self::is_temporary_cdn_url(temp_url) {
+            return Some(temp_url.to_string());
+        }
+
+        let oss_config = match self.oss_config.as_ref() {
+            Some(c) => c,
+            None => {
+                tracing::error!(
+                    "⚠ TEMPORARY CDN URL will expire in ~1h but OSS is NOT configured! \
+                     Set OSS_ACCESS_KEY_ID/OSS_ACCESS_KEY_SECRET/OSS_ENDPOINT/OSS_BUCKET. \
+                     task={}", task_id
+                );
+                return None;
+            }
+        };
         let oss = OssService::new(oss_config.clone());
 
         let client = reqwest::Client::builder()
