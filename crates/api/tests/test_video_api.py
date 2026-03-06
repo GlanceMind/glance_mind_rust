@@ -854,7 +854,7 @@ class TestJimengMockDirect:
         resp = requests.post(
             f"{self.JIMENG_BASE_URL}/?Action=CVSync2AsyncSubmitTask&Version=2024-06-06",
             json={
-                "req_key": "jimeng_i2v_fl_v30",
+                "req_key": "jimeng_i2v_first_tail_v30",
                 "prompt": "Smooth transition",
                 "frames": 121,
                 "binary_data_base64": [img_b64, img_b64],
@@ -873,7 +873,7 @@ class TestJimengMockDirect:
         resp = requests.post(
             f"{self.JIMENG_BASE_URL}/?Action=CVSync2AsyncSubmitTask&Version=2024-06-06",
             json={
-                "req_key": "jimeng_i2v_fl_v30",
+                "req_key": "jimeng_i2v_first_tail_v30",
                 "prompt": "Missing images",
                 "frames": 121,
                 "binary_data_base64": [base64.b64encode(TINY_PNG).decode()],
@@ -883,8 +883,8 @@ class TestJimengMockDirect:
         assert resp.status_code == 200
         assert resp.json()["code"] == 40003
 
-    def test_jimeng_mock_submit_camera_motion(self):
-        """Submit camera motion task."""
+    def test_jimeng_mock_submit_i2v_fl_1080p(self):
+        """Submit image-to-video (first+last) 1080p task."""
         if not self._is_jimeng_mock_available():
             pytest.skip("Jimeng mock not available")
 
@@ -892,11 +892,10 @@ class TestJimengMockDirect:
         resp = requests.post(
             f"{self.JIMENG_BASE_URL}/?Action=CVSync2AsyncSubmitTask&Version=2024-06-06",
             json={
-                "req_key": "jimeng_i2v_recamera_v30",
-                "prompt": "Camera pan left",
+                "req_key": "jimeng_i2v_first_tail_v30_1080p",
+                "prompt": "1080p first-last transition",
                 "frames": 121,
-                "binary_data_base64": [img_b64],
-                "camera_config": {"type": "pan_left", "speed": 1.0},
+                "binary_data_base64": [img_b64, img_b64],
                 "seed": -1,
             },
             headers={"Authorization": "HMAC-SHA256 Credential=test, SignedHeaders=x-date, Signature=mock"},

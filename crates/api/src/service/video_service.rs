@@ -123,9 +123,9 @@ impl VideoService {
             ("sora-2".to_string(), Some("Sora 2".to_string()))
         };
 
-        // Validate model supports dual image
+        // Validate model supports dual image (FL models and Jimeng models both support it)
         if is_dual_image {
-            let model_supports_dual = model_key.contains("-fl");
+            let model_supports_dual = model_key.contains("-fl") || is_jimeng_model(&model_key);
             if !model_supports_dual {
                 return Err(ApiError::BusinessError(
                     BusinessError::ModelNotSupportDualImage,
@@ -362,7 +362,7 @@ impl VideoService {
         Ok(Self::task_to_response(task))
     }
 
-    /// Jimeng video generation path
+    /// Jimeng video generation path (supports T2V, I2V first-frame, and I2V first-last-frame)
     #[allow(clippy::too_many_arguments)]
     async fn create_video_jimeng(
         &self,
@@ -370,7 +370,7 @@ impl VideoService {
         model_key: &str,
         request: &CreateVideoRequest,
         image_data: Option<Vec<u8>>,
-        _end_frame_data: Option<Vec<u8>>,
+        end_frame_data: Option<Vec<u8>>,
         ai_model_info: &Option<AiModel>,
     ) -> Result<CreateVideoResponse, ApiError> {
         let jimeng = self.jimeng_client.as_ref().ok_or_else(|| {
@@ -379,18 +379,25 @@ impl VideoService {
 
         let resolution = Self::detect_jimeng_resolution(model_key);
         let seconds: i32 = request.seconds.parse().unwrap_or(5);
+        let has_image = image_data.is_some();
 
         let params = JimengVideoParams {
             prompt: request.prompt.clone().unwrap_or_default(),
             resolution,
             seconds,
-            aspect_ratio: if image_data.is_none() { Some(self.detect_aspect_ratio(request)) } else { None },
+            aspect_ratio: if !has_image { Some(self.detect_aspect_ratio(request)) } else { None },
             image_base64: image_data.map(|d| JimengClient::encode_image(&d)),
+            end_image_base64: end_frame_data.map(|d| JimengClient::encode_image(&d)),
         };
 
+        let mode_label = match (&params.image_base64, &params.end_image_base64) {
+            (Some(_), Some(_)) => "first-last-frame",
+            (Some(_), None) => "first-frame",
+            _ => "text-to-video",
+        };
         tracing::info!(
-            "Jimeng video: model={}, resolution={}, seconds={}, has_image={}",
-            model_key, resolution.label(), seconds, params.image_base64.is_some()
+            "Jimeng video: model={}, resolution={}, seconds={}, mode={}",
+            model_key, resolution.label(), seconds, mode_label
         );
 
         let handle = jimeng.create_video(params).await?;

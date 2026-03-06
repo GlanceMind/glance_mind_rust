@@ -11,6 +11,8 @@ pub enum JimengVideoMode {
     TextToVideo,
     /// Image-to-Video (single image as first frame)
     ImageFirstFrame,
+    /// Image-to-Video (two images: first frame + last frame)
+    ImageFirstLastFrame,
 }
 
 /// Jimeng video resolution tier — maps to the 3 opened products
@@ -36,22 +38,26 @@ impl JimengResolution {
 
 /// Build the Volcengine `req_key` from mode + resolution.
 ///
-/// | Product     | T2V                     | I2V                          |
-/// |-------------|-------------------------|------------------------------|
-/// | 3.0 720P    | jimeng_t2v_v30          | jimeng_i2v_first_v30         |
-/// | 3.0 1080P   | jimeng_t2v_v30_1080p    | jimeng_i2v_first_v30_1080p   |
-/// | 3.0 Pro     | jimeng_vgfm_t2v_l20     | jimeng_vgfm_i2v_l20          |
-pub fn build_req_key(mode: JimengVideoMode, resolution: JimengResolution) -> String {
-    match (mode, resolution) {
+/// | Product     | T2V                     | I2V First Frame              | I2V First-Last Frame              |
+/// |-------------|-------------------------|------------------------------|-----------------------------------|
+/// | 3.0 720P    | jimeng_t2v_v30          | jimeng_i2v_first_v30         | jimeng_i2v_first_tail_v30         |
+/// | 3.0 1080P   | jimeng_t2v_v30_1080p    | jimeng_i2v_first_v30_1080p   | jimeng_i2v_first_tail_v30_1080p   |
+/// | 3.0 Pro     | jimeng_vgfm_t2v_l20     | jimeng_vgfm_i2v_l20          | N/A (not supported)               |
+pub fn build_req_key(mode: JimengVideoMode, resolution: JimengResolution) -> Option<String> {
+    let key = match (mode, resolution) {
         // 3.0 Pro uses a completely different naming scheme
-        (JimengVideoMode::TextToVideo, JimengResolution::V30Pro) => "jimeng_vgfm_t2v_l20".into(),
-        (JimengVideoMode::ImageFirstFrame, JimengResolution::V30Pro) => "jimeng_vgfm_i2v_l20".into(),
+        (JimengVideoMode::TextToVideo, JimengResolution::V30Pro) => "jimeng_vgfm_t2v_l20",
+        (JimengVideoMode::ImageFirstFrame, JimengResolution::V30Pro) => "jimeng_vgfm_i2v_l20",
+        (JimengVideoMode::ImageFirstLastFrame, JimengResolution::V30Pro) => return None,
         // 3.0 720P / 1080P follow the same pattern with suffix
-        (JimengVideoMode::TextToVideo, JimengResolution::V30_720p) => "jimeng_t2v_v30".into(),
-        (JimengVideoMode::TextToVideo, JimengResolution::V30_1080p) => "jimeng_t2v_v30_1080p".into(),
-        (JimengVideoMode::ImageFirstFrame, JimengResolution::V30_720p) => "jimeng_i2v_first_v30".into(),
-        (JimengVideoMode::ImageFirstFrame, JimengResolution::V30_1080p) => "jimeng_i2v_first_v30_1080p".into(),
-    }
+        (JimengVideoMode::TextToVideo, JimengResolution::V30_720p) => "jimeng_t2v_v30",
+        (JimengVideoMode::TextToVideo, JimengResolution::V30_1080p) => "jimeng_t2v_v30_1080p",
+        (JimengVideoMode::ImageFirstFrame, JimengResolution::V30_720p) => "jimeng_i2v_first_v30",
+        (JimengVideoMode::ImageFirstFrame, JimengResolution::V30_1080p) => "jimeng_i2v_first_v30_1080p",
+        (JimengVideoMode::ImageFirstLastFrame, JimengResolution::V30_720p) => "jimeng_i2v_first_tail_v30",
+        (JimengVideoMode::ImageFirstLastFrame, JimengResolution::V30_1080p) => "jimeng_i2v_first_tail_v30_1080p",
+    };
+    Some(key.into())
 }
 
 // =============================================================================
@@ -67,8 +73,10 @@ pub struct JimengVideoParams {
     pub seconds: i32,
     /// Aspect ratio (only for T2V): "16:9", "9:16", "1:1", etc.
     pub aspect_ratio: Option<String>,
-    /// Base64-encoded image (only for I2V)
+    /// Base64-encoded first frame image (for I2V first-frame and first-last-frame)
     pub image_base64: Option<String>,
+    /// Base64-encoded last frame image (only for I2V first-last-frame)
+    pub end_image_base64: Option<String>,
 }
 
 // =============================================================================
@@ -203,16 +211,23 @@ mod tests {
 
     #[test]
     fn test_build_req_key_t2v() {
-        assert_eq!(build_req_key(JimengVideoMode::TextToVideo, JimengResolution::V30_720p), "jimeng_t2v_v30");
-        assert_eq!(build_req_key(JimengVideoMode::TextToVideo, JimengResolution::V30_1080p), "jimeng_t2v_v30_1080p");
-        assert_eq!(build_req_key(JimengVideoMode::TextToVideo, JimengResolution::V30Pro), "jimeng_vgfm_t2v_l20");
+        assert_eq!(build_req_key(JimengVideoMode::TextToVideo, JimengResolution::V30_720p).unwrap(), "jimeng_t2v_v30");
+        assert_eq!(build_req_key(JimengVideoMode::TextToVideo, JimengResolution::V30_1080p).unwrap(), "jimeng_t2v_v30_1080p");
+        assert_eq!(build_req_key(JimengVideoMode::TextToVideo, JimengResolution::V30Pro).unwrap(), "jimeng_vgfm_t2v_l20");
     }
 
     #[test]
     fn test_build_req_key_i2v() {
-        assert_eq!(build_req_key(JimengVideoMode::ImageFirstFrame, JimengResolution::V30_720p), "jimeng_i2v_first_v30");
-        assert_eq!(build_req_key(JimengVideoMode::ImageFirstFrame, JimengResolution::V30_1080p), "jimeng_i2v_first_v30_1080p");
-        assert_eq!(build_req_key(JimengVideoMode::ImageFirstFrame, JimengResolution::V30Pro), "jimeng_vgfm_i2v_l20");
+        assert_eq!(build_req_key(JimengVideoMode::ImageFirstFrame, JimengResolution::V30_720p).unwrap(), "jimeng_i2v_first_v30");
+        assert_eq!(build_req_key(JimengVideoMode::ImageFirstFrame, JimengResolution::V30_1080p).unwrap(), "jimeng_i2v_first_v30_1080p");
+        assert_eq!(build_req_key(JimengVideoMode::ImageFirstFrame, JimengResolution::V30Pro).unwrap(), "jimeng_vgfm_i2v_l20");
+    }
+
+    #[test]
+    fn test_build_req_key_i2v_first_last() {
+        assert_eq!(build_req_key(JimengVideoMode::ImageFirstLastFrame, JimengResolution::V30_720p).unwrap(), "jimeng_i2v_first_tail_v30");
+        assert_eq!(build_req_key(JimengVideoMode::ImageFirstLastFrame, JimengResolution::V30_1080p).unwrap(), "jimeng_i2v_first_tail_v30_1080p");
+        assert!(build_req_key(JimengVideoMode::ImageFirstLastFrame, JimengResolution::V30Pro).is_none(), "Pro does not support first-last frame");
     }
 
     #[test]

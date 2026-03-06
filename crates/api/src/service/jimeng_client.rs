@@ -68,15 +68,33 @@ impl JimengClient {
         self.validate_seconds(params.seconds)?;
         if let Some(ref ar) = params.aspect_ratio { self.validate_aspect_ratio(ar)?; }
 
-        let mode = if params.image_base64.is_some() { JimengVideoMode::ImageFirstFrame } else { JimengVideoMode::TextToVideo };
-        let req_key = build_req_key(mode, params.resolution);
+        let mode = match (&params.image_base64, &params.end_image_base64) {
+            (Some(_), Some(_)) => JimengVideoMode::ImageFirstLastFrame,
+            (Some(_), None) => JimengVideoMode::ImageFirstFrame,
+            _ => JimengVideoMode::TextToVideo,
+        };
+        let req_key = build_req_key(mode, params.resolution).ok_or_else(|| {
+            ApiError::InfrastructureError(InfrastructureError::ExternalApiRequestFailed(
+                format!("{:?} mode is not supported for {:?} resolution", mode, params.resolution)
+            ))
+        })?;
+
+        let binary_data_base64 = match mode {
+            JimengVideoMode::ImageFirstLastFrame => {
+                Some(vec![params.image_base64.unwrap(), params.end_image_base64.unwrap()])
+            }
+            JimengVideoMode::ImageFirstFrame => {
+                Some(vec![params.image_base64.unwrap()])
+            }
+            JimengVideoMode::TextToVideo => None,
+        };
 
         let req = JimengSubmitRequest {
             req_key,
             prompt: params.prompt,
             frames: JimengSubmitRequest::seconds_to_frames(params.seconds),
-            aspect_ratio: params.aspect_ratio,
-            binary_data_base64: params.image_base64.map(|b| vec![b]),
+            aspect_ratio: if mode == JimengVideoMode::TextToVideo { params.aspect_ratio } else { None },
+            binary_data_base64,
             seed: Some(-1),
         };
         self.submit_with_retry(req).await
@@ -90,6 +108,7 @@ impl JimengClient {
             prompt, resolution, seconds,
             aspect_ratio: Some(aspect_ratio),
             image_base64: None,
+            end_image_base64: None,
         }).await
     }
 
@@ -101,6 +120,19 @@ impl JimengClient {
             prompt, resolution, seconds,
             aspect_ratio: None,
             image_base64: Some(image_base64),
+            end_image_base64: None,
+        }).await
+    }
+
+    /// Convenience: Image-to-Video (first + last frame)
+    pub async fn create_image_first_last_video(
+        &self, prompt: String, first_image_base64: String, last_image_base64: String, seconds: i32, resolution: JimengResolution,
+    ) -> Result<JimengTaskHandle, ApiError> {
+        self.create_video(JimengVideoParams {
+            prompt, resolution, seconds,
+            aspect_ratio: None,
+            image_base64: Some(first_image_base64),
+            end_image_base64: Some(last_image_base64),
         }).await
     }
 
@@ -335,16 +367,20 @@ mod tests {
     }
 
     /// ================================================================
-    /// Full test: 3 products × 2 modes = 6 combinations, sequential
+    /// Full test: 3 products × 3 modes = 9 combinations, sequential
+    /// (Pro does not support first-last-frame, so effectively 8)
     /// ================================================================
     ///
     /// Tests every combination of resolution and mode:
     ///   1. 3.0 720P  — T2V
     ///   2. 3.0 720P  — I2V First Frame
-    ///   3. 3.0 1080P — T2V
-    ///   4. 3.0 1080P — I2V First Frame
-    ///   5. 3.0 Pro   — T2V
-    ///   6. 3.0 Pro   — I2V First Frame
+    ///   3. 3.0 720P  — I2V First-Last Frame
+    ///   4. 3.0 1080P — T2V
+    ///   5. 3.0 1080P — I2V First Frame
+    ///   6. 3.0 1080P — I2V First-Last Frame
+    ///   7. 3.0 Pro   — T2V
+    ///   8. 3.0 Pro   — I2V First Frame
+    ///   (Pro first-last frame skipped — not supported)
     ///
     /// Each: submit → poll every 5s → verify video URL.
     /// 5s cooldown between each test.
@@ -357,34 +393,56 @@ mod tests {
 
         let client = make_client();
         let img_b64 = JimengClient::encode_image(&test_bmp_256());
+        let img_b64_2 = img_b64.clone();
 
         println!("\n╔════════════════════════════════════════════════════════╗");
         println!("║  Jimeng AI Video 3.0 — Full Product × Mode Test       ║");
-        println!("║  3 products × 2 modes = 6 tests (sequential)          ║");
+        println!("║  3 products × 3 modes (Pro skips FL) = 8 tests        ║");
         println!("╚════════════════════════════════════════════════════════╝\n");
 
         struct R { label: String, req_key: String, task_id: String, ok: bool, url: String, err: String }
         let mut results: Vec<R> = Vec::new();
         let mut idx = 0;
 
-        let modes: &[(JimengVideoMode, &str, Option<&str>)] = &[
-            (JimengVideoMode::TextToVideo,    "春天的樱花树下，花瓣随风飘落，阳光透过树枝洒下斑驳的光影", None),
-            (JimengVideoMode::ImageFirstFrame, "让画面中的场景缓缓动起来，微风吹过树叶轻轻摇摆",      Some(&img_b64)),
+        // (mode, prompt, first_image, end_image)
+        let modes: &[(JimengVideoMode, &str, Option<&str>, Option<&str>)] = &[
+            (JimengVideoMode::TextToVideo,         "春天的樱花树下，花瓣随风飘落，阳光透过树枝洒下斑驳的光影", None,             None),
+            (JimengVideoMode::ImageFirstFrame,      "让画面中的场景缓缓动起来，微风吹过树叶轻轻摇摆",      Some(&img_b64),   None),
+            (JimengVideoMode::ImageFirstLastFrame,  "从第一帧画面平滑过渡到最后一帧，中间自然衔接",         Some(&img_b64),   Some(&img_b64_2)),
         ];
 
+        let total_tests: usize = ALL_RESOLUTIONS.iter().map(|res| {
+            modes.iter().filter(|(m, ..)| build_req_key(*m, *res).is_some()).count()
+        }).sum();
+
         for res in ALL_RESOLUTIONS {
-            for (mode, prompt, img) in modes {
+            for (mode, prompt, img, end_img) in modes {
+                let req_key = match build_req_key(*mode, *res) {
+                    Some(k) => k,
+                    None => {
+                        let mode_label = match mode {
+                            JimengVideoMode::TextToVideo => "T2V",
+                            JimengVideoMode::ImageFirstFrame => "I2V",
+                            JimengVideoMode::ImageFirstLastFrame => "I2V-FL",
+                        };
+                        println!("━━━ [skip] {} {} — not supported ━━━\n", res.label(), mode_label);
+                        continue;
+                    }
+                };
                 idx += 1;
-                let req_key = build_req_key(*mode, *res);
-                let mode_label = match mode { JimengVideoMode::TextToVideo => "T2V", JimengVideoMode::ImageFirstFrame => "I2V" };
+                let mode_label = match mode {
+                    JimengVideoMode::TextToVideo => "T2V",
+                    JimengVideoMode::ImageFirstFrame => "I2V",
+                    JimengVideoMode::ImageFirstLastFrame => "I2V-FL",
+                };
                 let label = format!("{} {}", res.label(), mode_label);
 
-                println!("━━━ [{}/6] {} (req_key={}) ━━━", idx, label, req_key);
+                println!("━━━ [{}/{}] {} (req_key={}) ━━━", idx, total_tests, label, req_key);
 
-                let handle_result = if let Some(ib) = img {
-                    client.create_image_to_video(prompt.to_string(), ib.to_string(), 5, *res).await
-                } else {
-                    client.create_text_to_video(prompt.to_string(), "16:9".into(), 5, *res).await
+                let handle_result = match (*img, *end_img) {
+                    (Some(ib), Some(eb)) => client.create_image_first_last_video(prompt.to_string(), ib.to_string(), eb.to_string(), 5, *res).await,
+                    (Some(ib), None)     => client.create_image_to_video(prompt.to_string(), ib.to_string(), 5, *res).await,
+                    _                    => client.create_text_to_video(prompt.to_string(), "16:9".into(), 5, *res).await,
                 };
 
                 match handle_result {
@@ -415,7 +473,7 @@ mod tests {
                     }
                 }
 
-                if idx < 6 {
+                if idx < total_tests {
                     println!("  (cooldown 5s...)\n");
                     tokio::time::sleep(Duration::from_secs(5)).await;
                 }
@@ -432,7 +490,7 @@ mod tests {
         for r in &results {
             let icon = if r.ok { "✓" } else { "✗" };
             let tid = if r.task_id.is_empty() { "N/A".to_string() } else { r.task_id.chars().take(12).collect() };
-            println!("║ {} {:<18} req_key={:<30} task={}", icon, r.label, r.req_key, tid);
+            println!("║ {} {:<18} req_key={:<35} task={}", icon, r.label, r.req_key, tid);
             if !r.url.is_empty() { println!("║   video: {:.60}", r.url); }
             if !r.err.is_empty() { println!("║   error: {}", r.err); }
         }
@@ -440,7 +498,6 @@ mod tests {
         println!("║  PASS: {} / {}    FAIL: {}                                  ║", pass, results.len(), fail);
         println!("╚════════════════════════════════════════════════════════╝");
 
-        // Separate real failures (SDK bugs) from permission issues (50400)
         let perm_denied = results.iter().filter(|r| !r.ok && r.err.contains("50400")).count();
         let real_fail = fail - perm_denied;
 
