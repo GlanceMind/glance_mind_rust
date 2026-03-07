@@ -85,9 +85,9 @@ pub struct JimengVideoParams {
 
 /// Volcengine API submit request body
 ///
-/// Images can be provided via either `binary_data_base64` (base64 data) or `image_urls` (URLs).
-/// When both are set, the API uses `binary_data_base64`; `image_urls` is preferred when
-/// the caller already has URLs (avoids download + re-encode overhead).
+/// Images MUST be provided via `binary_data_base64` (base64-encoded image data).
+/// Note: `image_urls` is NOT supported by the direct Volcengine API — it is silently
+/// ignored, causing I2V requests to degrade to T2V. Only use `binary_data_base64`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JimengSubmitRequest {
     pub req_key: String,
@@ -97,8 +97,6 @@ pub struct JimengSubmitRequest {
     pub aspect_ratio: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub binary_data_base64: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub image_urls: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seed: Option<i64>,
 }

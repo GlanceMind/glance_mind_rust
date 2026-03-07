@@ -95,7 +95,6 @@ impl JimengClient {
             frames: JimengSubmitRequest::seconds_to_frames(params.seconds),
             aspect_ratio: if mode == JimengVideoMode::TextToVideo { params.aspect_ratio } else { None },
             binary_data_base64,
-            image_urls: None,
             seed: Some(-1),
         };
         self.submit_with_retry(req).await
