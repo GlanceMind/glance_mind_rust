@@ -35,10 +35,10 @@ impl Default for RetryConfig {
 
 /// Jimeng AI Video 3.0 SDK Client
 ///
-/// Supports 3 products × 2 modes = 6 req_keys:
-///   - 3.0 720P:  `jimeng_t2v_v30`          / `jimeng_i2v_first_v30`
-///   - 3.0 1080P: `jimeng_t2v_v30_1080p`    / `jimeng_i2v_first_v30_1080p`
-///   - 3.0 Pro:   `jimeng_t2v_v30_pro`      / `jimeng_i2v_first_v30_pro`
+/// Supports 3 products × 3 modes (T2V, I2V first, I2V first-last):
+///   - 3.0 720P:  `jimeng_t2v_v30`       / `jimeng_i2v_first_v30`       / `jimeng_i2v_first_tail_v30`
+///   - 3.0 1080P: `jimeng_t2v_v30_1080p` / `jimeng_i2v_first_v30_1080`  / `jimeng_i2v_first_tail_v30_1080`
+///   - 3.0 Pro:   `jimeng_vgfm_t2v_l20`  / `jimeng_vgfm_i2v_l20`       / N/A
 #[derive(Clone)]
 pub struct JimengClient {
     client: Client,
