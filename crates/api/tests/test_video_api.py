@@ -892,7 +892,7 @@ class TestJimengMockDirect:
         resp = requests.post(
             f"{self.JIMENG_BASE_URL}/?Action=CVSync2AsyncSubmitTask&Version=2024-06-06",
             json={
-                "req_key": "jimeng_i2v_first_tail_v30_1080p",
+                "req_key": "jimeng_i2v_first_tail_v30_1080",
                 "prompt": "1080p first-last transition",
                 "frames": 121,
                 "binary_data_base64": [img_b64, img_b64],

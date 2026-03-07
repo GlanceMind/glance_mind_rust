@@ -38,24 +38,24 @@ impl JimengResolution {
 
 /// Build the Volcengine `req_key` from mode + resolution.
 ///
+/// Per Volcengine docs: T2V uses `_1080p` suffix, I2V uses `_1080` (no 'p')
+///
 /// | Product     | T2V                     | I2V First Frame              | I2V First-Last Frame              |
 /// |-------------|-------------------------|------------------------------|-----------------------------------|
 /// | 3.0 720P    | jimeng_t2v_v30          | jimeng_i2v_first_v30         | jimeng_i2v_first_tail_v30         |
-/// | 3.0 1080P   | jimeng_t2v_v30_1080p    | jimeng_i2v_first_v30_1080p   | jimeng_i2v_first_tail_v30_1080p   |
+/// | 3.0 1080P   | jimeng_t2v_v30_1080p    | jimeng_i2v_first_v30_1080    | jimeng_i2v_first_tail_v30_1080    |
 /// | 3.0 Pro     | jimeng_vgfm_t2v_l20     | jimeng_vgfm_i2v_l20          | N/A (not supported)               |
 pub fn build_req_key(mode: JimengVideoMode, resolution: JimengResolution) -> Option<String> {
     let key = match (mode, resolution) {
-        // 3.0 Pro uses a completely different naming scheme
         (JimengVideoMode::TextToVideo, JimengResolution::V30Pro) => "jimeng_vgfm_t2v_l20",
         (JimengVideoMode::ImageFirstFrame, JimengResolution::V30Pro) => "jimeng_vgfm_i2v_l20",
         (JimengVideoMode::ImageFirstLastFrame, JimengResolution::V30Pro) => return None,
-        // 3.0 720P / 1080P follow the same pattern with suffix
         (JimengVideoMode::TextToVideo, JimengResolution::V30_720p) => "jimeng_t2v_v30",
         (JimengVideoMode::TextToVideo, JimengResolution::V30_1080p) => "jimeng_t2v_v30_1080p",
         (JimengVideoMode::ImageFirstFrame, JimengResolution::V30_720p) => "jimeng_i2v_first_v30",
-        (JimengVideoMode::ImageFirstFrame, JimengResolution::V30_1080p) => "jimeng_i2v_first_v30_1080p",
+        (JimengVideoMode::ImageFirstFrame, JimengResolution::V30_1080p) => "jimeng_i2v_first_v30_1080",
         (JimengVideoMode::ImageFirstLastFrame, JimengResolution::V30_720p) => "jimeng_i2v_first_tail_v30",
-        (JimengVideoMode::ImageFirstLastFrame, JimengResolution::V30_1080p) => "jimeng_i2v_first_tail_v30_1080p",
+        (JimengVideoMode::ImageFirstLastFrame, JimengResolution::V30_1080p) => "jimeng_i2v_first_tail_v30_1080",
     };
     Some(key.into())
 }
@@ -84,6 +84,10 @@ pub struct JimengVideoParams {
 // =============================================================================
 
 /// Volcengine API submit request body
+///
+/// Images can be provided via either `binary_data_base64` (base64 data) or `image_urls` (URLs).
+/// When both are set, the API uses `binary_data_base64`; `image_urls` is preferred when
+/// the caller already has URLs (avoids download + re-encode overhead).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JimengSubmitRequest {
     pub req_key: String,
@@ -93,6 +97,8 @@ pub struct JimengSubmitRequest {
     pub aspect_ratio: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub binary_data_base64: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_urls: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seed: Option<i64>,
 }
@@ -219,14 +225,14 @@ mod tests {
     #[test]
     fn test_build_req_key_i2v() {
         assert_eq!(build_req_key(JimengVideoMode::ImageFirstFrame, JimengResolution::V30_720p).unwrap(), "jimeng_i2v_first_v30");
-        assert_eq!(build_req_key(JimengVideoMode::ImageFirstFrame, JimengResolution::V30_1080p).unwrap(), "jimeng_i2v_first_v30_1080p");
+        assert_eq!(build_req_key(JimengVideoMode::ImageFirstFrame, JimengResolution::V30_1080p).unwrap(), "jimeng_i2v_first_v30_1080");
         assert_eq!(build_req_key(JimengVideoMode::ImageFirstFrame, JimengResolution::V30Pro).unwrap(), "jimeng_vgfm_i2v_l20");
     }
 
     #[test]
     fn test_build_req_key_i2v_first_last() {
         assert_eq!(build_req_key(JimengVideoMode::ImageFirstLastFrame, JimengResolution::V30_720p).unwrap(), "jimeng_i2v_first_tail_v30");
-        assert_eq!(build_req_key(JimengVideoMode::ImageFirstLastFrame, JimengResolution::V30_1080p).unwrap(), "jimeng_i2v_first_tail_v30_1080p");
+        assert_eq!(build_req_key(JimengVideoMode::ImageFirstLastFrame, JimengResolution::V30_1080p).unwrap(), "jimeng_i2v_first_tail_v30_1080");
         assert!(build_req_key(JimengVideoMode::ImageFirstLastFrame, JimengResolution::V30Pro).is_none(), "Pro does not support first-last frame");
     }
 

@@ -80,8 +80,8 @@ impl VideoService {
             ));
         }
 
-        // Validate dual image mode completeness
-        if start_frame_data.is_some() != end_frame_data.is_some() {
+        // Validate: end_frame without start_frame is invalid
+        if end_frame_data.is_some() && start_frame_data.is_none() {
             return Err(ApiError::BusinessError(
                 BusinessError::DualImageRequiresStartAndEnd,
             ));

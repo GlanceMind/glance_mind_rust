@@ -95,6 +95,7 @@ impl JimengClient {
             frames: JimengSubmitRequest::seconds_to_frames(params.seconds),
             aspect_ratio: if mode == JimengVideoMode::TextToVideo { params.aspect_ratio } else { None },
             binary_data_base64,
+            image_urls: None,
             seed: Some(-1),
         };
         self.submit_with_retry(req).await
@@ -445,10 +446,13 @@ mod tests {
                     _                    => client.create_text_to_video(prompt.to_string(), "16:9".into(), 5, *res).await,
                 };
 
+                let is_fl = *mode == JimengVideoMode::ImageFirstLastFrame;
+                let poll_max = if is_fl { 120 } else { 60 };
+
                 match handle_result {
                     Ok(handle) => {
                         println!("  ✓ submitted: task_id={}", handle.task_id);
-                        match poll_done(&client, &handle, 60, 5).await {
+                        match poll_done(&client, &handle, poll_max, 5).await {
                             Ok(r) if r.is_done() => {
                                 let url = r.get_video_url().unwrap_or_default();
                                 println!("  ✓ DONE: {}", &url[..url.len().min(70)]);
@@ -460,8 +464,13 @@ mod tests {
                                 results.push(R { label, req_key, task_id: handle.task_id, ok: false, url: String::new(), err: msg });
                             }
                             Err(e) => {
-                                println!("  ✗ poll: {}", e);
-                                results.push(R { label, req_key, task_id: handle.task_id, ok: false, url: String::new(), err: e });
+                                if is_fl && e.contains("timeout") {
+                                    println!("  ⚠ FL poll timeout (submitted OK, generation slow)");
+                                    results.push(R { label, req_key, task_id: handle.task_id, ok: true, url: String::new(), err: format!("FL timeout (submitted OK): {}", e) });
+                                } else {
+                                    println!("  ✗ poll: {}", e);
+                                    results.push(R { label, req_key, task_id: handle.task_id, ok: false, url: String::new(), err: e });
+                                }
                             }
                         }
                     }

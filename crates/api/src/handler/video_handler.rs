@@ -124,8 +124,8 @@ pub async fn create_video(
         }
     }
 
-    // Validate required fields
-    if prompt.is_none() && image_data.is_none() {
+    // Validate required fields: need at least a prompt or any image
+    if prompt.is_none() && image_data.is_none() && start_frame_data.is_none() {
         return Err(ApiError::BusinessError(
             BusinessError::PromptOrImageRequired,
         ));
