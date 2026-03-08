@@ -83,7 +83,7 @@ jobs:
   # ==============================================================
   migrations:
     name: Run Database Migrations
-    runs-on: [self-hosted, Linux]
+    runs-on: [self-hosted, Linux, backend]
     environment: prod
     needs: check-changes
     if: needs.check-changes.outputs.db_changed == 'true' || github.event.inputs.run_migrations == 'true'
