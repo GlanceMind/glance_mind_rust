@@ -44,11 +44,6 @@ on:
       - "Cargo.lock"
       - ".github/workflows/deploy-api.yml"
 
-# 并发控制：防止同时触发多个部署
-concurrency:
-  group: deploy-api-${{ github.ref }}
-  cancel-in-progress: true # 新部署到来时取消旧任务，避免一直排队
-
 env:
   IMAGE_NAME: aihub_backend
   # Cache directory for BuildKit on self-hosted runner
@@ -132,6 +127,11 @@ jobs:
     needs: [check-changes, migrations]
     # 即使 migrations 被跳过也继续执行
     if: always() && (needs.migrations.result == 'success' || needs.migrations.result == 'skipped')
+    # 仅对真正的部署动作做并发控制：
+    # 同一分支、同一服务器的新任务会取消旧任务，直接运行最新一次部署。
+    concurrency:
+      group: deploy-api-${{ github.ref }}-${{ matrix.server }}
+      cancel-in-progress: true
 
     strategy:
       matrix:
