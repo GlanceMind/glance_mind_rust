@@ -47,7 +47,7 @@ on:
 # 并发控制：防止同时触发多个部署
 concurrency:
   group: deploy-api-${{ github.ref }}
-  cancel-in-progress: false # 排队等待，不取消正在进行的部署
+  cancel-in-progress: true # 新部署到来时取消旧任务，避免一直排队
 
 env:
   IMAGE_NAME: aihub_backend
