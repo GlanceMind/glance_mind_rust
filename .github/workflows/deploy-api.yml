@@ -138,12 +138,12 @@ jobs:
         include:
           # 服务器 1: VM-0-14-ubuntu
           - server: prod-1
-            runner: [self-hosted, prod-1]
+            runner: [self-hosted, backend, p1]
             name: "VM-0-14-ubuntu"
           # 服务器 2: prod-vm-ubuntu
-          - server: prod-2
-            runner: [self-hosted, prod-2]
-            name: "prod-vm-ubuntu"
+          # - server: prod-2
+          #   runner: [self-hosted, prod-2]
+          #   name: "prod-vm-ubuntu"
 
       # 部署策略
       # parallel (默认): max-parallel 不设置，同时部署
