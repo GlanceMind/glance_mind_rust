@@ -389,6 +389,100 @@ ON CONFLICT (id) DO NOTHING;
 SELECT setval('gm_agent_twitter_comments_id_seq', (SELECT MAX(id) FROM gm_agent_twitter_comments));
 
 -- ============================================================================
+-- 19. Daily Limit MVP Test Data
+-- ============================================================================
+
+-- Low-limit accounts (daily_max_replies = 2) to quickly hit the cap
+INSERT INTO gm_social_accounts
+  (id, user_id, platform_id, username, group_id, status, health_score,
+   cookie, daily_max_replies, device_id, profile_name)
+VALUES
+  (101, 2, 2, 'tiktok_low_limit_1', 1, 'ACTIVE', 100,
+   '{}', 2, 'test_device_limit', 'LowLimit Profile A'),
+  (102, 2, 2, 'tiktok_low_limit_2', 1, 'ACTIVE', 100,
+   '{}', 2, 'test_device_limit', 'LowLimit Profile B')
+ON CONFLICT (id) DO NOTHING;
+
+-- Single-account group + account (validates exhaustion filtering)
+INSERT INTO gm_social_groups (id, user_id, platform_id, group_name)
+VALUES (101, 2, 2, 'TikTok Single Account Group')
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO gm_social_accounts
+  (id, user_id, platform_id, username, group_id, status, health_score,
+   cookie, daily_max_replies, device_id, profile_name)
+VALUES
+  (103, 2, 2, 'tiktok_single_acct', 101, 'ACTIVE', 100,
+   '{}', 1, 'test_device_single', 'Single Account Profile')
+ON CONFLICT (id) DO NOTHING;
+
+-- Campaign bound to single-account group
+INSERT INTO gm_campaigns (
+    id, user_id, name, status, platform_id, region_id, ai_model_id,
+    product_prompt, schedule_type, schedule_config, keyword, max_scan_count,
+    budget_cap, auto_like, auto_follow, auto_dm, is_frozen,
+    pending_consumption, actual_consumption, total_scanned, social_group_id,
+    auto_reply_comments, auto_reply_post
+) VALUES
+(101, 2, 'DailyLimit Single Acct Campaign', 'ACTIVE', 2, 1, 1,
+ 'Test campaign for daily limit.', 'INTERVAL', '{"interval_seconds": 3600}',
+ 'test', 50, 500.00, true, true, false, true, 0.00, 0.00, 0, 101,
+ true, false)
+ON CONFLICT (id) DO NOTHING;
+
+-- Duplicate comment_id rows (simulate JOIN duplication)
+INSERT INTO gm_agent_comments
+  (id, video_db_id, comment_id, user_nickname, user_unique_id, content,
+   reason, suggested_reply, create_time, campaign_id, status)
+VALUES
+  (101, 1, 'dup_cmt_001', 'dup_user_a', 'dup_uid_a', 'Duplicate comment test',
+   'Test', 'Reply A', '2025-06-01 10:00:00', 2, 0),
+  (102, 1, 'dup_cmt_001', 'dup_user_a', 'dup_uid_a', 'Duplicate comment test',
+   'Test', 'Reply A', '2025-06-01 10:00:00', 2, 0),
+  (103, 1, 'dup_cmt_002', 'dup_user_b', 'dup_uid_b', 'Another duplicate',
+   'Test', 'Reply B', '2025-06-01 10:01:00', 2, 0),
+  (104, 1, 'dup_cmt_002', 'dup_user_b', 'dup_uid_b', 'Another duplicate',
+   'Test', 'Reply B', '2025-06-01 10:01:00', 2, 0)
+ON CONFLICT (id) DO NOTHING;
+
+-- Crawler task and video for single-account campaign
+INSERT INTO gm_crawler_tasks
+  (id, campaign_id, keywords, max_count, process_count, status,
+   search_offset, search_limit)
+VALUES (101, 101, ARRAY['test'], 50, 5, 'completed', 0, 20)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO gm_agent_videos
+  (id, video_id, author, description, task_id, campaign_id,
+   like_count, comment_count, share_count, play_count,
+   publish_time, author_unique_id, url)
+VALUES
+  (101, 'limit_video_001', 'limit_author', 'Limit test video',
+   101, 101, 100, 10, 5, 1000, 1705000000,
+   'limit_auth', 'https://tiktok.com/@limit/video/001')
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO gm_agent_comments
+  (id, video_db_id, comment_id, user_nickname, user_unique_id, content,
+   reason, suggested_reply, create_time, campaign_id, status)
+VALUES
+  (201, 101, 'limit_cmt_001', 'limit_user_1', 'lu1', 'Comment 1',
+   'Test', 'Reply 1', '2025-06-01 10:00:00', 101, 0),
+  (202, 101, 'limit_cmt_002', 'limit_user_2', 'lu2', 'Comment 2',
+   'Test', 'Reply 2', '2025-06-01 10:01:00', 101, 0),
+  (203, 101, 'limit_cmt_003', 'limit_user_3', 'lu3', 'Comment 3',
+   'Test', 'Reply 3', '2025-06-01 10:02:00', 101, 0)
+ON CONFLICT (id) DO NOTHING;
+
+-- Update sequences to accommodate new IDs
+SELECT setval('social_groups_id_seq', GREATEST((SELECT MAX(id) FROM gm_social_groups), currval('social_groups_id_seq')));
+SELECT setval('social_accounts_id_seq', GREATEST((SELECT MAX(id) FROM gm_social_accounts), currval('social_accounts_id_seq')));
+SELECT setval('campaigns_id_seq', GREATEST((SELECT MAX(id) FROM gm_campaigns), currval('campaigns_id_seq')));
+SELECT setval('crawler_tasks_id_seq', GREATEST((SELECT MAX(id) FROM gm_crawler_tasks), currval('crawler_tasks_id_seq')));
+SELECT setval('agent_videos_id_seq', GREATEST((SELECT MAX(id) FROM gm_agent_videos), currval('agent_videos_id_seq')));
+SELECT setval('agent_comments_id_seq', GREATEST((SELECT MAX(id) FROM gm_agent_comments), currval('agent_comments_id_seq')));
+
+-- ============================================================================
 -- Verification Queries (for testing)
 -- ============================================================================
 DO $$

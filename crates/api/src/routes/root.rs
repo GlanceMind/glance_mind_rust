@@ -6,6 +6,7 @@ use crate::middleware::permission;
 use crate::routes::{register, user};
 #[allow(unused_imports)]
 use crate::service::nats_dm_service::NatsDmService;
+use crate::service::redis_service::RedisService;
 use crate::state::auth_state::AuthState;
 // use crate::state::token_state::TokenState;
 use crate::state::user_state::UserState;
@@ -15,7 +16,11 @@ use std::sync::Arc;
 use tower::ServiceBuilder;
 use tower_http::trace::TraceLayer;
 
-pub fn routes(db_conn: Arc<Database>, nats_dm_service: Option<NatsDmService>) -> Router {
+pub fn routes(
+    db_conn: Arc<Database>,
+    nats_dm_service: Option<NatsDmService>,
+    redis_service: Option<RedisService>,
+) -> Router {
     let merged_router = {
         let auth_state = AuthState::new(&db_conn);
         let mut user_state = UserState::new(&db_conn);
@@ -23,6 +28,11 @@ pub fn routes(db_conn: Arc<Database>, nats_dm_service: Option<NatsDmService>) ->
         // Inject NATS DM service if available
         if let Some(svc) = nats_dm_service {
             user_state.set_nats_dm_service(svc);
+        }
+
+        // Inject Redis service if available (for daily reply quotas)
+        if let Some(svc) = redis_service {
+            user_state.set_redis_service(svc);
         }
 
         // /api/v1

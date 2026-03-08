@@ -1105,6 +1105,58 @@ impl AgentRepository {
         Ok(PageResponse::new(list, total, page, per_page))
     }
 
+    /// Batch-query campaign_id → social_group_id for a set of campaign IDs.
+    /// Returns (campaign_id, social_group_id) pairs only for campaigns that have a group.
+    pub fn get_campaign_group_ids(
+        &self,
+        campaign_ids: &[i32],
+    ) -> Result<Vec<(i32, i32)>, diesel::result::Error> {
+        use glance_mind_db::schema::gm_campaigns;
+
+        if campaign_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|_| diesel::result::Error::NotFound)?;
+
+        let rows: Vec<(i32, Option<i32>)> = gm_campaigns::table
+            .filter(gm_campaigns::id.eq_any(campaign_ids))
+            .select((gm_campaigns::id, gm_campaigns::social_group_id))
+            .load(&mut conn)?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|(cid, gid)| gid.map(|g| (cid, g)))
+            .collect())
+    }
+
+    /// Get ACTIVE accounts in a social group with their quota-relevant fields.
+    /// Returns (account_id, profile_name, daily_max_replies) tuples.
+    pub fn get_group_active_accounts(
+        &self,
+        group_id: i32,
+    ) -> Result<Vec<(i32, Option<String>, i32)>, diesel::result::Error> {
+        use glance_mind_db::schema::gm_social_accounts;
+
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|_| diesel::result::Error::NotFound)?;
+
+        gm_social_accounts::table
+            .filter(gm_social_accounts::group_id.eq(group_id))
+            .filter(gm_social_accounts::status.eq("ACTIVE"))
+            .select((
+                gm_social_accounts::id,
+                gm_social_accounts::profile_name,
+                gm_social_accounts::daily_max_replies,
+            ))
+            .load(&mut conn)
+    }
+
     /// Helper to convert i16 status to string
     #[allow(dead_code)]
     fn status_i16_to_string(status: i16) -> String {
