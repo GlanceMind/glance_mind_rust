@@ -2,6 +2,9 @@
 -- Vidu API: https://api.vidu.com (V2 API)
 -- Models: viduq1 (5s/1080p), vidu1.5 (4s/8s), vidu2.0 (4s/8s)
 
+-- Ensure unique constraint exists on model_key (baseline didn't include it)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_gm_ai_models_model_key ON gm_ai_models (model_key);
+
 INSERT INTO gm_ai_models (name, provider, model_key, model_type, cost_multiplier, is_active)
 VALUES
     -- Vidu 2.0 (latest, best quality)
