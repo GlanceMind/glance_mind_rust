@@ -496,6 +496,20 @@ impl VideoService {
                     Some(ar.to_string()),
                 ).await?
             }
+            "general_film" if image_data.is_some() => {
+                let image_uri = vidu.upload_image(&image_data.unwrap()).await?;
+                vidu.general_film(
+                    vec![image_uri], request.prompt.clone(),
+                    Some(ar.to_string()), Some(true),
+                ).await?
+            }
+            "ad_film" if image_data.is_some() => {
+                let image_uri = vidu.upload_image(&image_data.unwrap()).await?;
+                vidu.ad_film(
+                    vec![image_uri], request.prompt.clone(),
+                    Some(ar.to_string()), Some(true),
+                ).await?
+            }
             _ => {
                 vidu.text_to_video(vidu_client::ViduGenerateParams {
                     model: model_version,

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tracing::info;
 
-const DEFAULT_BASE_URL: &str = "https://api.vidu.com";
+const DEFAULT_BASE_URL: &str = "https://api.vidu.cn";
 
 /// Check if a model_key belongs to Vidu
 pub fn is_vidu_model(model_key: &str) -> bool {
@@ -136,13 +136,26 @@ impl ViduClient {
         })).await
     }
 
-    /// Multi-frame video generation
+    /// Multi-frame video generation.
+    /// Vidu API: `start_image` + `image_settings[{key_image, prompt, duration}]`
+    /// First image is `start_image`, rest are keyframes.
     pub async fn multi_frame(&self, params: ViduGenerateParams, images: Vec<String>) -> Result<ViduTaskHandle, ApiError> {
+        let start_image = images.first().cloned().unwrap_or_default();
+        let keyframe_images = if images.len() > 1 { &images[1..] } else { &images[..] };
+        let per_frame_duration = if keyframe_images.is_empty() { 5 } else {
+            (params.duration as usize / keyframe_images.len().max(1)).max(2).min(7) as i32
+        };
+        let image_settings: Vec<serde_json::Value> = keyframe_images.iter()
+            .map(|uri| serde_json::json!({
+                "key_image": uri,
+                "prompt": params.prompt,
+                "duration": per_frame_duration,
+            }))
+            .collect();
         self.post_generation("/ent/v2/multiframe", &serde_json::json!({
             "model": params.model,
-            "images": images,
-            "prompt": params.prompt,
-            "duration": params.duration,
+            "start_image": start_image,
+            "image_settings": image_settings,
             "resolution": params.resolution.unwrap_or_else(|| "720p".to_string()),
         })).await
     }
@@ -158,6 +171,38 @@ impl ViduClient {
         });
         if let Some(p) = prompt { body["prompt"] = serde_json::json!(p); }
         if let Some(ar) = aspect_ratio { body["aspect_ratio"] = serde_json::json!(ar); }
+        self.post_generation("/ent/v2/template2video", &body).await
+    }
+
+    /// One-click general film generation (通用成片).
+    /// Uses `/ent/v2/template2video` with `template: "general"`.
+    pub async fn general_film(
+        &self, images: Vec<String>, prompt: Option<String>,
+        aspect_ratio: Option<String>, bgm: Option<bool>,
+    ) -> Result<ViduTaskHandle, ApiError> {
+        let mut body = serde_json::json!({
+            "template": "general",
+            "images": images,
+        });
+        if let Some(p) = prompt { body["prompt"] = serde_json::json!(p); }
+        if let Some(ar) = aspect_ratio { body["aspect_ratio"] = serde_json::json!(ar); }
+        if let Some(b) = bgm { body["bgm"] = serde_json::json!(b); }
+        self.post_generation("/ent/v2/template2video", &body).await
+    }
+
+    /// One-click ad/e-commerce film generation (电商成片).
+    /// Uses `/ent/v2/template2video` with `template: "ad_film"`.
+    pub async fn ad_film(
+        &self, images: Vec<String>, prompt: Option<String>,
+        aspect_ratio: Option<String>, bgm: Option<bool>,
+    ) -> Result<ViduTaskHandle, ApiError> {
+        let mut body = serde_json::json!({
+            "template": "ad_film",
+            "images": images,
+        });
+        if let Some(p) = prompt { body["prompt"] = serde_json::json!(p); }
+        if let Some(ar) = aspect_ratio { body["aspect_ratio"] = serde_json::json!(ar); }
+        if let Some(b) = bgm { body["bgm"] = serde_json::json!(b); }
         self.post_generation("/ent/v2/template2video", &body).await
     }
 
@@ -257,12 +302,22 @@ impl ViduTaskStatus {
 }
 
 /// Detect the Vidu API model param from model_key.
-/// Mirrors scheduler's detect_vidu_model_version.
+/// api.vidu.cn model compatibility per endpoint:
+///   text2video / ref2video: viduq2
+///   img2video / start-end2video / multiframe: viduq3-turbo
+///   fast (text2video): viduq1
+///   template: no model field
 pub fn detect_model_version(model_key: &str) -> &str {
     match model_key {
-        "vidu-fast" => "viduq1",
-        "vidu-t2v"  => "vidu1.5",
-        _ => "vidu2.0",
+        "vidu-fast"         => "viduq1",
+        "vidu-t2v"          => "viduq2",
+        "vidu-ref2v"        => "viduq2",
+        "vidu-i2v"          => "viduq3-turbo",
+        "vidu-startend"     => "viduq3-turbo",
+        "vidu-multiframe"   => "viduq2-turbo",
+        "vidu-general-film" => "viduq2",
+        "vidu-ad-film"      => "viduq2",
+        _ => "viduq2",
     }
 }
 
@@ -281,13 +336,15 @@ pub fn detect_default_duration(model_key: &str) -> i32 {
 /// Detect generation mode from model_key.
 pub fn detect_generation_mode(model_key: &str) -> &str {
     match model_key {
-        "vidu-ref2v"      => "reference_to_video",
-        "vidu-startend"   => "start_end_to_video",
-        "vidu-multiframe" => "multi_frame",
-        "vidu-template"   => "template",
-        "vidu-i2v"        => "image_to_video",
-        "vidu-fast"       => "fast",
-        "vidu-t2v"        => "text_to_video",
+        "vidu-ref2v"        => "reference_to_video",
+        "vidu-startend"     => "start_end_to_video",
+        "vidu-multiframe"   => "multi_frame",
+        "vidu-template"     => "template",
+        "vidu-i2v"          => "image_to_video",
+        "vidu-fast"         => "fast",
+        "vidu-t2v"          => "text_to_video",
+        "vidu-general-film" => "general_film",
+        "vidu-ad-film"      => "ad_film",
         _ => "text_to_video",
     }
 }
@@ -311,13 +368,13 @@ mod tests {
 
     #[test]
     fn test_detect_model_version_simplified_keys() {
-        assert_eq!(detect_model_version("vidu-t2v"), "vidu1.5");
-        assert_eq!(detect_model_version("vidu-i2v"), "vidu2.0");
-        assert_eq!(detect_model_version("vidu-ref2v"), "vidu2.0");
-        assert_eq!(detect_model_version("vidu-startend"), "vidu2.0");
-        assert_eq!(detect_model_version("vidu-multiframe"), "vidu2.0");
+        assert_eq!(detect_model_version("vidu-t2v"), "viduq2");
+        assert_eq!(detect_model_version("vidu-i2v"), "viduq3-turbo");
+        assert_eq!(detect_model_version("vidu-ref2v"), "viduq2");
+        assert_eq!(detect_model_version("vidu-startend"), "viduq3-turbo");
+        assert_eq!(detect_model_version("vidu-multiframe"), "viduq2-turbo");
         assert_eq!(detect_model_version("vidu-fast"), "viduq1");
-        assert_eq!(detect_model_version("vidu-template"), "vidu2.0");
+        assert_eq!(detect_model_version("vidu-template"), "viduq2");
     }
 
     #[test]
@@ -379,7 +436,7 @@ mod tests {
     #[test]
     fn test_vidu_generate_params_construction() {
         let params = ViduGenerateParams {
-            model: "vidu2.0".to_string(),
+            model: "viduq2".to_string(),
             prompt: "Test prompt".to_string(),
             duration: 4,
             style: Some("general".to_string()),
@@ -387,20 +444,22 @@ mod tests {
             resolution: Some("720p".to_string()),
             movement_amplitude: Some("auto".to_string()),
         };
-        assert_eq!(params.model, "vidu2.0");
+        assert_eq!(params.model, "viduq2");
         assert_eq!(params.duration, 4);
     }
 
     #[test]
-    fn test_all_7_modes_have_correct_detect_chain() {
+    fn test_all_modes_have_correct_detect_chain() {
         let modes = vec![
-            ("vidu-t2v", "vidu1.5", "720p", 4, "text_to_video"),
-            ("vidu-i2v", "vidu2.0", "720p", 4, "image_to_video"),
-            ("vidu-ref2v", "vidu2.0", "720p", 4, "reference_to_video"),
-            ("vidu-startend", "vidu2.0", "720p", 4, "start_end_to_video"),
-            ("vidu-multiframe", "vidu2.0", "720p", 4, "multi_frame"),
+            ("vidu-t2v", "viduq2", "720p", 4, "text_to_video"),
+            ("vidu-i2v", "viduq3-turbo", "720p", 4, "image_to_video"),
+            ("vidu-ref2v", "viduq2", "720p", 4, "reference_to_video"),
+            ("vidu-startend", "viduq3-turbo", "720p", 4, "start_end_to_video"),
+            ("vidu-multiframe", "viduq2-turbo", "720p", 4, "multi_frame"),
             ("vidu-fast", "viduq1", "1080p", 5, "fast"),
-            ("vidu-template", "vidu2.0", "720p", 4, "template"),
+            ("vidu-template", "viduq2", "720p", 4, "template"),
+            ("vidu-general-film", "viduq2", "720p", 4, "general_film"),
+            ("vidu-ad-film", "viduq2", "720p", 4, "ad_film"),
         ];
         for (key, ver, res, dur, mode) in modes {
             assert!(is_vidu_model(key), "{} should be vidu", key);
@@ -447,5 +506,79 @@ mod tests {
         assert!(obj.contains_key("template"));
         assert!(obj.contains_key("images"));
         assert!(!obj.contains_key("model"), "template endpoint must not include 'model' field");
+    }
+
+    #[test]
+    fn test_general_film_json_body() {
+        let mut body = serde_json::json!({
+            "template": "general",
+            "images": ["vidu://product1", "vidu://product2"],
+        });
+        body["prompt"] = serde_json::json!("Create an engaging video");
+        body["aspect_ratio"] = serde_json::json!("16:9");
+        body["bgm"] = serde_json::json!(true);
+        let obj = body.as_object().unwrap();
+        assert_eq!(obj["template"], "general");
+        assert_eq!(obj["images"].as_array().unwrap().len(), 2);
+        assert_eq!(obj["prompt"], "Create an engaging video");
+        assert_eq!(obj["aspect_ratio"], "16:9");
+        assert_eq!(obj["bgm"], true);
+        assert!(!obj.contains_key("model"), "general_film must not include 'model'");
+    }
+
+    #[test]
+    fn test_ad_film_json_body() {
+        let mut body = serde_json::json!({
+            "template": "ad_film",
+            "images": ["vidu://product_img"],
+        });
+        body["prompt"] = serde_json::json!("Product showcase with modern style");
+        body["aspect_ratio"] = serde_json::json!("9:16");
+        body["bgm"] = serde_json::json!(true);
+        let obj = body.as_object().unwrap();
+        assert_eq!(obj["template"], "ad_film");
+        assert_eq!(obj["images"].as_array().unwrap().len(), 1);
+        assert_eq!(obj["aspect_ratio"], "9:16");
+        assert_eq!(obj["bgm"], true);
+        assert!(!obj.contains_key("model"), "ad_film must not include 'model'");
+    }
+
+    #[test]
+    fn test_general_film_without_optional_fields() {
+        let body = serde_json::json!({
+            "template": "general",
+            "images": ["vidu://img1"],
+        });
+        let obj = body.as_object().unwrap();
+        assert_eq!(obj["template"], "general");
+        assert!(!obj.contains_key("prompt"));
+        assert!(!obj.contains_key("bgm"));
+        assert!(!obj.contains_key("aspect_ratio"));
+    }
+
+    #[test]
+    fn test_ad_film_without_optional_fields() {
+        let body = serde_json::json!({
+            "template": "ad_film",
+            "images": ["vidu://img1"],
+        });
+        let obj = body.as_object().unwrap();
+        assert_eq!(obj["template"], "ad_film");
+        assert!(!obj.contains_key("prompt"));
+        assert!(!obj.contains_key("bgm"));
+    }
+
+    #[test]
+    fn test_general_film_and_ad_film_model_keys() {
+        assert!(is_vidu_model("vidu-general-film"));
+        assert!(is_vidu_model("vidu-ad-film"));
+        assert_eq!(detect_generation_mode("vidu-general-film"), "general_film");
+        assert_eq!(detect_generation_mode("vidu-ad-film"), "ad_film");
+        assert_eq!(detect_model_version("vidu-general-film"), "viduq2");
+        assert_eq!(detect_model_version("vidu-ad-film"), "viduq2");
+        assert_eq!(detect_resolution("vidu-general-film"), "720p");
+        assert_eq!(detect_resolution("vidu-ad-film"), "720p");
+        assert_eq!(detect_default_duration("vidu-general-film"), 4);
+        assert_eq!(detect_default_duration("vidu-ad-film"), 4);
     }
 }

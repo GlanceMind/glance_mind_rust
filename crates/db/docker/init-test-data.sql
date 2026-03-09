@@ -102,7 +102,9 @@ INSERT INTO gm_ai_models (id, name, provider, model_key, model_type, cost_multip
 (13, 'Vidu 首尾帧',     'vidu', 'vidu-startend',   'video', 2.5, true),
 (14, 'Vidu 智能多帧',   'vidu', 'vidu-multiframe', 'video', 4.0, true),
 (15, 'Vidu 快速生成',   'vidu', 'vidu-fast',       'video', 1.0, true),
-(16, 'Vidu 模板视频',   'vidu', 'vidu-template',   'video', 3.0, true)
+(16, 'Vidu 模板视频',   'vidu', 'vidu-template',   'video', 3.0, true),
+(17, 'Vidu 通用成片',   'vidu', 'vidu-general-film','video', 5.0, true),
+(18, 'Vidu 电商成片',   'vidu', 'vidu-ad-film',     'video', 6.0, true)
 ON CONFLICT (id) DO UPDATE SET
     name = EXCLUDED.name,
     provider = EXCLUDED.provider,
