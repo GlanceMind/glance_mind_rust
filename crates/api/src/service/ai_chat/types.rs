@@ -276,6 +276,36 @@ pub fn compress_tool_result(tool_name: &str, result: &Value) -> String {
             }
         }
         "list_video_tasks" => compress_list_result(list, total, &["id", "status", "model_name"], "video tasks"),
+        "list_video_cases" => compress_list_result(list, total, &["id", "task_no", "title", "status"], "video cases"),
+        "list_publish_tasks" => compress_list_result(list, total, &["id", "status", "platform_id", "account_name"], "publish tasks"),
+        "list_campaign_contents" => compress_list_result(list, total, &["id", "content_type", "author", "text"], "campaign contents"),
+        "list_dm_conversations" => {
+            if let Some(convs) = result.get("conversations").and_then(|c| c.as_array()) {
+                let items: Vec<String> = convs.iter().map(|c| {
+                    format!("{{conv_id:\"{}\",remote_username:\"{}\",unread:{},platform_id:{}}}",
+                        c["conv_id"].as_str().unwrap_or("?"),
+                        c["remote_username"].as_str().unwrap_or("?"),
+                        c["unread_count"].as_i64().unwrap_or(0),
+                        c["platform_id"].as_i64().unwrap_or(0))
+                }).collect();
+                format!("{{conversations:[{}]}}", items.join(","))
+            } else {
+                serde_json::to_string(result).unwrap_or_default()
+            }
+        }
+        "list_notifications" => {
+            if let Some(arr) = result.as_array().or(list) {
+                let items: Vec<String> = arr.iter().map(|n| {
+                    format!("{{id:{},title:\"{}\",read:{}}}",
+                        n["id"].as_i64().unwrap_or(0),
+                        n["title"].as_str().unwrap_or("?"),
+                        n["read"].as_bool().unwrap_or(false))
+                }).collect();
+                format!("[{}]", items.join(","))
+            } else {
+                serde_json::to_string(result).unwrap_or_default()
+            }
+        }
         "search_knowledge" => {
             let s = serde_json::to_string(result).unwrap_or_default();
             if s.len() > 4000 { format!("{}...(truncated)", &s[..4000]) } else { s }
@@ -327,11 +357,14 @@ pub const SYSTEM_PROMPT: &str = r#"你是 GlanceMind AI 助手，帮助用户管
 
 你的能力包括：
 - 查询和管理社交媒体账户、分组
-- 创建和管理 AI 发布计划
-- 查看和管理营销活动
+- 创建和管理 AI 发布计划（查看发布任务、视频案例）
+- 查看和管理营销活动（含爬虫任务和内容）
 - 查看钱包余额和交易记录
-- 管理模板、素材
-- 创建 AI 视频
+- 管理回复模板（查看、创建、删除、AI自动生成）
+- 管理素材库（查看详情、删除、查看标签）
+- 生成AI视频（支持Vidu/Jimeng模型，查看任务详情）
+- 管理DM群控（查看会话、消息、回复、统计、标记已读）
+- 查看和管理通知
 - 查看平台配置、地区和 AI 模型
 - 产品知识检索：通过 search_knowledge 工具搜索帮助文档
 

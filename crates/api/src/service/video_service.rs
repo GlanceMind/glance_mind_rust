@@ -416,6 +416,8 @@ impl VideoService {
         let duration: i32 = request.seconds.parse()
             .unwrap_or_else(|_| vidu_client::detect_default_duration(model_key));
 
+        let clean_prompt = request.prompt.as_ref().map(|p| Self::strip_mention_tokens(p));
+
         // For "fast" mode, auto-detect from input
         let effective_mode = if gen_mode == "fast" {
             match (&image_data, &end_frame_data) {
@@ -442,7 +444,7 @@ impl VideoService {
                 let image_uri = vidu.upload_image(&image_data.unwrap()).await?;
                 vidu.image_to_video(
                     vidu_client::ViduGenerateParams {
-                        model: model_version, prompt: request.prompt.clone().unwrap_or_default(),
+                        model: model_version, prompt: clean_prompt.clone().unwrap_or_default(),
                         duration, style: None, aspect_ratio: None,
                         resolution: Some(resolution), movement_amplitude: None,
                     },
@@ -454,7 +456,7 @@ impl VideoService {
                 let end_uri = vidu.upload_image(&end_frame_data.unwrap()).await?;
                 vidu.start_end_to_video(
                     vidu_client::ViduGenerateParams {
-                        model: model_version, prompt: request.prompt.clone().unwrap_or_default(),
+                        model: model_version, prompt: clean_prompt.clone().unwrap_or_default(),
                         duration, style: None, aspect_ratio: None,
                         resolution: Some(resolution), movement_amplitude: None,
                     },
@@ -465,7 +467,7 @@ impl VideoService {
                 let image_uri = vidu.upload_image(&image_data.unwrap()).await?;
                 vidu.reference_to_video(
                     vidu_client::ViduGenerateParams {
-                        model: model_version, prompt: request.prompt.clone().unwrap_or_default(),
+                        model: model_version, prompt: clean_prompt.clone().unwrap_or_default(),
                         duration, style: None,
                         aspect_ratio: Some(ar.to_string()),
                         resolution: Some(resolution), movement_amplitude: None,
@@ -480,7 +482,7 @@ impl VideoService {
                 }
                 vidu.multi_frame(
                     vidu_client::ViduGenerateParams {
-                        model: model_version, prompt: request.prompt.clone().unwrap_or_default(),
+                        model: model_version, prompt: clean_prompt.clone().unwrap_or_default(),
                         duration, style: None, aspect_ratio: None,
                         resolution: Some(resolution), movement_amplitude: None,
                     },
@@ -492,28 +494,28 @@ impl VideoService {
                 vidu.template_to_video(
                     "general".to_string(),
                     vec![image_uri],
-                    request.prompt.clone(),
+                    clean_prompt.clone(),
                     Some(ar.to_string()),
                 ).await?
             }
             "general_film" if image_data.is_some() => {
                 let image_uri = vidu.upload_image(&image_data.unwrap()).await?;
                 vidu.general_film(
-                    vec![image_uri], request.prompt.clone(),
+                    vec![image_uri], clean_prompt.clone(),
                     Some(ar.to_string()), Some(true),
                 ).await?
             }
             "ad_film" if image_data.is_some() => {
                 let image_uri = vidu.upload_image(&image_data.unwrap()).await?;
                 vidu.ad_film(
-                    vec![image_uri], request.prompt.clone(),
+                    vec![image_uri], clean_prompt.clone(),
                     Some(ar.to_string()), Some(true),
                 ).await?
             }
             _ => {
                 vidu.text_to_video(vidu_client::ViduGenerateParams {
                     model: model_version,
-                    prompt: request.prompt.clone().ok_or(ApiError::BusinessError(
+                    prompt: clean_prompt.clone().ok_or(ApiError::BusinessError(
                         BusinessError::TextToVideoRequiresPrompt,
                     ))?,
                     duration, style: None,
@@ -552,7 +554,7 @@ impl VideoService {
             user_id,
             task_id: task_handle.task_id.clone(),
             generation_id: Some(format!("vidu_{}", task_handle.task_id)),
-            prompt: request.prompt.clone(),
+            prompt: clean_prompt.clone(),
             media_id: None,
             status: "pending".to_string(),
             cost_points: actual_cost.clone(),
@@ -898,6 +900,22 @@ impl VideoService {
                 None
             }
         }
+    }
+
+    fn strip_mention_tokens(prompt: &str) -> String {
+        let mut result = String::with_capacity(prompt.len());
+        let mut chars = prompt.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '@' {
+                while let Some(&next) = chars.peek() {
+                    if next.is_whitespace() || next == '@' { break; }
+                    chars.next();
+                }
+            } else {
+                result.push(ch);
+            }
+        }
+        result.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
     fn task_to_response(task: VideoGenerationTask) -> VideoTaskResponse {

@@ -42,6 +42,8 @@ pub async fn create_video(
     let mut start_frame_filename: Option<String> = None;
     let mut end_frame_data: Option<Vec<u8>> = None;
     let mut end_frame_filename: Option<String> = None;
+    // Multi-image mode (ref2v / multiframe: up to 3 images)
+    let mut reference_images: Vec<Vec<u8>> = Vec::new();
 
     while let Some(field) = multipart
         .next_field()
@@ -120,12 +122,33 @@ pub async fn create_video(
                 })?;
                 end_frame_data = Some(data.to_vec());
             }
+            "reference_images" => {
+                let data = field.bytes().await.map_err(|_| {
+                    ApiError::BusinessError(BusinessError::InvalidFormField(
+                        "reference_images".to_string(),
+                    ))
+                })?;
+                if !data.is_empty() {
+                    reference_images.push(data.to_vec());
+                }
+            }
             _ => {}
         }
     }
 
+    // If reference_images are provided, use them as start_frame/end_frame (for <=2 images models)
+    // or keep as reference_images (for multi-image models)
+    if !reference_images.is_empty() && start_frame_data.is_none() {
+        start_frame_data = reference_images.first().cloned();
+        start_frame_filename = Some("reference_1.png".to_string());
+        if reference_images.len() >= 2 {
+            end_frame_data = reference_images.get(1).cloned();
+            end_frame_filename = Some("reference_2.png".to_string());
+        }
+    }
+
     // Validate required fields: need at least a prompt or any image
-    if prompt.is_none() && image_data.is_none() && start_frame_data.is_none() {
+    if prompt.is_none() && image_data.is_none() && start_frame_data.is_none() && reference_images.is_empty() {
         return Err(ApiError::BusinessError(
             BusinessError::PromptOrImageRequired,
         ));
