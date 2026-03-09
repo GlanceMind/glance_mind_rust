@@ -14,6 +14,7 @@ use crate::service::config_service::ConfigService;
 use crate::service::jimeng_client::{is_jimeng_model, JimengClient};
 use crate::service::laozhang_client::LaoZhangClient;
 use crate::service::oss_service::{OssConfig, OssService};
+use crate::service::vidu_client::{self, is_vidu_model, ViduClient};
 use glance_mind_db::entity::ai_model::AiModel;
 use glance_mind_db::entity::video::{NewVideoGenerationTask, VideoGenerationTask};
 
@@ -24,6 +25,7 @@ pub struct VideoService {
     wallet_repo: WalletRepository,
     laozhang_client: LaoZhangClient,
     jimeng_client: Option<JimengClient>,
+    vidu_client: Option<ViduClient>,
     #[allow(dead_code)]
     config_service: ConfigService,
     oss_config: Option<OssConfig>,
@@ -41,13 +43,23 @@ impl VideoService {
         if oss_config.is_some() {
             tracing::info!("VideoService: OSS configured for video persistence");
         } else {
-            tracing::warn!("VideoService: OSS not configured, Jimeng videos will use temporary CDN URLs");
+            tracing::warn!("VideoService: OSS not configured, temporary CDN URLs may expire");
         }
+
+        let vidu_client = std::env::var("VIDU_API_KEY").ok()
+            .filter(|k| !k.is_empty())
+            .map(|key| {
+                let base_url = std::env::var("VIDU_BASE_URL").ok();
+                tracing::info!("VideoService: Vidu client configured");
+                ViduClient::new(key, base_url)
+            });
+
         Self {
             db_pool,
             wallet_repo,
             laozhang_client,
             jimeng_client,
+            vidu_client,
             config_service,
             oss_config,
         }
@@ -123,9 +135,10 @@ impl VideoService {
             ("sora-2".to_string(), Some("Sora 2".to_string()))
         };
 
-        // Validate model supports dual image (FL models and Jimeng models both support it)
+        // Validate model supports dual image (FL models, Jimeng models, Vidu startend, and Vidu fast)
         if is_dual_image {
-            let model_supports_dual = model_key.contains("-fl") || is_jimeng_model(&model_key);
+            let model_supports_dual = model_key.contains("-fl") || is_jimeng_model(&model_key)
+                || (is_vidu_model(&model_key) && (model_key == "vidu-startend" || model_key == "vidu-fast"));
             if !model_supports_dual {
                 return Err(ApiError::BusinessError(
                     BusinessError::ModelNotSupportDualImage,
@@ -151,6 +164,20 @@ impl VideoService {
         );
 
         // Note: Fee calculation and deduction already handled by charging_middleware
+
+        // Route to Vidu if model is vidu-*
+        if is_vidu_model(&model_key) {
+            return self
+                .create_video_vidu(
+                    user_id,
+                    &model_key,
+                    &request,
+                    image_data.or(start_frame_data.clone()),
+                    end_frame_data.clone(),
+                    &ai_model_info,
+                )
+                .await;
+        }
 
         // Route to Jimeng if model is jimeng-*
         if is_jimeng_model(&model_key) {
@@ -317,6 +344,8 @@ impl VideoService {
         for task in tasks {
             let final_task = if Self::is_jimeng_pending(&task) {
                 self.poll_jimeng_task(&mut conn, &task).await.unwrap_or(task)
+            } else if Self::is_vidu_pending(&task) {
+                self.poll_vidu_task(&mut conn, &task).await.unwrap_or(task)
             } else {
                 task
             };
@@ -357,9 +386,182 @@ impl VideoService {
             if let Some(updated) = self.poll_jimeng_task(&mut conn, &task).await {
                 task = updated;
             }
+        } else if Self::is_vidu_pending(&task) {
+            if let Some(updated) = self.poll_vidu_task(&mut conn, &task).await {
+                task = updated;
+            }
         }
 
         Ok(Self::task_to_response(task))
+    }
+
+    /// Vidu video generation path (supports T2V, I2V, start-end, fast)
+    #[allow(clippy::too_many_arguments)]
+    async fn create_video_vidu(
+        &self,
+        user_id: i32,
+        model_key: &str,
+        request: &CreateVideoRequest,
+        image_data: Option<Vec<u8>>,
+        end_frame_data: Option<Vec<u8>>,
+        ai_model_info: &Option<AiModel>,
+    ) -> Result<CreateVideoResponse, ApiError> {
+        let vidu = self.vidu_client.as_ref().ok_or_else(|| {
+            ApiError::InternalServerError("Vidu client not configured".to_string())
+        })?;
+
+        let gen_mode = vidu_client::detect_generation_mode(model_key);
+        let model_version = vidu_client::detect_model_version(model_key).to_string();
+        let resolution = vidu_client::detect_resolution(model_key).to_string();
+        let duration: i32 = request.seconds.parse()
+            .unwrap_or_else(|_| vidu_client::detect_default_duration(model_key));
+
+        // For "fast" mode, auto-detect from input
+        let effective_mode = if gen_mode == "fast" {
+            match (&image_data, &end_frame_data) {
+                (Some(_), Some(_)) => "start_end_to_video",
+                (Some(_), None) => "image_to_video",
+                _ => "text_to_video",
+            }
+        } else {
+            gen_mode
+        };
+
+        tracing::info!(
+            "Vidu video: model={}, version={}, resolution={}, duration={}s, mode={}",
+            model_key, model_version, resolution, duration, effective_mode
+        );
+
+        let ar = match request.orientation {
+            crate::dto::video_dto::VideoOrientation::Portrait => "9:16",
+            crate::dto::video_dto::VideoOrientation::Landscape => "16:9",
+        };
+
+        let task_handle = match effective_mode {
+            "image_to_video" if image_data.is_some() => {
+                let image_uri = vidu.upload_image(&image_data.unwrap()).await?;
+                vidu.image_to_video(
+                    vidu_client::ViduGenerateParams {
+                        model: model_version, prompt: request.prompt.clone().unwrap_or_default(),
+                        duration, style: None, aspect_ratio: None,
+                        resolution: Some(resolution), movement_amplitude: None,
+                    },
+                    image_uri,
+                ).await?
+            }
+            "start_end_to_video" if image_data.is_some() && end_frame_data.is_some() => {
+                let start_uri = vidu.upload_image(&image_data.unwrap()).await?;
+                let end_uri = vidu.upload_image(&end_frame_data.unwrap()).await?;
+                vidu.start_end_to_video(
+                    vidu_client::ViduGenerateParams {
+                        model: model_version, prompt: request.prompt.clone().unwrap_or_default(),
+                        duration, style: None, aspect_ratio: None,
+                        resolution: Some(resolution), movement_amplitude: None,
+                    },
+                    vec![start_uri, end_uri],
+                ).await?
+            }
+            "reference_to_video" if image_data.is_some() => {
+                let image_uri = vidu.upload_image(&image_data.unwrap()).await?;
+                vidu.reference_to_video(
+                    vidu_client::ViduGenerateParams {
+                        model: model_version, prompt: request.prompt.clone().unwrap_or_default(),
+                        duration, style: None,
+                        aspect_ratio: Some(ar.to_string()),
+                        resolution: Some(resolution), movement_amplitude: None,
+                    },
+                    vec![image_uri],
+                ).await?
+            }
+            "multi_frame" if image_data.is_some() => {
+                let mut images = vec![vidu.upload_image(&image_data.unwrap()).await?];
+                if let Some(end_data) = end_frame_data {
+                    images.push(vidu.upload_image(&end_data).await?);
+                }
+                vidu.multi_frame(
+                    vidu_client::ViduGenerateParams {
+                        model: model_version, prompt: request.prompt.clone().unwrap_or_default(),
+                        duration, style: None, aspect_ratio: None,
+                        resolution: Some(resolution), movement_amplitude: None,
+                    },
+                    images,
+                ).await?
+            }
+            "template" if image_data.is_some() => {
+                let image_uri = vidu.upload_image(&image_data.unwrap()).await?;
+                vidu.template_to_video(
+                    "general".to_string(),
+                    vec![image_uri],
+                    request.prompt.clone(),
+                    Some(ar.to_string()),
+                ).await?
+            }
+            _ => {
+                vidu.text_to_video(vidu_client::ViduGenerateParams {
+                    model: model_version,
+                    prompt: request.prompt.clone().ok_or(ApiError::BusinessError(
+                        BusinessError::TextToVideoRequiresPrompt,
+                    ))?,
+                    duration, style: None,
+                    aspect_ratio: Some(ar.to_string()),
+                    resolution: Some(resolution),
+                    movement_amplitude: None,
+                }).await?
+            }
+        };
+
+        // Save task to database
+        let mut conn = self.db_pool.get().map_err(|_| {
+            ApiError::InternalServerError("Database connection failed".to_string())
+        })?;
+
+        use crate::middleware::charging::ActionType;
+        use diesel::prelude::*;
+        use glance_mind_db::schema::gm_pricing_rules::dsl::*;
+
+        let base_cost = gm_pricing_rules
+            .filter(action_type.eq(ActionType::VideoGenerate.as_str()))
+            .filter(platform_id.is_null())
+            .select(cost_points)
+            .first::<BigDecimal>(&mut conn)
+            .map_err(|_| ApiError::InternalServerError("Failed to query pricing rule".to_string()))?;
+
+        let actual_cost = if let Some(ref model) = ai_model_info {
+            &base_cost * &model.cost_multiplier
+        } else {
+            base_cost
+        };
+
+        let model_name = ai_model_info.as_ref().map(|m| m.name.clone());
+
+        let new_task = NewVideoGenerationTask {
+            user_id,
+            task_id: task_handle.task_id.clone(),
+            generation_id: Some(format!("vidu_{}", task_handle.task_id)),
+            prompt: request.prompt.clone(),
+            media_id: None,
+            status: "pending".to_string(),
+            cost_points: actual_cost.clone(),
+            wallet_transaction_id: None,
+            model_id: request.ai_model_id,
+            title: request.title.clone(),
+            orientation: Some(request.orientation.as_str().to_string()),
+            video_seconds: Some(request.seconds.clone()),
+            video_size: Some(request.size.clone()),
+        };
+
+        VideoRepository::create_task(&mut conn, new_task).map_err(|_| {
+            ApiError::InternalServerError("Failed to create task record".to_string())
+        })?;
+
+        Ok(CreateVideoResponse {
+            task_id: task_handle.task_id,
+            status: "pending".to_string(),
+            cost_points: actual_cost,
+            estimated_time: "1-3 minutes".to_string(),
+            ai_model_name: model_name,
+            expires_at: None,
+        })
     }
 
     /// Jimeng video generation path (supports T2V, I2V first-frame, and I2V first-last-frame)
@@ -484,6 +686,11 @@ impl VideoService {
             && task.generation_id.as_deref().map_or(false, |g| g.starts_with("jimeng_"))
     }
 
+    fn is_vidu_pending(task: &VideoGenerationTask) -> bool {
+        matches!(task.status.as_str(), "pending" | "queued" | "processing")
+            && task.generation_id.as_deref().map_or(false, |g| g.starts_with("vidu_"))
+    }
+
     /// Poll Volcengine for a single Jimeng task, update DB if done/failed.
     /// When done, downloads the video and uploads to OSS for permanent storage.
     async fn poll_jimeng_task(
@@ -554,8 +761,51 @@ impl VideoService {
         }
     }
 
+    /// Poll Vidu for a single task, update DB if done/failed.
+    async fn poll_vidu_task(
+        &self,
+        conn: &mut crate::repository::video_repository::PgConnection,
+        task: &VideoGenerationTask,
+    ) -> Option<VideoGenerationTask> {
+        let vidu = self.vidu_client.as_ref()?;
+
+        let status = match vidu.get_task_status(&task.task_id).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("Vidu poll failed for task {}: {}", task.task_id, e);
+                return None;
+            }
+        };
+
+        if status.is_success() {
+            let temp_url = status.get_video_url();
+            tracing::info!("Vidu task {} completed, url={:?}", task.task_id, temp_url);
+
+            let video_url = match temp_url {
+                Some(ref url) => {
+                    let oss_url = self.persist_video_to_oss(url, task.user_id, &task.task_id).await;
+                    Some(oss_url.unwrap_or_else(|| url.clone()))
+                }
+                None => None,
+            };
+
+            VideoRepository::mark_as_succeeded(
+                conn, task.id, Some(task.task_id.clone()),
+                video_url, None, None, None, None, None,
+            ).ok()
+        } else if status.is_failed() {
+            let err = format!("Vidu generation failed: {}", status.err_code.unwrap_or_default());
+            tracing::warn!("Vidu task {} failed: {}", task.task_id, err);
+            VideoRepository::mark_as_failed(conn, task.id, err).ok()
+        } else {
+            let _ = VideoRepository::update_status(conn, task.id, "processing".to_string(), None);
+            None
+        }
+    }
+
     fn is_temporary_cdn_url(url: &str) -> bool {
         url.contains("vvecloud") || url.contains("byted.org") || url.contains("volcvod.com")
+            || url.contains("vidu.com") || url.contains("vidu.cn")
     }
 
     /// Download video from temporary CDN URL and re-upload to Aliyun OSS.

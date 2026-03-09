@@ -640,7 +640,7 @@ diesel::table! {
         expires_at -> Timestamptz,
         verified -> Bool,
         created_at -> Timestamptz,
-        #[max_length = 45]
+        #[max_length = 100]
         ip_address -> Nullable<Varchar>,
         user_agent -> Nullable<Text>,
     }

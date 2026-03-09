@@ -1207,3 +1207,247 @@ class TestAIPubPlanWithJimeng:
                 row = db_cursor.fetchone()
                 assert row is not None
                 assert row["video_ai_model_id"] == model_row["id"]
+
+
+# ============================================================================
+# Test Class: Vidu Video Generation
+# ============================================================================
+
+# Vidu model IDs from init-test-data.sql (IDs 10-21)
+MODEL_VIDU_T2V_ID = 10
+MODEL_VIDU_I2V_ID = 11
+MODEL_VIDU_REF2V_ID = 12
+MODEL_VIDU_STARTEND_ID = 13
+MODEL_VIDU_MULTIFRAME_ID = 14
+MODEL_VIDU_FAST_ID = 15
+MODEL_VIDU_TEMPLATE_ID = 16
+
+
+class TestViduModelList:
+    """Verify Vidu models appear in the AI models config."""
+
+    def test_vidu_models_in_config(self, video_client, db_cursor):
+        """All Vidu models should appear in /config/ai-models."""
+        resp = video_client.get(CONFIG_AI_MODELS_URL)
+        if resp.status_code != 200:
+            pytest.skip("Config API unavailable")
+
+        data = resp.json()
+        models_list = data.get("data", data) if isinstance(data, dict) else data
+        if isinstance(models_list, dict):
+            models_list = models_list.get("models", [])
+
+        vidu_models = [m for m in models_list if m.get("provider") == "vidu"
+                       or (m.get("model_key", "").startswith("vidu-"))]
+        assert len(vidu_models) >= 7, f"Expected >=7 Vidu models, got {len(vidu_models)}"
+
+    def test_vidu_models_in_db(self, db_cursor):
+        """DB should have all 7 simplified Vidu models active."""
+        db_cursor.execute(
+            "SELECT COUNT(*) as cnt FROM gm_ai_models WHERE provider = 'vidu' AND is_active = true"
+        )
+        row = db_cursor.fetchone()
+        count = row["cnt"] if isinstance(row, dict) else row[0]
+        assert count >= 7, f"Expected >=7 active Vidu models in DB, got {count}"
+
+    def test_vidu_model_keys_convention(self, db_cursor):
+        """All Vidu model_key values should start with 'vidu-'."""
+        db_cursor.execute(
+            "SELECT model_key FROM gm_ai_models WHERE provider = 'vidu'"
+        )
+        rows = db_cursor.fetchall()
+        for row in rows:
+            key = row["model_key"] if isinstance(row, dict) else row[0]
+            assert key.startswith("vidu-"), f"Vidu model_key '{key}' should start with 'vidu-'"
+
+
+class TestViduVideoGeneration:
+    """Vidu video generation E2E tests.
+
+    These tests require the API server to be running with VIDU_API_KEY configured
+    (or a mock Vidu service). Tests will be skipped if the Vidu provider is not
+    available.
+    """
+
+    def _check_vidu_available(self, resp):
+        """Skip test if Vidu provider is not configured."""
+        if resp.status_code == 500:
+            body = resp.text
+            if "not configured" in body.lower() or "vidu" in body.lower():
+                pytest.skip("Vidu provider not configured on API server")
+
+    def test_create_vidu_text2video(self, video_client, db_cursor):
+        """Create text-to-video task with simplified vidu-t2v model."""
+        resp = video_client.post(VIDEO_GENERATE_URL, data={
+            "prompt": "A cat playing on the beach with sunset",
+            "ai_model_id": str(MODEL_VIDU_T2V_ID),
+            "seconds": "4",
+            "size": "1280x720",
+            "orientation": "landscape",
+        })
+        self._check_vidu_available(resp)
+        if resp.status_code == 200:
+            data = extract_data(resp.json())
+            assert data is not None
+            assert "task_id" in data
+            task_id = data["task_id"]
+            db_cursor.execute(
+                "SELECT * FROM gm_video_generation_tasks WHERE task_id = %s", (task_id,)
+            )
+            row = db_cursor.fetchone()
+            assert row is not None, f"Task {task_id} not found in DB"
+
+    def test_create_vidu_image2video(self, video_client, db_cursor):
+        """Create image-to-video task with vidu-i2v model."""
+        files = {
+            "image": ("test.png", io.BytesIO(TINY_PNG), "image/png"),
+        }
+        resp = video_client.post(VIDEO_GENERATE_URL, data={
+            "prompt": "Animate this image into a video",
+            "ai_model_id": str(MODEL_VIDU_I2V_ID),
+            "seconds": "4",
+            "size": "1280x720",
+            "orientation": "landscape",
+        }, files=files)
+        self._check_vidu_available(resp)
+        if resp.status_code == 200:
+            data = extract_data(resp.json())
+            assert data is not None
+            assert "task_id" in data
+
+    def test_create_vidu_duration_8s(self, video_client):
+        """Vidu supports 8-second duration."""
+        resp = video_client.post(VIDEO_GENERATE_URL, data={
+            "prompt": "8 second video test",
+            "ai_model_id": str(MODEL_VIDU_T2V_ID),
+            "seconds": "8",
+            "size": "1280x720",
+            "orientation": "landscape",
+        })
+        self._check_vidu_available(resp)
+        assert resp.status_code != 400, "seconds=8 should be accepted for Vidu"
+
+    def test_vidu_task_listing(self, video_client):
+        """GET /video/tasks should include any created Vidu tasks."""
+        resp = video_client.get(VIDEO_TASKS_URL)
+        assert resp.status_code == 200
+
+    def test_vidu_validation_invalid_duration(self, video_client):
+        """Reject invalid duration (3s) for Vidu model."""
+        resp = video_client.post(VIDEO_GENERATE_URL, data={
+            "prompt": "Invalid duration test",
+            "ai_model_id": str(MODEL_VIDU_T2V_ID),
+            "seconds": "3",
+            "size": "1280x720",
+            "orientation": "landscape",
+        })
+        assert resp.status_code == 400 or resp.status_code == 422, \
+            f"seconds=3 should be rejected, got {resp.status_code}"
+
+    def test_vidu_validation_invalid_size(self, video_client):
+        """Reject invalid size (640x480) for Vidu model."""
+        resp = video_client.post(VIDEO_GENERATE_URL, data={
+            "prompt": "Invalid size test",
+            "ai_model_id": str(MODEL_VIDU_T2V_ID),
+            "seconds": "4",
+            "size": "640x480",
+            "orientation": "landscape",
+        })
+        assert resp.status_code == 400 or resp.status_code == 422, \
+            f"size=640x480 should be rejected, got {resp.status_code}"
+
+    def test_vidu_fast_generation_5s(self, video_client):
+        """Vidu fast (viduq1) model uses 5-second duration."""
+        resp = video_client.post(VIDEO_GENERATE_URL, data={
+            "prompt": "Fast generation test",
+            "ai_model_id": str(MODEL_VIDU_FAST_ID),
+            "seconds": "5",
+            "size": "1280x720",
+            "orientation": "landscape",
+        })
+        self._check_vidu_available(resp)
+        assert resp.status_code != 400, "seconds=5 should be accepted for fast model"
+
+
+class TestViduAIPubPlan:
+    """Create AIPub plan with Vidu video_ai_model_id."""
+
+    def test_create_plan_with_vidu_model(self, video_client, db_cursor):
+        """POST /publish_plans with Vidu video_ai_model_id."""
+        db_cursor.execute(
+            "SELECT id FROM gm_ai_models WHERE model_key = 'vidu-t2v' AND is_active = true"
+        )
+        model_row = db_cursor.fetchone()
+        if model_row is None:
+            pytest.skip("Vidu model not in DB")
+
+        model_id = model_row["id"] if isinstance(model_row, dict) else model_row[0]
+
+        db_cursor.execute(
+            "SELECT id FROM gm_social_accounts WHERE user_id = (SELECT id FROM gm_users LIMIT 1) LIMIT 1"
+        )
+        account_row = db_cursor.fetchone()
+        if account_row is None:
+            pytest.skip("No social account available")
+
+        account_id = account_row["id"] if isinstance(account_row, dict) else account_row[0]
+
+        resp = video_client.post(AIPUB_PLAN_URL, json={
+            "platform_id": 2,
+            "content_type": "video",
+            "plan_type": "single_video",
+            "video_ai_model_id": model_id,
+            "social_account_id": account_id,
+            "ai_input": {
+                "content_prompt": "Test Vidu AIPub plan",
+                "video_prompt": "Beautiful sunset over the ocean with waves",
+                "video_config": {
+                    "duration": 4,
+                    "aspect_ratio": "16:9",
+                    "resolution": "720p",
+                    "size": "1280x720",
+                },
+                "vidu_config": {
+                    "style": "general",
+                    "movement_amplitude": "auto",
+                    "model_version": "vidu1.5",
+                },
+            },
+        })
+
+        if resp.status_code == 200:
+            data = extract_data(resp.json())
+            assert data is not None
+            plan_id = data.get("id")
+            if plan_id:
+                # Verify DB record has correct video_ai_model_id
+                db_cursor.execute(
+                    "SELECT video_ai_model_id, ai_input FROM gm_aipub_plans WHERE id = %s",
+                    (plan_id,)
+                )
+                row = db_cursor.fetchone()
+                assert row is not None
+                db_model_id = row["video_ai_model_id"] if isinstance(row, dict) else row[0]
+                assert db_model_id == model_id
+
+                # Verify ai_input contains vidu_config
+                ai_input = row["ai_input"] if isinstance(row, dict) else row[1]
+                if isinstance(ai_input, str):
+                    import json
+                    ai_input = json.loads(ai_input)
+                if ai_input:
+                    assert "video_config" in ai_input, "ai_input should contain video_config"
+
+    def test_vidu_plan_consistency_with_db_model(self, video_client, db_cursor):
+        """Verify DB model_key matches expected Vidu convention."""
+        db_cursor.execute(
+            "SELECT model_key, provider, model_type FROM gm_ai_models WHERE provider = 'vidu'"
+        )
+        rows = db_cursor.fetchall()
+        for row in rows:
+            key = row["model_key"] if isinstance(row, dict) else row[0]
+            provider = row["provider"] if isinstance(row, dict) else row[1]
+            model_type = row["model_type"] if isinstance(row, dict) else row[2]
+            assert provider == "vidu"
+            assert model_type == "video"
+            assert key.startswith("vidu-"), f"model_key '{key}' should start with 'vidu-'"

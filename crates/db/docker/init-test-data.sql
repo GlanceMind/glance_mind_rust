@@ -95,7 +95,14 @@ INSERT INTO gm_ai_models (id, name, provider, model_key, model_type, cost_multip
 (6, 'Jimeng 3.0 720P', 'jimeng', 'jimeng-video-3.0-720p', 'video', 2.0, true),
 (7, 'Jimeng 3.0 1080P', 'jimeng', 'jimeng-video-3.0-1080p', 'video', 3.0, true),
 (8, 'Jimeng 3.0 Pro', 'jimeng', 'jimeng-video-3.0-pro', 'video', 5.0, true),
-(9, 'Veo-2', 'google', 'veo-2', 'video', 5.0, true)
+(9, 'Veo-2', 'google', 'veo-2', 'video', 5.0, true),
+(10, 'Vidu 文生视频',   'vidu', 'vidu-t2v',        'video', 1.5, true),
+(11, 'Vidu 图生视频',   'vidu', 'vidu-i2v',        'video', 2.0, true),
+(12, 'Vidu 参考生视频', 'vidu', 'vidu-ref2v',      'video', 3.0, true),
+(13, 'Vidu 首尾帧',     'vidu', 'vidu-startend',   'video', 2.5, true),
+(14, 'Vidu 智能多帧',   'vidu', 'vidu-multiframe', 'video', 4.0, true),
+(15, 'Vidu 快速生成',   'vidu', 'vidu-fast',       'video', 1.0, true),
+(16, 'Vidu 模板视频',   'vidu', 'vidu-template',   'video', 3.0, true)
 ON CONFLICT (id) DO UPDATE SET
     name = EXCLUDED.name,
     provider = EXCLUDED.provider,

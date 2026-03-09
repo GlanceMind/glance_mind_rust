@@ -39,20 +39,19 @@ pub struct CreateVideoRequest {
 
 impl CreateVideoRequest {
     pub fn validate_params(&self) -> Result<(), String> {
-        // prompt can be empty when there's an image (image-to-video)
-        // but in multipart processing, at least prompt or image is required
-
-        // Validate seconds
         let seconds_val: i32 = self
             .seconds
             .parse()
             .map_err(|_| "seconds must be a valid number".to_string())?;
-        if ![5, 10, 15].contains(&seconds_val) {
-            return Err("seconds can only be 5, 10, or 15".to_string());
+        // Extended for Vidu (4, 5, 8) + Sora (10, 15) + Jimeng (5, 10)
+        if ![4, 5, 8, 10, 15].contains(&seconds_val) {
+            return Err("seconds can only be 4, 5, 8, 10, or 15".to_string());
         }
 
-        // Validate size (extended for Jimeng aspect ratios)
-        let valid_sizes = ["1280x720", "720x1280", "720x720", "960x720", "720x960", "1260x540"];
+        let valid_sizes = [
+            "1280x720", "720x1280", "720x720", "960x720", "720x960", "1260x540",
+            "1920x1080", "1080x1920", "1080x1080",
+        ];
         if !valid_sizes.contains(&self.size.as_str()) {
             return Err(format!("invalid size: {}", self.size));
         }
@@ -99,4 +98,116 @@ pub struct VideoTaskListResponse {
     pub total: i64,
     pub page: i32,
     pub page_size: i32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_request(seconds: &str, size: &str) -> CreateVideoRequest {
+        CreateVideoRequest {
+            title: Some("Test".to_string()),
+            prompt: Some("A test video".to_string()),
+            ai_model_id: Some(1),
+            orientation: VideoOrientation::Portrait,
+            seconds: seconds.to_string(),
+            size: size.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_validate_vidu_duration_4s() {
+        let req = make_request("4", "1280x720");
+        assert!(req.validate_params().is_ok());
+    }
+
+    #[test]
+    fn test_validate_vidu_duration_5s() {
+        let req = make_request("5", "1280x720");
+        assert!(req.validate_params().is_ok());
+    }
+
+    #[test]
+    fn test_validate_vidu_duration_8s() {
+        let req = make_request("8", "1280x720");
+        assert!(req.validate_params().is_ok());
+    }
+
+    #[test]
+    fn test_validate_sora_duration_10s() {
+        let req = make_request("10", "1280x720");
+        assert!(req.validate_params().is_ok());
+    }
+
+    #[test]
+    fn test_validate_sora_duration_15s() {
+        let req = make_request("15", "720x1280");
+        assert!(req.validate_params().is_ok());
+    }
+
+    #[test]
+    fn test_validate_invalid_duration_3s() {
+        let req = make_request("3", "1280x720");
+        let result = req.validate_params();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("seconds"));
+    }
+
+    #[test]
+    fn test_validate_invalid_duration_6s() {
+        let req = make_request("6", "1280x720");
+        assert!(req.validate_params().is_err());
+    }
+
+    #[test]
+    fn test_validate_invalid_duration_text() {
+        let req = make_request("abc", "1280x720");
+        let result = req.validate_params();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("valid number"));
+    }
+
+    #[test]
+    fn test_validate_vidu_size_1920x1080() {
+        let req = make_request("4", "1920x1080");
+        assert!(req.validate_params().is_ok());
+    }
+
+    #[test]
+    fn test_validate_vidu_size_1080x1920() {
+        let req = make_request("4", "1080x1920");
+        assert!(req.validate_params().is_ok());
+    }
+
+    #[test]
+    fn test_validate_vidu_size_1080x1080() {
+        let req = make_request("4", "1080x1080");
+        assert!(req.validate_params().is_ok());
+    }
+
+    #[test]
+    fn test_validate_standard_sizes() {
+        let valid = vec![
+            "1280x720", "720x1280", "720x720",
+            "960x720", "720x960", "1260x540",
+        ];
+        for size in valid {
+            let req = make_request("10", size);
+            assert!(req.validate_params().is_ok(), "size '{}' should be valid", size);
+        }
+    }
+
+    #[test]
+    fn test_validate_invalid_size() {
+        let req = make_request("10", "640x480");
+        let result = req.validate_params();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid size"));
+    }
+
+    #[test]
+    fn test_validate_invalid_size_empty() {
+        let req = make_request("10", "");
+        assert!(req.validate_params().is_err());
+    }
 }
