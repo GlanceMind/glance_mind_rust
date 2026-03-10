@@ -186,27 +186,41 @@ fn calculate_relevance(tokens: &[&str], query_lower: &str, chunk: &DocChunk) -> 
     score
 }
 
+fn snap_to_char_boundary(s: &str, byte_pos: usize) -> usize {
+    let pos = byte_pos.min(s.len());
+    if s.is_char_boundary(pos) {
+        return pos;
+    }
+    // Walk backwards to find a valid boundary
+    (0..pos).rev().find(|&i| s.is_char_boundary(i)).unwrap_or(0)
+}
+
 fn find_relevant_snippet(content: &str, tokens: &[&str], max_len: usize) -> String {
     let content_lower = content.to_lowercase();
-    let mut best_pos = 0;
-    let mut best_score = 0;
+    let mut best_pos: usize = 0;
+    let mut best_score: usize = 0;
 
-    let window = max_len.min(content.len());
+    let window = max_len.min(content_lower.len());
     let step = 200;
-    let mut pos = 0;
-    while pos + window <= content.len() {
-        let slice = &content_lower[pos..pos + window];
-        let score: usize = tokens.iter().map(|t| slice.matches(t).count()).sum();
-        if score > best_score {
-            best_score = score;
-            best_pos = pos;
+    let mut pos: usize = 0;
+    while pos + window <= content_lower.len() {
+        let safe_start = snap_to_char_boundary(&content_lower, pos);
+        let safe_end = snap_to_char_boundary(&content_lower, pos + window);
+        if safe_start < safe_end {
+            let slice = &content_lower[safe_start..safe_end];
+            let score: usize = tokens.iter().map(|t| slice.matches(t).count()).sum();
+            if score > best_score {
+                best_score = score;
+                best_pos = safe_start;
+            }
         }
         pos += step;
     }
 
-    let end = (best_pos + max_len).min(content.len());
-    let snippet = &content[best_pos..end];
-    if best_pos > 0 || end < content.len() {
+    let snap_start = snap_to_char_boundary(content, best_pos);
+    let snap_end = snap_to_char_boundary(content, (best_pos + max_len).min(content.len()));
+    let snippet = &content[snap_start..snap_end];
+    if snap_start > 0 || snap_end < content.len() {
         format!("...{}...", snippet)
     } else {
         snippet.to_string()

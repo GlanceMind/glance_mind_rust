@@ -70,11 +70,14 @@ impl AiChatService {
         Ok(messages.into_iter().map(MessageDto::from).collect())
     }
 
-    /// Build LLM context with token budget, ensuring message-pair completeness.
+    /// Build LLM context with token budget, ensuring tool_call pair completeness.
+    ///
+    /// OpenAI requires: every assistant message with `tool_calls` MUST be followed by
+    /// a `tool` message for EACH `tool_call_id`. Missing any causes a 400 error.
     fn build_context(&self, history: &[AiMessage]) -> Vec<llm_client::ChatMessage> {
         let system_prompt = SYSTEM_PROMPT.to_string();
         let system_tokens = estimate_tokens(&system_prompt);
-        let tool_tokens = 6000; // ~22 tools × ~270 tokens each
+        let tool_tokens = 6000;
         let mut budget = MAX_CONTEXT_TOKENS.saturating_sub(system_tokens + tool_tokens);
 
         let mut messages: Vec<llm_client::ChatMessage> = vec![llm_client::ChatMessage {
@@ -84,68 +87,97 @@ impl AiChatService {
             tool_call_id: None,
         }];
 
+        // Pre-index: for each assistant message with tool_calls, find all required tool_call_ids
+        // and map them to the indices of their corresponding tool result messages.
+        let mut assistant_tool_ids: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
+        let mut tool_result_index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+        for (idx, msg) in history.iter().enumerate() {
+            if msg.role == "assistant" {
+                if let Some(tc_json) = &msg.tool_calls {
+                    if let Ok(tcs) = serde_json::from_value::<Vec<llm_client::ToolCall>>(tc_json.clone()) {
+                        let ids: Vec<String> = tcs.iter().map(|tc| tc.id.clone()).collect();
+                        assistant_tool_ids.insert(idx, ids);
+                    }
+                }
+            } else if msg.role == "tool" {
+                if let Some(tc_id) = &msg.tool_call_id {
+                    tool_result_index.insert(tc_id.clone(), idx);
+                }
+            }
+        }
+
         // Scan from newest to oldest, collecting messages while respecting budget.
-        // Track tool_call pairs: if we include a `tool` message, we must include
-        // the preceding `assistant` with tool_calls.
-        let mut selected: Vec<usize> = Vec::new();
-        let mut required_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut selected: std::collections::HashSet<usize> = std::collections::HashSet::new();
         let mut i = history.len();
 
         while i > 0 {
             i -= 1;
-            if selected.contains(&i) || required_indices.contains(&i) {
+            if selected.contains(&i) {
                 continue;
             }
 
             let msg = &history[i];
-            let content_for_estimate = if msg.role == "tool" {
-                if let Some(tc_id) = &msg.tool_call_id {
-                    let tool_name = self.find_tool_name_for_call(history, tc_id);
-                    let result: Value = serde_json::from_str(&msg.content).unwrap_or(Value::Null);
-                    compress_tool_result(&tool_name, &result)
-                } else {
-                    msg.content.clone()
+
+            // For assistant messages with tool_calls, include as a complete group or skip entirely.
+            if msg.role == "assistant" && assistant_tool_ids.contains_key(&i) {
+                let tc_ids = &assistant_tool_ids[&i];
+                let tool_indices: Vec<usize> = tc_ids.iter()
+                    .filter_map(|id| tool_result_index.get(id).copied())
+                    .collect();
+
+                // If any tool result is missing from history, skip this entire group (orphaned)
+                if tool_indices.len() != tc_ids.len() {
+                    continue;
                 }
-            } else {
-                msg.content.clone()
-            };
 
-            let msg_tokens = estimate_tokens(&content_for_estimate)
-                + if msg.tool_calls.is_some() { 50 } else { 0 };
+                // Estimate total cost of assistant + all tool results
+                let assistant_tokens = estimate_tokens(&msg.content) + 50;
+                let mut group_tokens = assistant_tokens;
+                for &tidx in &tool_indices {
+                    let tmsg = &history[tidx];
+                    let content = if let Some(tc_id) = &tmsg.tool_call_id {
+                        let tool_name = self.find_tool_name_for_call(history, tc_id);
+                        let result: Value = serde_json::from_str(&tmsg.content).unwrap_or(Value::Null);
+                        compress_tool_result(&tool_name, &result)
+                    } else {
+                        tmsg.content.clone()
+                    };
+                    group_tokens += estimate_tokens(&content);
+                }
 
+                if group_tokens > budget {
+                    break;
+                }
+                budget = budget.saturating_sub(group_tokens);
+                selected.insert(i);
+                for tidx in tool_indices {
+                    selected.insert(tidx);
+                }
+                continue;
+            }
+
+            // For tool messages: they'll be pulled in by their assistant group above, skip standalone
+            if msg.role == "tool" {
+                continue;
+            }
+
+            // Regular user/assistant messages (no tool_calls)
+            let msg_tokens = estimate_tokens(&msg.content);
             if msg_tokens > budget {
                 break;
             }
             budget = budget.saturating_sub(msg_tokens);
-            selected.push(i);
-
-            // If this is a `tool` message, find and require the assistant message with the matching tool_call
-            if msg.role == "tool" {
-                for j in (0..i).rev() {
-                    if history[j].role == "assistant" && history[j].tool_calls.is_some() {
-                        let tc_tokens = estimate_tokens(&history[j].content) + 50;
-                        if tc_tokens <= budget {
-                            budget = budget.saturating_sub(tc_tokens);
-                            required_indices.insert(j);
-                        }
-                        break;
-                    }
-                }
-            }
+            selected.insert(i);
         }
 
-        // Merge required indices into selected
-        for idx in required_indices {
-            if !selected.contains(&idx) {
-                selected.push(idx);
-            }
-        }
-        selected.sort();
+        // Build final message list in chronological order
+        let mut sorted: Vec<usize> = selected.into_iter().collect();
+        sorted.sort();
 
-        for &idx in &selected {
+        for &idx in &sorted {
             let msg = &history[idx];
             let content = if msg.role == "tool" {
-                // Compress tool results for LLM context
                 if let Some(tc_id) = &msg.tool_call_id {
                     let tool_name = self.find_tool_name_for_call(history, tc_id);
                     let result: Value = serde_json::from_str(&msg.content).unwrap_or(Value::Null);
