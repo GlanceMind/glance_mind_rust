@@ -137,20 +137,46 @@ impl ViduClient {
     }
 
     /// Multi-frame video generation.
-    /// Vidu API: `start_image` + `image_settings[{key_image, prompt, duration}]`
-    /// First image is `start_image`, rest are keyframes.
-    pub async fn multi_frame(&self, params: ViduGenerateParams, images: Vec<String>) -> Result<ViduTaskHandle, ApiError> {
-        let start_image = images.first().cloned().unwrap_or_default();
-        let keyframe_images = if images.len() > 1 { &images[1..] } else { &images[..] };
-        let per_frame_duration = if keyframe_images.is_empty() { 5 } else {
-            (params.duration as usize / keyframe_images.len().max(1)).max(2).min(7) as i32
-        };
+    /// Vidu API: `start_image` (1st image) + `image_settings` (remaining as keyframes).
+    /// API constraint: image_settings must contain 2-9 keyframes, so total images = 3-10.
+    /// Per-keyframe duration is clamped to 2-7 seconds.
+    /// `keyframe_prompts` provides per-keyframe transition descriptions; falls back to global prompt.
+    pub async fn multi_frame(
+        &self,
+        params: ViduGenerateParams,
+        images: Vec<String>,
+        keyframe_prompts: Option<Vec<String>>,
+    ) -> Result<ViduTaskHandle, ApiError> {
+        if images.len() < 3 {
+            return Err(ApiError::BadRequest(format!(
+                "multi_frame requires at least 3 images (1 start + 2 keyframes), got {}",
+                images.len()
+            )));
+        }
+        if images.len() > 10 {
+            return Err(ApiError::BadRequest(format!(
+                "multi_frame supports at most 10 images (1 start + 9 keyframes), got {}",
+                images.len()
+            )));
+        }
+        let start_image = images[0].clone();
+        let keyframe_images = &images[1..];
+        let per_frame_duration =
+            (params.duration as usize / keyframe_images.len()).clamp(2, 7) as i32;
+        let prompts = keyframe_prompts.unwrap_or_default();
         let image_settings: Vec<serde_json::Value> = keyframe_images.iter()
-            .map(|uri| serde_json::json!({
-                "key_image": uri,
-                "prompt": params.prompt,
-                "duration": per_frame_duration,
-            }))
+            .enumerate()
+            .map(|(i, uri)| {
+                let kf_prompt = prompts.get(i)
+                    .filter(|s| !s.is_empty())
+                    .cloned()
+                    .unwrap_or_else(|| params.prompt.clone());
+                serde_json::json!({
+                    "key_image": uri,
+                    "prompt": kf_prompt,
+                    "duration": per_frame_duration,
+                })
+            })
             .collect();
         self.post_generation("/ent/v2/multiframe", &serde_json::json!({
             "model": params.model,

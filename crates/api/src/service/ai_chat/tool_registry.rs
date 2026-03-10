@@ -398,7 +398,7 @@ impl ToolRegistry {
                     size,
                 };
                 let result = state.video_service.create_video(
-                    user_id, request, None, None, None, None, None, None, None,
+                    user_id, request, None, None, None, None, None, None, None, vec![], None,
                 ).await?;
                 serde_json::to_value(&result).unwrap_or_default()
             }

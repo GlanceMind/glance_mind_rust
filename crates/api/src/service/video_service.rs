@@ -80,10 +80,13 @@ impl VideoService {
         start_frame_filename: Option<String>,
         end_frame_data: Option<Vec<u8>>,
         end_frame_filename: Option<String>,
+        // Multi-frame mode (3-10 images)
+        reference_images: Vec<Vec<u8>>,
+        keyframe_prompts: Option<Vec<String>>,
     ) -> Result<CreateVideoResponse, ApiError> {
-        // Detect dual image mode
-        let is_dual_image = start_frame_data.is_some() && end_frame_data.is_some();
-        let has_any_image = image_data.is_some() || start_frame_data.is_some();
+        let is_multi_frame = reference_images.len() >= 3;
+        let is_dual_image = !is_multi_frame && start_frame_data.is_some() && end_frame_data.is_some();
+        let has_any_image = image_data.is_some() || start_frame_data.is_some() || !reference_images.is_empty();
 
         // Validate parameters: must have prompt or image
         if request.prompt.is_none() && !has_any_image {
@@ -175,6 +178,8 @@ impl VideoService {
                     image_data.or(start_frame_data.clone()),
                     end_frame_data.clone(),
                     &ai_model_info,
+                    reference_images,
+                    keyframe_prompts,
                 )
                 .await;
         }
@@ -395,7 +400,7 @@ impl VideoService {
         Ok(Self::task_to_response(task))
     }
 
-    /// Vidu video generation path (supports T2V, I2V, start-end, fast)
+    /// Vidu video generation path (supports T2V, I2V, start-end, multi-frame, fast)
     #[allow(clippy::too_many_arguments)]
     async fn create_video_vidu(
         &self,
@@ -405,6 +410,8 @@ impl VideoService {
         image_data: Option<Vec<u8>>,
         end_frame_data: Option<Vec<u8>>,
         ai_model_info: &Option<AiModel>,
+        reference_images: Vec<Vec<u8>>,
+        keyframe_prompts: Option<Vec<String>>,
     ) -> Result<CreateVideoResponse, ApiError> {
         let vidu = self.vidu_client.as_ref().ok_or_else(|| {
             ApiError::InternalServerError("Vidu client not configured".to_string())
@@ -463,8 +470,18 @@ impl VideoService {
                     vec![start_uri, end_uri],
                 ).await?
             }
-            "reference_to_video" if image_data.is_some() => {
-                let image_uri = vidu.upload_image(&image_data.unwrap()).await?;
+            "reference_to_video" if !reference_images.is_empty() || image_data.is_some() => {
+                let mut images = Vec::new();
+                if !reference_images.is_empty() {
+                    for img_data in &reference_images {
+                        images.push(vidu.upload_image(img_data).await?);
+                    }
+                } else if let Some(data) = image_data {
+                    images.push(vidu.upload_image(&data).await?);
+                    if let Some(end_data) = end_frame_data {
+                        images.push(vidu.upload_image(&end_data).await?);
+                    }
+                }
                 vidu.reference_to_video(
                     vidu_client::ViduGenerateParams {
                         model: model_version, prompt: clean_prompt.clone().unwrap_or_default(),
@@ -472,13 +489,20 @@ impl VideoService {
                         aspect_ratio: Some(ar.to_string()),
                         resolution: Some(resolution), movement_amplitude: None,
                     },
-                    vec![image_uri],
+                    images,
                 ).await?
             }
-            "multi_frame" if image_data.is_some() => {
-                let mut images = vec![vidu.upload_image(&image_data.unwrap()).await?];
-                if let Some(end_data) = end_frame_data {
-                    images.push(vidu.upload_image(&end_data).await?);
+            "multi_frame" if !reference_images.is_empty() || image_data.is_some() => {
+                let mut images = Vec::new();
+                if !reference_images.is_empty() {
+                    for img_data in &reference_images {
+                        images.push(vidu.upload_image(img_data).await?);
+                    }
+                } else {
+                    images.push(vidu.upload_image(&image_data.unwrap()).await?);
+                    if let Some(end_data) = end_frame_data {
+                        images.push(vidu.upload_image(&end_data).await?);
+                    }
                 }
                 vidu.multi_frame(
                     vidu_client::ViduGenerateParams {
@@ -487,28 +511,50 @@ impl VideoService {
                         resolution: Some(resolution), movement_amplitude: None,
                     },
                     images,
+                    keyframe_prompts.clone(),
                 ).await?
             }
-            "template" if image_data.is_some() => {
-                let image_uri = vidu.upload_image(&image_data.unwrap()).await?;
+            "template" if !reference_images.is_empty() || image_data.is_some() => {
+                let mut images = Vec::new();
+                if !reference_images.is_empty() {
+                    for img_data in &reference_images {
+                        images.push(vidu.upload_image(img_data).await?);
+                    }
+                } else {
+                    images.push(vidu.upload_image(&image_data.unwrap()).await?);
+                }
                 vidu.template_to_video(
                     "general".to_string(),
-                    vec![image_uri],
+                    images,
                     clean_prompt.clone(),
                     Some(ar.to_string()),
                 ).await?
             }
-            "general_film" if image_data.is_some() => {
-                let image_uri = vidu.upload_image(&image_data.unwrap()).await?;
+            "general_film" if !reference_images.is_empty() || image_data.is_some() => {
+                let mut images = Vec::new();
+                if !reference_images.is_empty() {
+                    for img_data in &reference_images {
+                        images.push(vidu.upload_image(img_data).await?);
+                    }
+                } else {
+                    images.push(vidu.upload_image(&image_data.unwrap()).await?);
+                }
                 vidu.general_film(
-                    vec![image_uri], clean_prompt.clone(),
+                    images, clean_prompt.clone(),
                     Some(ar.to_string()), Some(true),
                 ).await?
             }
-            "ad_film" if image_data.is_some() => {
-                let image_uri = vidu.upload_image(&image_data.unwrap()).await?;
+            "ad_film" if !reference_images.is_empty() || image_data.is_some() => {
+                let mut images = Vec::new();
+                if !reference_images.is_empty() {
+                    for img_data in &reference_images {
+                        images.push(vidu.upload_image(img_data).await?);
+                    }
+                } else {
+                    images.push(vidu.upload_image(&image_data.unwrap()).await?);
+                }
                 vidu.ad_film(
-                    vec![image_uri], clean_prompt.clone(),
+                    images, clean_prompt.clone(),
                     Some(ar.to_string()), Some(true),
                 ).await?
             }

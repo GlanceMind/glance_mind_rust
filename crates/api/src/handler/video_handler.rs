@@ -42,8 +42,10 @@ pub async fn create_video(
     let mut start_frame_filename: Option<String> = None;
     let mut end_frame_data: Option<Vec<u8>> = None;
     let mut end_frame_filename: Option<String> = None;
-    // Multi-image mode (ref2v / multiframe: up to 3 images)
+    // Multi-image mode (ref2v / multiframe: up to 9 images)
     let mut reference_images: Vec<Vec<u8>> = Vec::new();
+    // Per-keyframe transition prompts (multi-frame only, JSON-encoded string[])
+    let mut keyframe_prompts: Option<Vec<String>> = None;
 
     while let Some(field) = multipart
         .next_field()
@@ -132,20 +134,22 @@ pub async fn create_video(
                     reference_images.push(data.to_vec());
                 }
             }
+            "keyframe_prompts" => {
+                let text = field.text().await.map_err(|_| {
+                    ApiError::BusinessError(BusinessError::InvalidFormField(
+                        "keyframe_prompts".to_string(),
+                    ))
+                })?;
+                keyframe_prompts = serde_json::from_str::<Vec<String>>(&text).ok();
+            }
             _ => {}
         }
     }
 
-    // If reference_images are provided, use them as start_frame/end_frame (for <=2 images models)
-    // or keep as reference_images (for multi-image models)
-    if !reference_images.is_empty() && start_frame_data.is_none() {
-        start_frame_data = reference_images.first().cloned();
-        start_frame_filename = Some("reference_1.png".to_string());
-        if reference_images.len() >= 2 {
-            end_frame_data = reference_images.get(1).cloned();
-            end_frame_filename = Some("reference_2.png".to_string());
-        }
-    }
+    // Keep reference_images intact for modes that consume them (ref2v, multiframe, film, template).
+    // Only collapse to start_frame/end_frame when NO reference_images were sent and no start_frame
+    // was explicitly provided -- this preserves backward compatibility for dual-image modes
+    // (start-end, jimeng) that use the "start_frame"/"end_frame" field names directly.
 
     // Validate required fields: need at least a prompt or any image
     if prompt.is_none() && image_data.is_none() && start_frame_data.is_none() && reference_images.is_empty() {
@@ -192,6 +196,8 @@ pub async fn create_video(
             start_frame_filename,
             end_frame_data,
             end_frame_filename,
+            reference_images,
+            keyframe_prompts,
         )
         .await?;
 
