@@ -4,7 +4,7 @@ use crate::dto::wallet_dto::{
     RechargeResponseDto, WalletBalanceDto, WalletTransactionDto,
 };
 use crate::error::api_error::ApiError;
-use crate::repository::wallet_repository::WalletRepository;
+use crate::repository::wallet_repository::{RefundApplyOutcome, WalletRepository};
 use crate::service::xunhupay_client::{
     OrderId, PayNotification, PayRequest, QueryResponse, XunhuPayClient,
 };
@@ -14,6 +14,9 @@ use glance_mind_db::entity::wallet_transaction::{NewWalletTransaction, WalletTra
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
+
+const MAX_RECHARGE_CNY: i64 = 10_000;
+const MAX_PENDING_RECHARGE_ORDERS: i64 = 5;
 
 #[derive(Clone)]
 pub struct WalletService {
@@ -30,6 +33,7 @@ enum XunhuPayOrderStatus {
     Pending,
     Paid,
     Refunding,
+    Cancelled,
     Refunded,
     RefundFailed,
     Unknown,
@@ -51,7 +55,7 @@ impl XunhuPayOrderStatus {
             Some("WP") | None => Self::Pending,
             Some("OD") => Self::Paid,
             Some("RD") => Self::Refunding,
-            Some("CD") => Self::Refunded,
+            Some("CD") => Self::Cancelled,
             Some("UD") => Self::RefundFailed,
             Some(_) => Self::Unknown,
         }
@@ -206,6 +210,57 @@ impl WalletService {
             .ok_or_else(|| ApiError::InternalServerError("API_BASE_URL is not configured".into()))
     }
 
+    fn validate_amount_string(raw: &str) -> Result<BigDecimal, ApiError> {
+        let amount = BigDecimal::from_str(raw)
+            .map_err(|_| ApiError::BadRequest("Invalid amount format".into()))?;
+        if amount <= BigDecimal::from(0) {
+            return Err(ApiError::BadRequest("Amount must be positive".into()));
+        }
+        let trimmed = raw.trim();
+        let mut parts = trimmed.split('.');
+        let int_part = parts.next().unwrap_or_default();
+        let frac_part = parts.next();
+        if parts.next().is_some()
+            || int_part.is_empty()
+            || !int_part.chars().all(|c| c.is_ascii_digit())
+            || frac_part.is_some_and(|frac| frac.len() > 2 || !frac.chars().all(|c| c.is_ascii_digit()))
+        {
+            return Err(ApiError::BadRequest(
+                "Amount must be a positive decimal with at most 2 decimal places".into(),
+            ));
+        }
+        if amount > BigDecimal::from(MAX_RECHARGE_CNY) {
+            return Err(ApiError::BadRequest(format!(
+                "Amount cannot exceed {} CNY",
+                MAX_RECHARGE_CNY
+            )));
+        }
+        Ok(amount)
+    }
+
+    fn amount_matches(expected: &BigDecimal, raw: &str) -> bool {
+        BigDecimal::from_str(raw)
+            .map(|actual| actual == *expected)
+            .unwrap_or(false)
+    }
+
+    fn sanitize_return_url(&self, return_url: Option<String>) -> Result<Option<String>, ApiError> {
+        let Some(return_url) = return_url else {
+            return Ok(None);
+        };
+        let requested = reqwest::Url::parse(&return_url)
+            .map_err(|_| ApiError::BadRequest("Invalid return_url".into()))?;
+        if !matches!(requested.scheme(), "http" | "https") {
+            return Err(ApiError::BadRequest("return_url must use http or https".into()));
+        }
+        let base = reqwest::Url::parse(self.notify_base_url()?)
+            .map_err(|_| ApiError::InternalServerError("API_BASE_URL is invalid".into()))?;
+        if requested.host_str() != base.host_str() {
+            return Err(ApiError::BadRequest("return_url host is not allowed".into()));
+        }
+        Ok(Some(return_url))
+    }
+
     fn payment_status_from_txn(txn: &WalletTransaction) -> PaymentStatus {
         PaymentStatus::from_db_value(txn.payment_status.as_deref())
             .unwrap_or(PaymentStatus::Pending)
@@ -233,6 +288,68 @@ impl WalletService {
         amount * BigDecimal::from(100)
     }
 
+    fn exceeds_pending_order_limit(count: i64) -> bool {
+        count >= MAX_PENDING_RECHARGE_ORDERS
+    }
+
+    fn validate_notification_against_order(
+        &self,
+        client: &XunhuPayClient,
+        txn: &WalletTransaction,
+        notification: &PayNotification,
+    ) -> Result<(), ApiError> {
+        if notification.appid != client.app_id() {
+            return Err(ApiError::BadRequest("Payment appid mismatch".into()));
+        }
+        if !Self::amount_matches(&txn.amount, &notification.total_fee) {
+            return Err(ApiError::BadRequest("Payment amount mismatch".into()));
+        }
+        if let Some(ref attach) = notification.attach {
+            if attach != &txn.user_id.to_string() {
+                return Err(ApiError::BadRequest("Payment attach mismatch".into()));
+            }
+        }
+        if let Some(existing_open_order_id) = txn.open_order_id.as_deref() {
+            if existing_open_order_id != notification.open_order_id {
+                return Err(ApiError::BadRequest("Payment open_order_id mismatch".into()));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_query_against_order(
+        &self,
+        txn: &WalletTransaction,
+        query: &QueryResponse,
+    ) -> Result<(), ApiError> {
+        let Some(data) = query.data.as_ref() else {
+            return Ok(());
+        };
+        if let Some(trade_order_id) = data.trade_order_id.as_deref() {
+            if trade_order_id
+                != txn
+                    .external_txn_id
+                    .as_deref()
+                    .unwrap_or_default()
+            {
+                return Err(ApiError::BadRequest("Query trade_order_id mismatch".into()));
+            }
+        }
+        if let Some(total_fee) = data.total_fee.as_deref() {
+            if !Self::amount_matches(&txn.amount, total_fee) {
+                return Err(ApiError::BadRequest("Query payment amount mismatch".into()));
+            }
+        }
+        if let Some(existing_open_order_id) = txn.open_order_id.as_deref() {
+            if let Some(query_open_order_id) = data.open_order_id.as_deref() {
+                if existing_open_order_id != query_open_order_id {
+                    return Err(ApiError::BadRequest("Query open_order_id mismatch".into()));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn gateway_status_to_payment_status(
         current_status: PaymentStatus,
         gateway_status: XunhuPayOrderStatus,
@@ -241,6 +358,7 @@ impl WalletService {
             XunhuPayOrderStatus::Pending => PaymentStatus::Pending,
             XunhuPayOrderStatus::Paid => PaymentStatus::Paid,
             XunhuPayOrderStatus::Refunding => PaymentStatus::Refunding,
+            XunhuPayOrderStatus::Cancelled => PaymentStatus::Failed,
             XunhuPayOrderStatus::Refunded => PaymentStatus::Refunded,
             XunhuPayOrderStatus::RefundFailed => match current_status {
                 PaymentStatus::Pending => PaymentStatus::Failed,
@@ -368,6 +486,40 @@ impl WalletService {
             return Ok(());
         }
 
+        if next_status == PaymentStatus::Refunded
+            && matches!(current_status, PaymentStatus::Paid | PaymentStatus::Refunding)
+        {
+            match self
+                .repo
+                .atomic_apply_refund(
+                    txn.id,
+                    txn.user_id,
+                    current_status,
+                    Self::payment_points(&txn.amount),
+                    platform_txn_id,
+                    open_order_id,
+                )
+                .await
+                .map_err(|error| {
+                    ApiError::InternalServerError(format!("Apply refund failed: {error}"))
+                })? {
+                RefundApplyOutcome::Applied | RefundApplyOutcome::Noop => {}
+                RefundApplyOutcome::BlockedInsufficientBalance {
+                    available_balance,
+                    required_points,
+                } => {
+                    tracing::warn!(
+                        "Blocking recharge refund for order {}: available_balance={} required_points={} current_status={}",
+                        txn.external_txn_id.as_deref().unwrap_or("unknown"),
+                        available_balance,
+                        required_points,
+                        current_status.as_db_value(),
+                    );
+                }
+            }
+            return Ok(());
+        }
+
         let _ = self
             .repo
             .update_payment_status_if_current(
@@ -395,6 +547,15 @@ impl WalletService {
                 txn.external_txn_id.as_deref().unwrap_or("unknown"),
                 query.errcode,
                 query.errmsg
+            );
+            return Ok(txn);
+        }
+
+        if let Err(error) = self.validate_query_against_order(&txn, &query) {
+            tracing::warn!(
+                "Ignoring inconsistent recharge query payload for order {}: {:?}",
+                txn.external_txn_id.as_deref().unwrap_or("unknown"),
+                error
             );
             return Ok(txn);
         }
@@ -485,10 +646,13 @@ impl WalletService {
             .query_order(OrderId::TradeOrderId(order_no.clone()))
             .await
             .map_err(|error| {
-                ApiError::InternalServerError(format!(
-                    "Recharge status query failed for order {order_no}: {error}"
-                ))
-            })?;
+                tracing::warn!("Recharge status query failed for order {order_no}: {error}");
+                ApiError::PaymentServiceError("Recharge status query failed".into())
+            });
+
+        let Ok(query) = query else {
+            return Ok(txn);
+        };
 
         self.reconcile_transaction_with_query(txn, query).await
     }
@@ -537,11 +701,28 @@ impl WalletService {
     ) -> Result<RechargeResponseDto, ApiError> {
         let client = self.xunhupay()?;
 
-        // Validate amount
-        let amount_bd = BigDecimal::from_str(&dto.amount)
-            .map_err(|_| ApiError::BadRequest("Invalid amount format".into()))?;
-        if amount_bd <= BigDecimal::from(0) {
-            return Err(ApiError::BadRequest("Amount must be positive".into()));
+        if dto.channel == RechargeChannel::Wechat {
+            return Err(ApiError::BadRequest(
+                "WeChat Pay is temporarily unavailable".into(),
+            ));
+        }
+
+        let amount_bd = Self::validate_amount_string(&dto.amount)?;
+        let sanitized_return_url = self.sanitize_return_url(dto.return_url)?;
+        let pending_order_count = self
+            .repo
+            .count_pending_recharge_orders(user_id)
+            .await
+            .map_err(|error| {
+                ApiError::InternalServerError(format!(
+                    "Count pending recharge orders failed: {error}"
+                ))
+            })?;
+        if Self::exceeds_pending_order_limit(pending_order_count) {
+            return Err(ApiError::BadRequest(format!(
+                "Too many pending recharge orders (limit: {})",
+                MAX_PENDING_RECHARGE_ORDERS
+            )));
         }
 
         // trade_order_id max 32 chars per XunhuPay docs: 2 + 14 + 16 = 32
@@ -566,7 +747,7 @@ impl WalletService {
             reference_type: None,
             payment_status: Some(PaymentStatus::Pending.as_db_value().to_string()),
         };
-        self.repo
+        let created_txn = self.repo
             .create_transaction(new_txn)
             .await
             .map_err(|e| ApiError::InternalServerError(format!("Create order failed: {e}")))?;
@@ -578,7 +759,7 @@ impl WalletService {
             total_fee: dto.amount,
             title: "GlanceMind Points Recharge".to_string(),
             notify_url,
-            return_url: dto.return_url,
+            return_url: sanitized_return_url,
             callback_url: None,
             attach: Some(user_id.to_string()),
             wap_url: None,
@@ -589,7 +770,27 @@ impl WalletService {
         let resp = client
             .pay(pay_req)
             .await
-            .map_err(|e| ApiError::InternalServerError(format!("Payment gateway error: {e}")))?;
+            .map_err(|e| {
+                tracing::error!("XunhuPay create order transport/parse failed: {}", e);
+                ApiError::PaymentServiceError("Payment gateway request failed".into())
+            });
+
+        let resp = match resp {
+            Ok(resp) => resp,
+            Err(err) => {
+                let _ = self
+                    .repo
+                    .update_payment_status_if_current(
+                        created_txn.id,
+                        PaymentStatus::Pending,
+                        PaymentStatus::Failed,
+                        None,
+                        None,
+                    )
+                    .await;
+                return Err(err);
+            }
+        };
 
         if resp.errcode != 0 {
             tracing::error!(
@@ -597,10 +798,19 @@ impl WalletService {
                 resp.errcode,
                 resp.errmsg
             );
-            return Err(ApiError::InternalServerError(format!(
-                "Payment error: {}",
-                resp.errmsg
-            )));
+            let _ = self
+                .repo
+                .update_payment_status_if_current(
+                    created_txn.id,
+                    PaymentStatus::Pending,
+                    PaymentStatus::Failed,
+                    None,
+                    None,
+                )
+                .await;
+            return Err(ApiError::PaymentServiceError(
+                "Payment gateway rejected the recharge order".into(),
+            ));
         }
 
         Ok(RechargeResponseDto {
@@ -631,6 +841,8 @@ impl WalletService {
         let txn = self
             .fetch_transaction_by_order_no(&notification.trade_order_id)
             .await?;
+
+        self.validate_notification_against_order(client, &txn, &notification)?;
 
         let current_status = Self::payment_status_from_txn(&txn);
         if current_status.is_terminal() {
@@ -739,12 +951,44 @@ mod tests {
             PaymentStatus::Refunding
         );
         assert_eq!(
+            WalletService::query_status_to_payment_status(PaymentStatus::Pending, Some("CD")),
+            PaymentStatus::Failed
+        );
+        assert_eq!(
             WalletService::query_status_to_payment_status(PaymentStatus::Paid, Some("CD")),
+            PaymentStatus::Failed
+        );
+        assert_eq!(
+            WalletService::notify_status_to_payment_status(PaymentStatus::Paid, "CD"),
             PaymentStatus::Refunded
         );
         assert_eq!(
             WalletService::query_status_to_payment_status(PaymentStatus::Refunding, Some("UD")),
             PaymentStatus::Paid
         );
+    }
+
+    #[test]
+    fn validate_amount_string_rejects_too_large_amount() {
+        let result = WalletService::validate_amount_string("10000.01");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Amount cannot exceed"));
+    }
+
+    #[test]
+    fn validate_amount_string_accepts_max_amount() {
+        let result = WalletService::validate_amount_string("10000.00");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn pending_order_limit_threshold_is_enforced() {
+        assert!(!WalletService::exceeds_pending_order_limit(0));
+        assert!(!WalletService::exceeds_pending_order_limit(4));
+        assert!(WalletService::exceeds_pending_order_limit(5));
+        assert!(WalletService::exceeds_pending_order_limit(6));
     }
 }

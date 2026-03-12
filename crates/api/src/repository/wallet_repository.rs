@@ -15,6 +15,16 @@ use glance_mind_db::schema::{
 
 pub type PgConnection = PooledConnection<ConnectionManager<DieselPgConnection>>;
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum RefundApplyOutcome {
+    Applied,
+    BlockedInsufficientBalance {
+        available_balance: BigDecimal,
+        required_points: BigDecimal,
+    },
+    Noop,
+}
+
 #[derive(Clone)]
 pub struct WalletRepository {
     pool: DBPool,
@@ -189,6 +199,21 @@ impl WalletRepository {
             .load(&mut conn)
     }
 
+    pub async fn count_pending_recharge_orders(
+        &self,
+        user_id: i32,
+    ) -> Result<i64, DieselError> {
+        let mut conn = self.pool.get().expect("Connection error");
+        wallet_transactions::table
+            .filter(wallet_transactions::user_id.eq(user_id))
+            .filter(wallet_transactions::type_.eq("RECHARGE"))
+            .filter(
+                wallet_transactions::payment_status.eq(Some(PaymentStatus::Pending.as_db_value())),
+            )
+            .count()
+            .get_result(&mut conn)
+    }
+
     /// Transition a recharge order from one explicit payment state to another.
     ///
     /// `PENDING -> PAID` must still go through `atomic_confirm_payment()` so the
@@ -306,6 +331,88 @@ impl WalletRepository {
                 .execute(conn)?;
 
             Ok(())
+        })
+    }
+
+    /// Atomically: mark order REFUNDED + debit wallet + write refund record.
+    ///
+    /// This is used when a previously paid recharge is refunded/charged back.
+    pub async fn atomic_apply_refund(
+        &self,
+        txn_id: i32,
+        user_id: i32,
+        current_status: PaymentStatus,
+        points: BigDecimal,
+        platform_txn_id: Option<&str>,
+        open_order_id: Option<&str>,
+    ) -> Result<RefundApplyOutcome, DieselError> {
+        let mut conn = self.pool.get().expect("Connection error");
+
+        conn.transaction(|conn| {
+            let recharge_order = wallet_transactions::table
+                .find(txn_id)
+                .select(WalletTransaction::as_select())
+                .first::<WalletTransaction>(conn)?;
+
+            let wallet = user_wallets::table
+                .filter(user_wallets::user_id.eq(user_id))
+                .select(UserWallet::as_select())
+                .first::<UserWallet>(conn)?;
+
+            let available_balance = &wallet.balance_points - &wallet.frozen_points;
+            if available_balance < points {
+                return Ok(RefundApplyOutcome::BlockedInsufficientBalance {
+                    available_balance,
+                    required_points: points.clone(),
+                });
+            }
+
+            let updated = diesel::update(
+                wallet_transactions::table
+                    .filter(wallet_transactions::id.eq(txn_id))
+                    .filter(
+                        wallet_transactions::payment_status
+                            .eq(Some(current_status.as_db_value())),
+                    ),
+            )
+            .set((
+                wallet_transactions::payment_status.eq(Some(PaymentStatus::Refunded.as_db_value())),
+                wallet_transactions::platform_txn_id.eq(platform_txn_id),
+                wallet_transactions::open_order_id.eq(open_order_id),
+            ))
+            .execute(conn)?;
+
+            if updated == 0 {
+                return Ok(RefundApplyOutcome::Noop);
+            }
+
+            diesel::update(user_wallets::table)
+                .filter(user_wallets::user_id.eq(user_id))
+                .set(user_wallets::balance_points.eq(user_wallets::balance_points - &points))
+                .execute(conn)?;
+
+            let refund_txn = NewWalletTransaction {
+                user_id,
+                amount: -points,
+                type_: "REFUND".to_string(),
+                payment_method: recharge_order.payment_method.clone(),
+                external_txn_id: None,
+                reference_id: Some(txn_id),
+                description: Some(format!(
+                    "Wallet debit for refunded recharge order {}",
+                    recharge_order
+                        .external_txn_id
+                        .as_deref()
+                        .unwrap_or("unknown_order")
+                )),
+                reference_type: Some("recharge_refund".to_string()),
+                payment_status: None,
+            };
+            diesel::insert_into(wallet_transactions::table)
+                .values(&refund_txn)
+                .execute(conn)?;
+
+            Ok(RefundApplyOutcome::Applied)
         })
     }
 

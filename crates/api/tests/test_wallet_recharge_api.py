@@ -158,6 +158,15 @@ def count_deposit_txns(db_cursor, reference_id: int):
     return db_cursor.fetchone()["cnt"]
 
 
+def count_refund_txns(db_cursor, reference_id: int):
+    """Count REFUND transactions linked to a RECHARGE order."""
+    db_cursor.execute("""
+        SELECT COUNT(*) as cnt FROM gm_wallet_transactions
+        WHERE type = 'REFUND' AND reference_id = %s
+    """, (reference_id,))
+    return db_cursor.fetchone()["cnt"]
+
+
 # ============================================================================
 # 1. Route existence (no-auth smoke)
 # ============================================================================
@@ -393,6 +402,88 @@ class TestPaymentNotifyCallback:
         assert txn["payment_status"] == "PAID"
         assert count_deposit_txns(db_cursor, txn["id"]) == 1, \
             "Refund failure must preserve exactly one DEPOSIT record"
+
+        cleanup_recharge_txns(db_cursor)
+
+    def test_notify_paid_then_refunded_reverses_wallet_credit(self, api_client, db_cursor):
+        """A refund after successful payment must debit the previously credited points."""
+        order_no = f"E2E_{uuid.uuid4().hex[:20]}"
+        reset_wallet(db_cursor, balance=200.0)
+        txn_id = insert_pending_order(db_cursor, order_no, amount="10.00")
+
+        balance_before, _ = get_wallet_balance(db_cursor)
+
+        api_client.post(
+            "/api/v1/public/payment/notify",
+            data=build_notify_form(order_no, total_fee="10.00", status="OD"),
+        )
+
+        balance_after_paid, _ = get_wallet_balance(db_cursor)
+        assert balance_after_paid - balance_before == Decimal("1000") or \
+            balance_after_paid - balance_before == Decimal("1000.00"), \
+            "Paid callback should credit 1000 points"
+
+        api_client.post(
+            "/api/v1/public/payment/notify",
+            data=build_notify_form(order_no, total_fee="10.00", status="CD"),
+        )
+
+        balance_after_refund, _ = get_wallet_balance(db_cursor)
+        assert balance_after_refund == balance_before, \
+            "Refunded callback must reverse the previously credited points"
+
+        txn = get_txn_by_external_id(db_cursor, order_no)
+        assert txn["payment_status"] == "REFUNDED", \
+            f"Expected REFUNDED, got {txn['payment_status']}"
+        assert count_deposit_txns(db_cursor, txn_id) == 1, \
+            "Original DEPOSIT record should remain as audit trail"
+        assert count_refund_txns(db_cursor, txn_id) == 1, \
+            "Refund reversal should create exactly one REFUND record"
+
+        cleanup_recharge_txns(db_cursor)
+
+    def test_notify_refund_blocked_when_points_already_spent(self, api_client, db_cursor):
+        """Refund should be blocked if available balance cannot cover the refund amount."""
+        order_no = f"E2E_{uuid.uuid4().hex[:20]}"
+        reset_wallet(db_cursor, balance=0.0)
+        txn_id = insert_pending_order(db_cursor, order_no, amount="10.00")
+
+        api_client.post(
+            "/api/v1/public/payment/notify",
+            data=build_notify_form(order_no, total_fee="10.00", status="OD"),
+        )
+
+        txn = get_txn_by_external_id(db_cursor, order_no)
+        assert txn["payment_status"] == "PAID"
+        assert count_deposit_txns(db_cursor, txn_id) == 1
+
+        # Simulate user spending most of the credited points, leaving only 100 available.
+        db_cursor.execute("""
+            UPDATE gm_user_wallets
+            SET balance_points = %s, frozen_points = %s, updated_at = NOW()
+            WHERE user_id = %s
+        """, ("100.00", "0.00", TEST_USER_ID))
+        db_cursor.connection.commit()
+
+        balance_before_refund, _ = get_wallet_balance(db_cursor)
+        assert balance_before_refund == Decimal("100.00") or balance_before_refund == Decimal("100")
+
+        resp = api_client.post(
+            "/api/v1/public/payment/notify",
+            data=build_notify_form(order_no, total_fee="10.00", status="CD"),
+        )
+        assert resp.text.strip() == "success", \
+            "Blocked refund callback should still return success to stop retries"
+
+        txn = get_txn_by_external_id(db_cursor, order_no)
+        assert txn["payment_status"] == "PAID", \
+            "Refund should remain blocked and order stay PAID when points are insufficient"
+
+        balance_after_refund, _ = get_wallet_balance(db_cursor)
+        assert balance_after_refund == balance_before_refund, \
+            "Blocked refund must not change wallet balance"
+        assert count_refund_txns(db_cursor, txn_id) == 0, \
+            "Blocked refund must not create a REFUND transaction"
 
         cleanup_recharge_txns(db_cursor)
 

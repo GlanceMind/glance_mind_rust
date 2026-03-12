@@ -1,5 +1,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
+use tracing::warn;
 
 const DEFAULT_GATEWAY: &str = "https://api.xunhupay.com";
 const API_VERSION: &str = "1.1";
@@ -78,8 +80,14 @@ impl XunhuPayClient {
             .map_err(|e| format!("HTTP error: {e}"))?;
 
         let body = resp.text().await.map_err(|e| format!("Read body: {e}"))?;
-        serde_json::from_str::<PayResponse>(&body)
-            .map_err(|e| format!("Parse pay response: {e} | body={body}"))
+        let raw_json: JsonValue = serde_json::from_str(&body).map_err(|e| {
+            warn!("XunhuPay pay response parse failed: {}; body={}", e, &body[..body.len().min(500)]);
+            format!("Parse pay response: unexpected response format")
+        })?;
+        verify_response_hash_from_value(&raw_json, &self.app_secret)
+            .map_err(|e| format!("Invalid pay response signature: {e}"))?;
+        serde_json::from_value::<PayResponse>(raw_json)
+            .map_err(|e| format!("Parse pay response payload: {e}"))
     }
 
     // ---- Query (查询) -----------------------------------------------------
@@ -114,8 +122,14 @@ impl XunhuPayClient {
             .map_err(|e| format!("HTTP error: {e}"))?;
 
         let body = resp.text().await.map_err(|e| format!("Read body: {e}"))?;
-        serde_json::from_str::<QueryResponse>(&body)
-            .map_err(|e| format!("Parse query response: {e} | body={body}"))
+        let raw_json: JsonValue = serde_json::from_str(&body).map_err(|e| {
+            warn!("XunhuPay query response parse failed: {}; body={}", e, &body[..body.len().min(500)]);
+            format!("Parse query response: unexpected response format")
+        })?;
+        verify_response_hash_from_value(&raw_json, &self.app_secret)
+            .map_err(|e| format!("Invalid query response signature: {e}"))?;
+        serde_json::from_value::<QueryResponse>(raw_json)
+            .map_err(|e| format!("Parse query response payload: {e}"))
     }
 
     // ---- Refund (退款) -----------------------------------------------------
@@ -153,8 +167,14 @@ impl XunhuPayClient {
             .map_err(|e| format!("HTTP error: {e}"))?;
 
         let body = resp.text().await.map_err(|e| format!("Read body: {e}"))?;
-        serde_json::from_str::<RefundResponse>(&body)
-            .map_err(|e| format!("Parse refund response: {e} | body={body}"))
+        let raw_json: JsonValue = serde_json::from_str(&body).map_err(|e| {
+            warn!("XunhuPay refund response parse failed: {}; body={}", e, &body[..body.len().min(500)]);
+            format!("Parse refund response: unexpected response format")
+        })?;
+        verify_response_hash_from_value(&raw_json, &self.app_secret)
+            .map_err(|e| format!("Invalid refund response signature: {e}"))?;
+        serde_json::from_value::<RefundResponse>(raw_json)
+            .map_err(|e| format!("Parse refund response payload: {e}"))
     }
 
     // ---- Notification verification ----------------------------------------
@@ -207,6 +227,10 @@ impl XunhuPayClient {
     fn endpoint_url(&self, endpoint: &str) -> String {
         format!("{}/payment/{}", self.gateway, endpoint)
     }
+
+    pub fn app_id(&self) -> &str {
+        &self.app_id
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +271,62 @@ fn normalize_gateway(raw: &str) -> String {
 
 fn nonce() -> String {
     format!("{:032x}", uuid::Uuid::new_v4().as_u128())
+}
+
+fn json_scalar_to_string(value: &JsonValue) -> Option<String> {
+    match value {
+        JsonValue::Null => None,
+        JsonValue::String(s) if s.is_empty() => None,
+        JsonValue::String(s) => Some(s.clone()),
+        JsonValue::Number(n) => Some(n.to_string()),
+        JsonValue::Bool(b) => Some(b.to_string()),
+        other => Some(other.to_string()),
+    }
+}
+
+fn response_params_from_value(value: &JsonValue) -> Result<(BTreeMap<String, String>, String), String> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| "response is not a JSON object".to_string())?;
+    let hash = obj
+        .get("hash")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "missing response hash".to_string())?
+        .to_string();
+
+    let mut params = BTreeMap::new();
+    for (key, value) in obj {
+        if key == "hash" {
+            continue;
+        }
+        if key == "data" {
+            if let Some(data_obj) = value.as_object() {
+                for (data_key, data_value) in data_obj {
+                    if let Some(v) = json_scalar_to_string(data_value) {
+                        params.insert(data_key.clone(), v);
+                    }
+                }
+            } else if let Some(v) = json_scalar_to_string(value) {
+                params.insert(key.clone(), v);
+            }
+            continue;
+        }
+        if let Some(v) = json_scalar_to_string(value) {
+            params.insert(key.clone(), v);
+        }
+    }
+
+    Ok((params, hash))
+}
+
+fn verify_response_hash_from_value(value: &JsonValue, app_secret: &str) -> Result<(), String> {
+    let (params, hash) = response_params_from_value(value)?;
+    if verify_hash(&params, app_secret, &hash) {
+        Ok(())
+    } else {
+        Err("hash mismatch".to_string())
+    }
 }
 
 fn deserialize_opt_string_or_number<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
