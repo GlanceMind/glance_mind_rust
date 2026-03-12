@@ -16,7 +16,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 const MAX_RECHARGE_CNY: i64 = 10_000;
-const MAX_PENDING_RECHARGE_ORDERS: i64 = 5;
+// Set to 0 to temporarily disable the pending-order creation limit.
+const MAX_PENDING_RECHARGE_ORDERS: i64 = 0;
 
 #[derive(Clone)]
 pub struct WalletService {
@@ -289,6 +290,9 @@ impl WalletService {
     }
 
     fn exceeds_pending_order_limit(count: i64) -> bool {
+        if MAX_PENDING_RECHARGE_ORDERS <= 0 {
+            return false;
+        }
         count >= MAX_PENDING_RECHARGE_ORDERS
     }
 
@@ -709,20 +713,22 @@ impl WalletService {
 
         let amount_bd = Self::validate_amount_string(&dto.amount)?;
         let sanitized_return_url = self.sanitize_return_url(dto.return_url)?;
-        let pending_order_count = self
-            .repo
-            .count_pending_recharge_orders(user_id)
-            .await
-            .map_err(|error| {
-                ApiError::InternalServerError(format!(
-                    "Count pending recharge orders failed: {error}"
-                ))
-            })?;
-        if Self::exceeds_pending_order_limit(pending_order_count) {
-            return Err(ApiError::BadRequest(format!(
-                "Too many pending recharge orders (limit: {})",
-                MAX_PENDING_RECHARGE_ORDERS
-            )));
+        if MAX_PENDING_RECHARGE_ORDERS > 0 {
+            let pending_order_count = self
+                .repo
+                .count_pending_recharge_orders(user_id)
+                .await
+                .map_err(|error| {
+                    ApiError::InternalServerError(format!(
+                        "Count pending recharge orders failed: {error}"
+                    ))
+                })?;
+            if Self::exceeds_pending_order_limit(pending_order_count) {
+                return Err(ApiError::BadRequest(format!(
+                    "Too many pending recharge orders (limit: {})",
+                    MAX_PENDING_RECHARGE_ORDERS
+                )));
+            }
         }
 
         // trade_order_id max 32 chars per XunhuPay docs: 2 + 14 + 16 = 32
@@ -988,7 +994,7 @@ mod tests {
     fn pending_order_limit_threshold_is_enforced() {
         assert!(!WalletService::exceeds_pending_order_limit(0));
         assert!(!WalletService::exceeds_pending_order_limit(4));
-        assert!(WalletService::exceeds_pending_order_limit(5));
-        assert!(WalletService::exceeds_pending_order_limit(6));
+        assert!(!WalletService::exceeds_pending_order_limit(5));
+        assert!(!WalletService::exceeds_pending_order_limit(6));
     }
 }
