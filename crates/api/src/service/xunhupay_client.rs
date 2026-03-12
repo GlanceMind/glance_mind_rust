@@ -18,10 +18,11 @@ pub struct XunhuPayClient {
 
 impl XunhuPayClient {
     pub fn new(app_id: String, app_secret: String, gateway: Option<String>) -> Self {
+        let gateway = normalize_gateway(gateway.as_deref().unwrap_or(DEFAULT_GATEWAY));
         Self {
-            app_id,
-            app_secret,
-            gateway: gateway.unwrap_or_else(|| DEFAULT_GATEWAY.to_string()),
+            app_id: app_id.trim().to_string(),
+            app_secret: app_secret.trim().to_string(),
+            gateway,
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(15))
                 .build()
@@ -67,7 +68,7 @@ impl XunhuPayClient {
         let hash = generate_hash(&params, &self.app_secret);
         params.insert("hash".to_string(), hash);
 
-        let url = format!("{}/payment/do.html", self.gateway);
+        let url = self.endpoint_url("do.html");
         let resp = self
             .http
             .post(&url)
@@ -103,7 +104,7 @@ impl XunhuPayClient {
         let hash = generate_hash(&params, &self.app_secret);
         params.insert("hash".to_string(), hash);
 
-        let url = format!("{}/payment/query.html", self.gateway);
+        let url = self.endpoint_url("query.html");
         let resp = self
             .http
             .post(&url)
@@ -142,7 +143,7 @@ impl XunhuPayClient {
         let hash = generate_hash(&params, &self.app_secret);
         params.insert("hash".to_string(), hash);
 
-        let url = format!("{}/payment/refund.html", self.gateway);
+        let url = self.endpoint_url("refund.html");
         let resp = self
             .http
             .post(&url)
@@ -202,6 +203,10 @@ impl XunhuPayClient {
         let expected = generate_hash(&params, &self.app_secret);
         expected == notification.hash
     }
+
+    fn endpoint_url(&self, endpoint: &str) -> String {
+        format!("{}/payment/{}", self.gateway, endpoint)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -228,6 +233,16 @@ pub fn generate_hash(params: &BTreeMap<String, String>, app_secret: &str) -> Str
 /// Convenience: verify a `hash` against a param map.
 pub fn verify_hash(params: &BTreeMap<String, String>, app_secret: &str, hash: &str) -> bool {
     generate_hash(params, app_secret) == hash
+}
+
+fn normalize_gateway(raw: &str) -> String {
+    let trimmed = raw.trim().trim_end_matches('/');
+    for suffix in ["/payment/do.html", "/payment/query.html", "/payment/refund.html"] {
+        if let Some(base) = trimmed.strip_suffix(suffix) {
+            return base.trim_end_matches('/').to_string();
+        }
+    }
+    trimmed.to_string()
 }
 
 fn nonce() -> String {
@@ -375,7 +390,7 @@ mod tests {
 
     #[test]
     fn test_hash_ignores_hash_field() {
-        let mut p1 = make_params(&[("appid", "X"), ("total_fee", "1")]);
+        let p1 = make_params(&[("appid", "X"), ("total_fee", "1")]);
         let mut p2 = p1.clone();
         p2.insert("hash".to_string(), "should_be_ignored".to_string());
 
@@ -610,5 +625,50 @@ mod tests {
         let resp: RefundResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.errcode, 0);
         assert_eq!(resp.refund_status.as_deref(), Some("CD"));
+    }
+
+    #[test]
+    fn test_normalize_gateway_accepts_root_url() {
+        assert_eq!(
+            normalize_gateway("https://api.xunhupay.com"),
+            "https://api.xunhupay.com"
+        );
+        assert_eq!(
+            normalize_gateway("https://api.xunhupay.com/"),
+            "https://api.xunhupay.com"
+        );
+    }
+
+    #[test]
+    fn test_normalize_gateway_accepts_full_pay_endpoint_url() {
+        assert_eq!(
+            normalize_gateway("https://api.xunhupay.com/payment/do.html"),
+            "https://api.xunhupay.com"
+        );
+        assert_eq!(
+            normalize_gateway("https://api.dpweixin.com/payment/do.html"),
+            "https://api.dpweixin.com"
+        );
+    }
+
+    #[test]
+    fn test_endpoint_url_generation_after_normalization() {
+        let client = XunhuPayClient::new(
+            "APP".to_string(),
+            "SECRET".to_string(),
+            Some("https://api.xunhupay.com/payment/do.html".to_string()),
+        );
+        assert_eq!(
+            client.endpoint_url("do.html"),
+            "https://api.xunhupay.com/payment/do.html"
+        );
+        assert_eq!(
+            client.endpoint_url("query.html"),
+            "https://api.xunhupay.com/payment/query.html"
+        );
+        assert_eq!(
+            client.endpoint_url("refund.html"),
+            "https://api.xunhupay.com/payment/refund.html"
+        );
     }
 }
