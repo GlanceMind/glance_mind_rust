@@ -193,6 +193,7 @@ impl WalletService {
             external_txn_id: t.external_txn_id,
             reference_id: t.reference_id.map(|id| id.to_string()),
             description: t.description,
+            payment_status: PaymentStatus::from_db_value(t.payment_status.as_deref()),
             created_at: t.created_at,
         }
     }
@@ -396,7 +397,7 @@ impl WalletService {
 
     fn should_refresh_status_from_gateway(&self, txn: &WalletTransaction) -> bool {
         match Self::payment_status_from_txn(txn) {
-            PaymentStatus::Pending => self.should_attempt_reconciliation(txn),
+            PaymentStatus::Pending => true,
             PaymentStatus::Paid | PaymentStatus::Refunding => true,
             PaymentStatus::Failed | PaymentStatus::Refunded => false,
         }
