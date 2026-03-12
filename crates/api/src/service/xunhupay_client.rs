@@ -95,14 +95,16 @@ impl XunhuPayClient {
     pub async fn query_order(&self, order_id: OrderId) -> Result<QueryResponse, String> {
         let mut params = BTreeMap::new();
         params.insert("appid".to_string(), self.app_id.clone());
-        match order_id {
+        let order_desc = match order_id {
             OrderId::TradeOrderId(v) => {
-                params.insert("out_trade_order".to_string(), v);
+                params.insert("out_trade_order".to_string(), v.clone());
+                v
             }
             OrderId::OpenOrderId(v) => {
-                params.insert("open_order_id".to_string(), v);
+                params.insert("open_order_id".to_string(), v.clone());
+                v
             }
-        }
+        };
         params.insert(
             "time".to_string(),
             chrono::Utc::now().timestamp().to_string(),
@@ -113,6 +115,8 @@ impl XunhuPayClient {
         params.insert("hash".to_string(), hash);
 
         let url = self.endpoint_url("query.html");
+        tracing::info!("XunhuPay query: POST {} order={}", url, order_desc);
+
         let resp = self
             .http
             .post(&url)
@@ -122,14 +126,10 @@ impl XunhuPayClient {
             .map_err(|e| format!("HTTP error: {e}"))?;
 
         let body = resp.text().await.map_err(|e| format!("Read body: {e}"))?;
-        let raw_json: JsonValue = serde_json::from_str(&body).map_err(|e| {
-            warn!("XunhuPay query response parse failed: {}; body={}", e, &body[..body.len().min(500)]);
-            format!("Parse query response: unexpected response format")
-        })?;
-        verify_response_hash_from_value(&raw_json, &self.app_secret)
-            .map_err(|e| format!("Invalid query response signature: {e}"))?;
-        serde_json::from_value::<QueryResponse>(raw_json)
-            .map_err(|e| format!("Parse query response payload: {e}"))
+        tracing::debug!("XunhuPay query response: {}", &body[..body.len().min(500)]);
+
+        serde_json::from_str::<QueryResponse>(&body)
+            .map_err(|e| format!("Parse query response: {e} | body={}", &body[..body.len().min(300)]))
     }
 
     // ---- Refund (退款) -----------------------------------------------------

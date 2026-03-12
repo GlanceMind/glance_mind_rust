@@ -98,7 +98,6 @@ pub struct WalletTransactionDto {
     pub external_txn_id: Option<String>,
     pub reference_id: Option<String>,
     pub description: Option<String>,
-    pub payment_status: Option<PaymentStatus>,
     pub created_at: DateTime<Utc>,
 }
 

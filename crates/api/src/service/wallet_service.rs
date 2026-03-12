@@ -193,7 +193,6 @@ impl WalletService {
             external_txn_id: t.external_txn_id,
             reference_id: t.reference_id.map(|id| id.to_string()),
             description: t.description,
-            payment_status: PaymentStatus::from_db_value(t.payment_status.as_deref()),
             created_at: t.created_at,
         }
     }
@@ -225,7 +224,8 @@ impl WalletService {
         if parts.next().is_some()
             || int_part.is_empty()
             || !int_part.chars().all(|c| c.is_ascii_digit())
-            || frac_part.is_some_and(|frac| frac.len() > 2 || !frac.chars().all(|c| c.is_ascii_digit()))
+            || frac_part
+                .is_some_and(|frac| frac.len() > 2 || !frac.chars().all(|c| c.is_ascii_digit()))
         {
             return Err(ApiError::BadRequest(
                 "Amount must be a positive decimal with at most 2 decimal places".into(),
@@ -253,12 +253,16 @@ impl WalletService {
         let requested = reqwest::Url::parse(&return_url)
             .map_err(|_| ApiError::BadRequest("Invalid return_url".into()))?;
         if !matches!(requested.scheme(), "http" | "https") {
-            return Err(ApiError::BadRequest("return_url must use http or https".into()));
+            return Err(ApiError::BadRequest(
+                "return_url must use http or https".into(),
+            ));
         }
         let base = reqwest::Url::parse(self.notify_base_url()?)
             .map_err(|_| ApiError::InternalServerError("API_BASE_URL is invalid".into()))?;
         if requested.host_str() != base.host_str() {
-            return Err(ApiError::BadRequest("return_url host is not allowed".into()));
+            return Err(ApiError::BadRequest(
+                "return_url host is not allowed".into(),
+            ));
         }
         Ok(Some(return_url))
     }
@@ -316,7 +320,9 @@ impl WalletService {
         }
         if let Some(existing_open_order_id) = txn.open_order_id.as_deref() {
             if existing_open_order_id != notification.open_order_id {
-                return Err(ApiError::BadRequest("Payment open_order_id mismatch".into()));
+                return Err(ApiError::BadRequest(
+                    "Payment open_order_id mismatch".into(),
+                ));
             }
         }
         Ok(())
@@ -331,12 +337,7 @@ impl WalletService {
             return Ok(());
         };
         if let Some(trade_order_id) = data.trade_order_id.as_deref() {
-            if trade_order_id
-                != txn
-                    .external_txn_id
-                    .as_deref()
-                    .unwrap_or_default()
-            {
+            if trade_order_id != txn.external_txn_id.as_deref().unwrap_or_default() {
                 return Err(ApiError::BadRequest("Query trade_order_id mismatch".into()));
             }
         }
@@ -397,7 +398,7 @@ impl WalletService {
 
     fn should_refresh_status_from_gateway(&self, txn: &WalletTransaction) -> bool {
         match Self::payment_status_from_txn(txn) {
-            PaymentStatus::Pending => true,
+            PaymentStatus::Pending => self.should_attempt_reconciliation(txn),
             PaymentStatus::Paid | PaymentStatus::Refunding => true,
             PaymentStatus::Failed | PaymentStatus::Refunded => false,
         }
@@ -492,7 +493,10 @@ impl WalletService {
         }
 
         if next_status == PaymentStatus::Refunded
-            && matches!(current_status, PaymentStatus::Paid | PaymentStatus::Refunding)
+            && matches!(
+                current_status,
+                PaymentStatus::Paid | PaymentStatus::Refunding
+            )
         {
             match self
                 .repo
@@ -546,34 +550,62 @@ impl WalletService {
         txn: WalletTransaction,
         query: QueryResponse,
     ) -> Result<WalletTransaction, ApiError> {
+        let order_no = txn
+            .external_txn_id
+            .as_deref()
+            .unwrap_or("unknown");
+
         if query.errcode != 0 {
             tracing::warn!(
-                "Recharge reconciliation query failed for order {}: errcode={}, errmsg={}",
-                txn.external_txn_id.as_deref().unwrap_or("unknown"),
+                "XunhuPay query errcode={} for order {}: {}",
                 query.errcode,
+                order_no,
                 query.errmsg
             );
-            return Ok(txn);
+            return self
+                .fetch_transaction_by_order_no(order_no)
+                .await;
         }
+
+        let gateway_status = query
+            .data
+            .as_ref()
+            .and_then(|data| data.status.as_deref());
+
+        tracing::info!(
+            "XunhuPay query result for order {}: gateway_status={:?}, local_status={}",
+            order_no,
+            gateway_status,
+            Self::payment_status_from_txn(&txn).as_db_value(),
+        );
 
         if let Err(error) = self.validate_query_against_order(&txn, &query) {
             tracing::warn!(
-                "Ignoring inconsistent recharge query payload for order {}: {:?}",
-                txn.external_txn_id.as_deref().unwrap_or("unknown"),
+                "Ignoring inconsistent query payload for order {}: {:?}",
+                order_no,
                 error
             );
-            return Ok(txn);
+            return self
+                .fetch_transaction_by_order_no(order_no)
+                .await;
         }
 
         let current_status = Self::payment_status_from_txn(&txn);
         let next_status = Self::query_status_to_payment_status(
             current_status,
-            query.data.as_ref().and_then(|data| data.status.as_deref()),
+            gateway_status,
         );
 
-        if next_status == PaymentStatus::Pending {
+        if next_status == current_status {
             return Ok(txn);
         }
+
+        tracing::info!(
+            "Transitioning order {} from {} to {} based on query",
+            order_no,
+            current_status.as_db_value(),
+            next_status.as_db_value(),
+        );
 
         self.transition_transaction_status(
             &txn,
@@ -591,10 +623,7 @@ impl WalletService {
         )
         .await?;
 
-        self.fetch_transaction_by_order_no(txn.external_txn_id.as_deref().ok_or_else(|| {
-            ApiError::InternalServerError("Recharge order missing external_txn_id".into())
-        })?)
-        .await
+        self.fetch_transaction_by_order_no(order_no).await
     }
 
     async fn reconcile_single_pending_transaction(
@@ -656,7 +685,7 @@ impl WalletService {
             });
 
         let Ok(query) = query else {
-            return Ok(txn);
+            return self.fetch_transaction_by_order_no(&order_no).await;
         };
 
         self.reconcile_transaction_with_query(txn, query).await
@@ -754,7 +783,8 @@ impl WalletService {
             reference_type: None,
             payment_status: Some(PaymentStatus::Pending.as_db_value().to_string()),
         };
-        let created_txn = self.repo
+        let created_txn = self
+            .repo
             .create_transaction(new_txn)
             .await
             .map_err(|e| ApiError::InternalServerError(format!("Create order failed: {e}")))?;
@@ -774,13 +804,10 @@ impl WalletService {
             r#type: None,
         };
 
-        let resp = client
-            .pay(pay_req)
-            .await
-            .map_err(|e| {
-                tracing::error!("XunhuPay create order transport/parse failed: {}", e);
-                ApiError::PaymentServiceError("Payment gateway request failed".into())
-            });
+        let resp = client.pay(pay_req).await.map_err(|e| {
+            tracing::error!("XunhuPay create order transport/parse failed: {}", e);
+            ApiError::PaymentServiceError("Payment gateway request failed".into())
+        });
 
         let resp = match resp {
             Ok(resp) => resp,
