@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 
 const DEFAULT_GATEWAY: &str = "https://api.xunhupay.com";
@@ -246,7 +246,21 @@ fn normalize_gateway(raw: &str) -> String {
 }
 
 fn nonce() -> String {
-    format!("{:x}", uuid::Uuid::new_v4().as_u128())
+    format!("{:032x}", uuid::Uuid::new_v4().as_u128())
+}
+
+fn deserialize_opt_string_or_number<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(s)) => Some(s),
+        Some(serde_json::Value::Number(n)) => Some(n.to_string()),
+        Some(serde_json::Value::Bool(b)) => Some(b.to_string()),
+        Some(other) => Some(other.to_string()),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -275,7 +289,7 @@ pub struct PayResponse {
     #[serde(default)]
     pub errmsg: String,
     /// XunhuPay internal order id (field name in JSON is `openid` due to legacy bug)
-    #[serde(alias = "openid", default)]
+    #[serde(alias = "openid", default, deserialize_with = "deserialize_opt_string_or_number")]
     pub order_id: Option<String>,
     /// QR-code URL for PC scanning
     pub url_qrcode: Option<String>,
@@ -591,6 +605,23 @@ mod tests {
     }
 
     #[test]
+    fn test_pay_response_deserialization_with_numeric_openid() {
+        let json = r#"{
+            "openid": 20294363078,
+            "url": "https://api.xunhupay.com/payments/alipay/newQrcode?id=20294363078",
+            "url_qrcode": "https://api.xunhupay.com/plugins/newQrcode?data=abc",
+            "errcode": 0,
+            "errmsg": "success!",
+            "hash": "01c81dad665d03a985223597f07568f4"
+        }"#;
+        let resp: PayResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.errcode, 0);
+        assert_eq!(resp.order_id.as_deref(), Some("20294363078"));
+        assert!(resp.url.is_some());
+        assert!(resp.url_qrcode.is_some());
+    }
+
+    #[test]
     fn test_pay_response_error() {
         let json = r#"{"errcode":500,"errmsg":"invalid sign!","hash":"abc"}"#;
         let resp: PayResponse = serde_json::from_str(json).unwrap();
@@ -670,5 +701,12 @@ mod tests {
             client.endpoint_url("refund.html"),
             "https://api.xunhupay.com/payment/refund.html"
         );
+    }
+
+    #[test]
+    fn test_nonce_is_fixed_32_chars() {
+        let n = nonce();
+        assert_eq!(n.len(), 32);
+        assert!(n.chars().all(|c| c.is_ascii_hexdigit()));
     }
 }
