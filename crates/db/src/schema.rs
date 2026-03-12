@@ -579,54 +579,54 @@ diesel::table! {
 }
 
 diesel::table! {
-    gm_data_video_cases (task_no) {
-        #[max_length = 32]
+    gm_data_video_cases (id) {
+        id -> Int4,
+        #[max_length = 64]
         task_no -> Varchar,
-        video_id -> Nullable<Int8>,
         case_id -> Nullable<Int4>,
         #[max_length = 64]
         user_id -> Nullable<Varchar>,
-        #[max_length = 16]
-        task_type -> Nullable<Varchar>,
         #[max_length = 32]
         tt_category_id -> Nullable<Varchar>,
-        #[max_length = 128]
+        #[max_length = 255]
         category_name_en -> Nullable<Varchar>,
-        #[max_length = 128]
+        #[max_length = 255]
         category_name_cn -> Nullable<Varchar>,
-        video_url -> Nullable<Text>,
-        refer_image_url -> Nullable<Text>,
-        ai_image_url -> Nullable<Text>,
-        ai_prompt -> Nullable<Text>,
-        #[max_length = 32]
-        video_status -> Nullable<Varchar>,
-        progress -> Nullable<Int4>,
-        case_status -> Nullable<Int4>,
-        favorite_status -> Nullable<Int4>,
-        error_message -> Nullable<Text>,
-        #[max_length = 32]
-        video_size -> Nullable<Varchar>,
-        detail_id -> Nullable<Int4>,
+        #[max_length = 16]
+        task_type -> Nullable<Varchar>,
         num -> Nullable<Int4>,
-        detail_status -> Nullable<Int4>,
-        completed_num -> Nullable<Int4>,
-        #[max_length = 256]
-        product_name -> Nullable<Varchar>,
-        #[max_length = 256]
-        brand_name -> Nullable<Varchar>,
+        status -> Nullable<Int4>,
+        script -> Nullable<Text>,
         selling_point -> Nullable<Text>,
-        #[max_length = 64]
-        video_model -> Nullable<Varchar>,
+        #[max_length = 255]
+        product_name -> Nullable<Varchar>,
+        #[max_length = 255]
+        brand_name -> Nullable<Varchar>,
         #[max_length = 32]
         video_language -> Nullable<Varchar>,
-        script -> Nullable<Text>,
+        #[max_length = 64]
+        model -> Nullable<Varchar>,
+        #[max_length = 64]
+        video_model -> Nullable<Varchar>,
+        video_url -> Nullable<Text>,
+        ai_image_url -> Nullable<Text>,
+        ai_prompt -> Nullable<Text>,
+        refer_image_url -> Nullable<Text>,
         refer_video_url -> Nullable<Text>,
         image_urls -> Nullable<Jsonb>,
         characters -> Nullable<Jsonb>,
         videos -> Nullable<Jsonb>,
-        create_time -> Nullable<Timestamp>,
-        crawl_time -> Nullable<Timestamp>,
-        updated_at -> Nullable<Timestamp>,
+        progress -> Nullable<Int4>,
+        #[max_length = 32]
+        video_status -> Nullable<Varchar>,
+        error_message -> Nullable<Text>,
+        #[max_length = 32]
+        size -> Nullable<Varchar>,
+        case_status -> Nullable<Int4>,
+        favorite_status -> Nullable<Int4>,
+        completed_num -> Nullable<Int4>,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -941,6 +941,13 @@ diesel::table! {
         updated_at -> Nullable<Timestamptz>,
         #[max_length = 50]
         reference_type -> Nullable<Varchar>,
+        #[max_length = 20]
+        payment_status -> Nullable<Varchar>,
+        #[max_length = 64]
+        platform_txn_id -> Nullable<Varchar>,
+        #[max_length = 64]
+        open_order_id -> Nullable<Varchar>,
+        paid_at -> Nullable<Timestamptz>,
     }
 }
 

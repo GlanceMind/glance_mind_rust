@@ -71,7 +71,7 @@ pub async fn charging_middleware(
     let params = extractor.extract(&req).await.ok_or_else(|| {
         let error_msg = match route.as_str() {
             r if r.contains("/video/generate") => {
-                "Missing required X-AI-Model-ID header".to_string()
+                "Invalid X-AI-Model-ID header".to_string()
             }
             r if r.contains("/scan/post") => "Missing required X-PLATFORM-ID header".to_string(),
             _ => "Cannot extract charging parameters, please check required headers".to_string(),

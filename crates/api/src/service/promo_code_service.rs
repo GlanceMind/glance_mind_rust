@@ -143,6 +143,7 @@ impl PromoCodeService {
                 reference_id: Some(promo_code.id),
                 description: Some(format!("Promo code redeemed: {}", code)),
                 reference_type: Some("promo_code".to_string()),
+                payment_status: None,
             };
 
             diesel::insert_into(wallet_transactions::table)

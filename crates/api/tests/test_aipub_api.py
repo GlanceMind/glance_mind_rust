@@ -415,10 +415,10 @@ class TestPublishDatabaseState:
 # Phase Testing Classes
 
 class TestPhase1CreatePlan:
-    """Phase 1: 创建阶段单元测试 - Plan 创建与 AI Task 自动生成"""
+    """Phase 1: 创建阶段单元测试 - Plan 创建与调度前状态"""
 
-    def test_create_plan_generates_ai_task(self, auth_client, db_cursor):
-        """创建 Plan 后应自动生成 AI Task"""
+    def test_create_plan_stays_pending_before_scheduler_dispatch(self, auth_client, db_cursor):
+        """API 仅创建 Plan；AI Task 由后续调度器异步下发。"""
         db_cursor.execute("SELECT id FROM gm_social_groups LIMIT 1")
         group = db_cursor.fetchone()
         if not group:
@@ -446,8 +446,8 @@ class TestPhase1CreatePlan:
         )
         ai_tasks = db_cursor.fetchall()
 
-        assert len(ai_tasks) >= 1, "Should create AI task automatically"
-        assert ai_tasks[0]["status"] in ["pending", "processing"]
+        assert plan["status"] == "pending"
+        assert len(ai_tasks) == 0, "Scheduler is responsible for creating AI tasks later"
 
     def test_create_plan_with_direct_content_no_ai_task(self, auth_client, db_cursor):
         """直接提供 content 时不应创建 AI Task"""

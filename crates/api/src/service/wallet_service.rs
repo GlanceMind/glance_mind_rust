@@ -1,22 +1,132 @@
 use crate::config::database::Database;
 use crate::dto::wallet_dto::{
-    TopUpRequestDto, TopUpResponseDto, WalletBalanceDto, WalletTransactionDto,
+    PaymentStatus, RechargeChannel, RechargeOrderStatusDto, RechargeRequestDto,
+    RechargeResponseDto, WalletBalanceDto, WalletTransactionDto,
 };
 use crate::error::api_error::ApiError;
 use crate::repository::wallet_repository::WalletRepository;
+use crate::service::xunhupay_client::{
+    OrderId, PayNotification, PayRequest, QueryResponse, XunhuPayClient,
+};
+use bigdecimal::BigDecimal;
+use chrono::{Duration as ChronoDuration, Utc};
 use glance_mind_db::entity::wallet_transaction::{NewWalletTransaction, WalletTransaction};
+use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(Clone)]
 pub struct WalletService {
     repo: WalletRepository,
+    xunhupay: Option<XunhuPayClient>,
+    notify_base_url: Option<String>,
+    reconciliation_interval_secs: u64,
+    reconciliation_pending_age_secs: i64,
+    reconciliation_batch_size: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum XunhuPayOrderStatus {
+    Pending,
+    Paid,
+    Refunding,
+    Refunded,
+    RefundFailed,
+    Unknown,
+}
+
+impl XunhuPayOrderStatus {
+    fn from_notify(raw_status: &str) -> Self {
+        match raw_status {
+            "OD" => Self::Paid,
+            "RD" => Self::Refunding,
+            "CD" => Self::Refunded,
+            "UD" => Self::RefundFailed,
+            _ => Self::Unknown,
+        }
+    }
+
+    fn from_query(raw_status: Option<&str>) -> Self {
+        match raw_status {
+            Some("WP") | None => Self::Pending,
+            Some("OD") => Self::Paid,
+            Some("RD") => Self::Refunding,
+            Some("CD") => Self::Refunded,
+            Some("UD") => Self::RefundFailed,
+            Some(_) => Self::Unknown,
+        }
+    }
 }
 
 impl WalletService {
     pub fn new(db: &Arc<Database>) -> Self {
+        let xunhupay = Self::init_xunhupay();
+        let notify_base_url = std::env::var("API_BASE_URL")
+            .ok()
+            .map(|value| value.trim().trim_end_matches('/').to_string())
+            .filter(|value| !value.is_empty());
+        let reconciliation_interval_secs = std::env::var("RECHARGE_RECONCILIATION_INTERVAL_SECS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(300);
+        let reconciliation_pending_age_secs =
+            std::env::var("RECHARGE_RECONCILIATION_PENDING_AGE_SECS")
+                .ok()
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or(15);
+        let reconciliation_batch_size = std::env::var("RECHARGE_RECONCILIATION_BATCH_SIZE")
+            .ok()
+            .and_then(|value| value.parse::<i64>().ok())
+            .unwrap_or(20);
+
         Self {
             repo: WalletRepository::new(db.pool.clone()),
+            xunhupay,
+            notify_base_url,
+            reconciliation_interval_secs,
+            reconciliation_pending_age_secs,
+            reconciliation_batch_size,
         }
+    }
+
+    fn init_xunhupay() -> Option<XunhuPayClient> {
+        let app_id = std::env::var("XUNHUPAY_APP_ID").ok()?;
+        let app_secret = std::env::var("XUNHUPAY_APP_SECRET").ok()?;
+        if app_id.is_empty() || app_secret.is_empty() {
+            return None;
+        }
+        let gateway = std::env::var("XUNHUPAY_GATEWAY_URL").ok();
+        tracing::info!("XunhuPay client initialized (appid={})", app_id);
+        Some(XunhuPayClient::new(app_id, app_secret, gateway))
+    }
+
+    pub fn spawn_recharge_reconciliation_loop(&self) {
+        if self.xunhupay.is_none() || self.reconciliation_interval_secs == 0 {
+            tracing::info!("Recharge reconciliation loop disabled");
+            return;
+        }
+
+        let wallet_service = self.clone();
+        let interval_secs = self.reconciliation_interval_secs;
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                match wallet_service.reconcile_stale_pending_orders().await {
+                    Ok(reconciled) if reconciled > 0 => {
+                        tracing::info!(
+                            "Recharge reconciliation loop finalized {reconciled} order(s)"
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::warn!("Recharge reconciliation loop failed: {error:?}");
+                    }
+                }
+            }
+        });
     }
 
     pub async fn get_balance(&self, user_id: i32) -> Result<WalletBalanceDto, ApiError> {
@@ -68,95 +178,10 @@ impl WalletService {
         ))
     }
 
-    pub async fn create_recharge_order(
-        &self,
-        user_id: i32,
-        dto: TopUpRequestDto,
-    ) -> Result<TopUpResponseDto, ApiError> {
-        let _wallet = self
-            .repo
-            .find_by_user(user_id)
-            .await
-            .map_err(|_| ApiError::InternalServerError("Failed to find wallet".to_string()))?;
-
-        let new_transaction = NewWalletTransaction {
-            user_id,
-            amount: dto.amount.clone(),
-            type_: "RECHARGE".to_string(),
-            payment_method: Some(dto.payment_method.clone()),
-            external_txn_id: None,
-            reference_id: None,
-            description: Some(format!("Top up via {}", dto.payment_method)),
-            reference_type: None,
-        };
-
-        let transaction = self
-            .repo
-            .create_transaction(new_transaction)
-            .await
-            .map_err(|_| ApiError::InternalServerError("Failed to create order".to_string()))?;
-
-        let payment_url = format!("https://payment.example.com/pay?txn_id={}", transaction.id);
-
-        Ok(TopUpResponseDto {
-            transaction_id: transaction.id,
-            payment_url: Some(payment_url),
-            message: "Order created successfully".to_string(),
-        })
-    }
-
-    pub async fn get_order_status(
-        &self,
-        order_id: i32,
-        user_id: i32,
-    ) -> Result<TopUpResponseDto, ApiError> {
-        // 1. Query the transaction
-        let transaction = self
-            .repo
-            .get_transaction_by_id(order_id)
-            .await
-            .map_err(|e| match e {
-                diesel::result::Error::NotFound => {
-                    ApiError::NotFound(format!("Order {} not found", order_id))
-                }
-                _ => ApiError::InternalServerError("Failed to query order".to_string()),
-            })?;
-
-        // 2. Verify ownership - CRITICAL SECURITY CHECK
-        if transaction.user_id != user_id {
-            tracing::warn!(
-                "User {} attempted to access order {} owned by user {}",
-                user_id,
-                order_id,
-                transaction.user_id
-            );
-            return Err(ApiError::Forbidden(
-                "You do not have permission to view this order".to_string(),
-            ));
-        }
-
-        // 3. Determine order status based on transaction type
-        let status_message = match transaction.type_.as_str() {
-            "RECHARGE" => {
-                // Check if there's a corresponding payment record
-                // For now, return pending status
-                "Order is PENDING payment".to_string()
-            }
-            _ => format!("Transaction status: {}", transaction.type_),
-        };
-
-        // 4. Return order status
-        Ok(TopUpResponseDto {
-            transaction_id: order_id,
-            payment_url: None, // Payment URL would be generated during creation
-            message: status_message,
-        })
-    }
-
     fn transaction_to_dto(&self, t: WalletTransaction, user_id: i32) -> WalletTransactionDto {
         WalletTransactionDto {
             id: t.id,
-            user_id, // Use passed user_id
+            user_id,
             amount: t.amount,
             type_: t.type_,
             payment_method: t.payment_method,
@@ -165,5 +190,561 @@ impl WalletService {
             description: t.description,
             created_at: t.created_at,
         }
+    }
+
+    // ======================== XunhuPay Recharge ========================
+
+    fn xunhupay(&self) -> Result<&XunhuPayClient, ApiError> {
+        self.xunhupay
+            .as_ref()
+            .ok_or_else(|| ApiError::InternalServerError("Payment service not configured".into()))
+    }
+
+    fn notify_base_url(&self) -> Result<&str, ApiError> {
+        self.notify_base_url
+            .as_deref()
+            .ok_or_else(|| ApiError::InternalServerError("API_BASE_URL is not configured".into()))
+    }
+
+    fn payment_status_from_txn(txn: &WalletTransaction) -> PaymentStatus {
+        PaymentStatus::from_db_value(txn.payment_status.as_deref())
+            .unwrap_or(PaymentStatus::Pending)
+    }
+
+    fn recharge_channel_from_txn(txn: &WalletTransaction) -> Result<RechargeChannel, ApiError> {
+        RechargeChannel::from_db_value(txn.payment_method.as_deref()).ok_or_else(|| {
+            ApiError::InternalServerError(format!(
+                "Invalid recharge channel stored for order {}",
+                txn.external_txn_id.as_deref().unwrap_or("unknown")
+            ))
+        })
+    }
+
+    fn should_attempt_reconciliation(&self, txn: &WalletTransaction) -> bool {
+        if Self::payment_status_from_txn(txn) != PaymentStatus::Pending {
+            return false;
+        }
+
+        let age = Utc::now() - txn.created_at;
+        age >= ChronoDuration::seconds(self.reconciliation_pending_age_secs)
+    }
+
+    fn payment_points(amount: &BigDecimal) -> BigDecimal {
+        amount * BigDecimal::from(100)
+    }
+
+    fn gateway_status_to_payment_status(
+        current_status: PaymentStatus,
+        gateway_status: XunhuPayOrderStatus,
+    ) -> PaymentStatus {
+        match gateway_status {
+            XunhuPayOrderStatus::Pending => PaymentStatus::Pending,
+            XunhuPayOrderStatus::Paid => PaymentStatus::Paid,
+            XunhuPayOrderStatus::Refunding => PaymentStatus::Refunding,
+            XunhuPayOrderStatus::Refunded => PaymentStatus::Refunded,
+            XunhuPayOrderStatus::RefundFailed => match current_status {
+                PaymentStatus::Pending => PaymentStatus::Failed,
+                PaymentStatus::Paid | PaymentStatus::Refunding => PaymentStatus::Paid,
+                PaymentStatus::Failed => PaymentStatus::Failed,
+                PaymentStatus::Refunded => PaymentStatus::Refunded,
+            },
+            XunhuPayOrderStatus::Unknown => PaymentStatus::Failed,
+        }
+    }
+
+    fn notify_status_to_payment_status(
+        current_status: PaymentStatus,
+        raw_status: &str,
+    ) -> PaymentStatus {
+        Self::gateway_status_to_payment_status(
+            current_status,
+            XunhuPayOrderStatus::from_notify(raw_status),
+        )
+    }
+
+    fn query_status_to_payment_status(
+        current_status: PaymentStatus,
+        raw_status: Option<&str>,
+    ) -> PaymentStatus {
+        Self::gateway_status_to_payment_status(
+            current_status,
+            XunhuPayOrderStatus::from_query(raw_status),
+        )
+    }
+
+    fn should_refresh_status_from_gateway(&self, txn: &WalletTransaction) -> bool {
+        match Self::payment_status_from_txn(txn) {
+            PaymentStatus::Pending => self.should_attempt_reconciliation(txn),
+            PaymentStatus::Paid | PaymentStatus::Refunding => true,
+            PaymentStatus::Failed | PaymentStatus::Refunded => false,
+        }
+    }
+
+    async fn fetch_transaction_by_order_no(
+        &self,
+        order_no: &str,
+    ) -> Result<WalletTransaction, ApiError> {
+        self.repo
+            .find_transaction_by_external_id(order_no)
+            .await
+            .map_err(|_| ApiError::NotFound(format!("Order {order_no} not found")))
+    }
+
+    async fn finalize_paid_transaction(
+        &self,
+        txn: &WalletTransaction,
+        platform_txn_id: &str,
+        open_order_id: &str,
+    ) -> Result<(), ApiError> {
+        self.repo
+            .atomic_confirm_payment(
+                txn.id,
+                txn.user_id,
+                Self::payment_points(&txn.amount),
+                platform_txn_id,
+                open_order_id,
+            )
+            .await
+            .map_err(|error| {
+                ApiError::InternalServerError(format!("Atomic credit failed: {error}"))
+            })?;
+        Ok(())
+    }
+
+    async fn transition_transaction_status(
+        &self,
+        txn: &WalletTransaction,
+        next_status: PaymentStatus,
+        platform_txn_id: Option<&str>,
+        open_order_id: Option<&str>,
+    ) -> Result<(), ApiError> {
+        let current_status = Self::payment_status_from_txn(txn);
+        if current_status == next_status {
+            return Ok(());
+        }
+
+        if !current_status.can_transition_to(next_status) {
+            tracing::warn!(
+                "Ignoring invalid recharge status transition for order {}: {} -> {}",
+                txn.external_txn_id.as_deref().unwrap_or("unknown"),
+                current_status.as_db_value(),
+                next_status.as_db_value(),
+            );
+            return Ok(());
+        }
+
+        let platform_txn_id = platform_txn_id.or(txn.platform_txn_id.as_deref());
+        let open_order_id = open_order_id.or(txn.open_order_id.as_deref());
+
+        if next_status == PaymentStatus::Paid {
+            if current_status == PaymentStatus::Pending {
+                let platform_txn_id = platform_txn_id.ok_or_else(|| {
+                    ApiError::InternalServerError(
+                        "Missing platform transaction id for paid order".into(),
+                    )
+                })?;
+                let open_order_id = open_order_id.ok_or_else(|| {
+                    ApiError::InternalServerError("Missing open order id for paid order".into())
+                })?;
+                self.finalize_paid_transaction(txn, platform_txn_id, open_order_id)
+                    .await?;
+            } else {
+                let _ = self
+                    .repo
+                    .update_payment_status_if_current(
+                        txn.id,
+                        current_status,
+                        next_status,
+                        platform_txn_id,
+                        open_order_id,
+                    )
+                    .await
+                    .map_err(|error| {
+                        ApiError::InternalServerError(format!(
+                            "Update payment status failed: {error}"
+                        ))
+                    })?;
+            }
+            return Ok(());
+        }
+
+        let _ = self
+            .repo
+            .update_payment_status_if_current(
+                txn.id,
+                current_status,
+                next_status,
+                platform_txn_id,
+                open_order_id,
+            )
+            .await
+            .map_err(|error| {
+                ApiError::InternalServerError(format!("Update payment status failed: {error}"))
+            })?;
+        Ok(())
+    }
+
+    async fn reconcile_transaction_with_query(
+        &self,
+        txn: WalletTransaction,
+        query: QueryResponse,
+    ) -> Result<WalletTransaction, ApiError> {
+        if query.errcode != 0 {
+            tracing::warn!(
+                "Recharge reconciliation query failed for order {}: errcode={}, errmsg={}",
+                txn.external_txn_id.as_deref().unwrap_or("unknown"),
+                query.errcode,
+                query.errmsg
+            );
+            return Ok(txn);
+        }
+
+        let current_status = Self::payment_status_from_txn(&txn);
+        let next_status = Self::query_status_to_payment_status(
+            current_status,
+            query.data.as_ref().and_then(|data| data.status.as_deref()),
+        );
+
+        if next_status == PaymentStatus::Pending {
+            return Ok(txn);
+        }
+
+        self.transition_transaction_status(
+            &txn,
+            next_status,
+            query
+                .data
+                .as_ref()
+                .and_then(|data| data.transaction_id.as_deref())
+                .filter(|value| !value.is_empty()),
+            query
+                .data
+                .as_ref()
+                .and_then(|data| data.open_order_id.as_deref())
+                .filter(|value| !value.is_empty()),
+        )
+        .await?;
+
+        self.fetch_transaction_by_order_no(txn.external_txn_id.as_deref().ok_or_else(|| {
+            ApiError::InternalServerError("Recharge order missing external_txn_id".into())
+        })?)
+        .await
+    }
+
+    async fn reconcile_single_pending_transaction(
+        &self,
+        txn: WalletTransaction,
+    ) -> Result<WalletTransaction, ApiError> {
+        if self.xunhupay.is_none() {
+            return Ok(txn);
+        }
+
+        if !self.should_attempt_reconciliation(&txn) {
+            return Ok(txn);
+        }
+
+        let order_no = txn.external_txn_id.clone().ok_or_else(|| {
+            ApiError::InternalServerError("Recharge order missing external_txn_id".into())
+        })?;
+
+        let query = match self
+            .xunhupay()?
+            .query_order(OrderId::TradeOrderId(order_no.clone()))
+            .await
+        {
+            Ok(query) => query,
+            Err(error) => {
+                tracing::warn!(
+                    "Recharge reconciliation query transport failed for order {order_no}: {error}"
+                );
+                return Ok(txn);
+            }
+        };
+
+        self.reconcile_transaction_with_query(txn, query).await
+    }
+
+    async fn refresh_transaction_status_for_read(
+        &self,
+        txn: WalletTransaction,
+    ) -> Result<WalletTransaction, ApiError> {
+        if self.xunhupay.is_none() {
+            return Ok(txn);
+        }
+
+        if !self.should_refresh_status_from_gateway(&txn) {
+            return Ok(txn);
+        }
+
+        let order_no = txn.external_txn_id.clone().ok_or_else(|| {
+            ApiError::InternalServerError("Recharge order missing external_txn_id".into())
+        })?;
+
+        let query = self
+            .xunhupay()?
+            .query_order(OrderId::TradeOrderId(order_no.clone()))
+            .await
+            .map_err(|error| {
+                ApiError::InternalServerError(format!(
+                    "Recharge status query failed for order {order_no}: {error}"
+                ))
+            })?;
+
+        self.reconcile_transaction_with_query(txn, query).await
+    }
+
+    pub async fn reconcile_stale_pending_orders(&self) -> Result<usize, ApiError> {
+        if self.xunhupay.is_none() {
+            return Ok(0);
+        }
+
+        let cutoff = Utc::now() - ChronoDuration::seconds(self.reconciliation_pending_age_secs);
+        let pending = self
+            .repo
+            .list_pending_recharge_transactions(cutoff, self.reconciliation_batch_size)
+            .await
+            .map_err(|error| {
+                ApiError::InternalServerError(format!(
+                    "List stale pending recharge orders failed: {error}"
+                ))
+            })?;
+
+        let mut reconciled = 0usize;
+        for txn in pending {
+            let before = Self::payment_status_from_txn(&txn);
+            let after = self.reconcile_single_pending_transaction(txn).await?;
+            if before == PaymentStatus::Pending
+                && Self::payment_status_from_txn(&after) != PaymentStatus::Pending
+            {
+                reconciled += 1;
+            }
+        }
+
+        Ok(reconciled)
+    }
+
+    /// Create a recharge order via XunhuPay.
+    ///
+    /// Flow:
+    /// 1. Validate channel (wechat / alipay)
+    /// 2. Create a PENDING transaction in DB
+    /// 3. Call XunhuPay pay API to get payment URL
+    /// 4. Return payment URL to frontend
+    pub async fn create_recharge(
+        &self,
+        user_id: i32,
+        dto: RechargeRequestDto,
+    ) -> Result<RechargeResponseDto, ApiError> {
+        let client = self.xunhupay()?;
+
+        // Validate amount
+        let amount_bd = BigDecimal::from_str(&dto.amount)
+            .map_err(|_| ApiError::BadRequest("Invalid amount format".into()))?;
+        if amount_bd <= BigDecimal::from(0) {
+            return Err(ApiError::BadRequest("Amount must be positive".into()));
+        }
+
+        // trade_order_id max 32 chars per XunhuPay docs: 2 + 14 + 16 = 32
+        let order_no = format!(
+            "GM{}{}",
+            chrono::Utc::now().format("%Y%m%d%H%M%S"),
+            &uuid::Uuid::new_v4().simple().to_string()[..16]
+        );
+
+        let new_txn = NewWalletTransaction {
+            user_id,
+            amount: amount_bd,
+            type_: "RECHARGE".to_string(),
+            payment_method: Some(dto.channel.as_db_value().to_string()),
+            external_txn_id: Some(order_no.clone()),
+            reference_id: None,
+            description: Some(format!(
+                "Recharge ¥{} via {}",
+                dto.amount,
+                dto.channel.as_db_value()
+            )),
+            reference_type: None,
+            payment_status: Some(PaymentStatus::Pending.as_db_value().to_string()),
+        };
+        self.repo
+            .create_transaction(new_txn)
+            .await
+            .map_err(|e| ApiError::InternalServerError(format!("Create order failed: {e}")))?;
+
+        // Call XunhuPay
+        let notify_url = format!("{}/api/v1/public/payment/notify", self.notify_base_url()?);
+        let pay_req = PayRequest {
+            trade_order_id: order_no.clone(),
+            total_fee: dto.amount,
+            title: "GlanceMind Points Recharge".to_string(),
+            notify_url,
+            return_url: dto.return_url,
+            callback_url: None,
+            attach: Some(user_id.to_string()),
+            wap_url: None,
+            wap_name: Some("GlanceMind".to_string()),
+            r#type: None,
+        };
+
+        let resp = client
+            .pay(pay_req)
+            .await
+            .map_err(|e| ApiError::InternalServerError(format!("Payment gateway error: {e}")))?;
+
+        if resp.errcode != 0 {
+            tracing::error!(
+                "XunhuPay create order failed: errcode={}, errmsg={}",
+                resp.errcode,
+                resp.errmsg
+            );
+            return Err(ApiError::InternalServerError(format!(
+                "Payment error: {}",
+                resp.errmsg
+            )));
+        }
+
+        Ok(RechargeResponseDto {
+            order_no,
+            payment_url: resp.url,
+            qrcode_url: resp.url_qrcode,
+        })
+    }
+
+    /// Handle XunhuPay async callback notification.
+    ///
+    /// Atomic: mark PAID + credit wallet in a single DB transaction.
+    /// Idempotent: duplicate callbacks for an already-PAID order are no-ops.
+    pub async fn handle_payment_notify(
+        &self,
+        notification: PayNotification,
+    ) -> Result<(), ApiError> {
+        let client = self.xunhupay()?;
+
+        if !client.verify_notification(&notification) {
+            tracing::warn!(
+                "Payment notify signature verification failed for order {}",
+                notification.trade_order_id
+            );
+            return Err(ApiError::BadRequest("Invalid signature".into()));
+        }
+
+        let txn = self
+            .fetch_transaction_by_order_no(&notification.trade_order_id)
+            .await?;
+
+        let current_status = Self::payment_status_from_txn(&txn);
+        if current_status.is_terminal() {
+            tracing::warn!(
+                "Ignoring notify for terminal recharge state order {}: {}",
+                notification.trade_order_id,
+                current_status.as_db_value(),
+            );
+            return Ok(());
+        }
+
+        let next_status =
+            Self::notify_status_to_payment_status(current_status, &notification.status);
+        self.transition_transaction_status(
+            &txn,
+            next_status,
+            Some(&notification.transaction_id),
+            Some(&notification.open_order_id),
+        )
+        .await?;
+
+        tracing::info!(
+            "Payment notify processed for order {}: user={}, next_status={}",
+            notification.trade_order_id,
+            txn.user_id,
+            next_status.as_db_value(),
+        );
+
+        Ok(())
+    }
+
+    /// Query the status of a recharge order by order_no.
+    pub async fn get_recharge_status(
+        &self,
+        order_no: &str,
+        user_id: i32,
+    ) -> Result<RechargeOrderStatusDto, ApiError> {
+        let txn = self.fetch_transaction_by_order_no(order_no).await?;
+
+        if txn.user_id != user_id {
+            return Err(ApiError::NotFound(format!("Order {order_no} not found")));
+        }
+
+        let txn = self.refresh_transaction_status_for_read(txn).await?;
+
+        Ok(RechargeOrderStatusDto {
+            order_no: order_no.to_string(),
+            status: Self::payment_status_from_txn(&txn),
+            amount: txn.amount.to_string(),
+            channel: Self::recharge_channel_from_txn(&txn)?,
+            paid_at: txn.paid_at,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn payment_status_transition_rules_are_strict() {
+        assert!(PaymentStatus::Pending.can_transition_to(PaymentStatus::Paid));
+        assert!(PaymentStatus::Pending.can_transition_to(PaymentStatus::Failed));
+        assert!(PaymentStatus::Paid.can_transition_to(PaymentStatus::Refunding));
+        assert!(PaymentStatus::Refunding.can_transition_to(PaymentStatus::Paid));
+        assert!(!PaymentStatus::Failed.can_transition_to(PaymentStatus::Paid));
+        assert!(!PaymentStatus::Refunded.can_transition_to(PaymentStatus::Paid));
+    }
+
+    #[test]
+    fn notify_status_maps_refund_states_without_recrediting_pending_orders() {
+        assert_eq!(
+            WalletService::notify_status_to_payment_status(PaymentStatus::Pending, "OD"),
+            PaymentStatus::Paid
+        );
+        assert_eq!(
+            WalletService::notify_status_to_payment_status(PaymentStatus::Pending, "CD"),
+            PaymentStatus::Refunded
+        );
+        assert_eq!(
+            WalletService::notify_status_to_payment_status(PaymentStatus::Pending, "UD"),
+            PaymentStatus::Failed
+        );
+        assert_eq!(
+            WalletService::notify_status_to_payment_status(PaymentStatus::Refunding, "UD"),
+            PaymentStatus::Paid
+        );
+        assert_eq!(
+            WalletService::notify_status_to_payment_status(PaymentStatus::Pending, "UNKNOWN"),
+            PaymentStatus::Failed
+        );
+    }
+
+    #[test]
+    fn query_status_maps_waiting_and_refund_states() {
+        assert_eq!(
+            WalletService::query_status_to_payment_status(PaymentStatus::Pending, Some("WP")),
+            PaymentStatus::Pending
+        );
+        assert_eq!(
+            WalletService::query_status_to_payment_status(PaymentStatus::Pending, Some("OD")),
+            PaymentStatus::Paid
+        );
+        assert_eq!(
+            WalletService::query_status_to_payment_status(PaymentStatus::Paid, Some("RD")),
+            PaymentStatus::Refunding
+        );
+        assert_eq!(
+            WalletService::query_status_to_payment_status(PaymentStatus::Paid, Some("CD")),
+            PaymentStatus::Refunded
+        );
+        assert_eq!(
+            WalletService::query_status_to_payment_status(PaymentStatus::Refunding, Some("UD")),
+            PaymentStatus::Paid
+        );
     }
 }

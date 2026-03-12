@@ -135,6 +135,17 @@ pub async fn send_reply(
             .unwrap_or_default();
     }
 
+    if device_id.trim().is_empty() {
+        return Err(ApiError::BadRequest(
+            "Missing device_id for social account".into(),
+        ));
+    }
+    if profile_name.trim().is_empty() {
+        return Err(ApiError::BadRequest(
+            "Missing profile_name for social account".into(),
+        ));
+    }
+
     let response = nats_dm
         .send_reply(
             &conv_id,

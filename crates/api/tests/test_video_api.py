@@ -22,7 +22,9 @@ Requires:
 import base64
 import io
 import os
+import struct
 import time
+import zlib
 
 import pytest
 import requests
@@ -31,6 +33,7 @@ from conftest import (
     API_BASE_URL,
     APIClient,
     TEST_USER_EMAIL,
+    TEST_USER_ID,
     TEST_USER_PASSWORD,
     assert_json_structure,
     assert_response_success,
@@ -48,23 +51,31 @@ VIDEO_TASK_URL = "/api/v1/video/tasks/{task_id}"
 CONFIG_AI_MODELS_URL = "/api/v1/config/ai-models"
 
 # Model IDs from init-test-data.sql
-MODEL_VEO2_ID = 5
+MODEL_VEO2_ID = 9
 MODEL_JIMENG_720P_ID = 6
 MODEL_JIMENG_1080P_ID = 7
 AIPUB_PLAN_URL = "/api/v1/publish_plans"
+VIDEO_TEST_BALANCE_POINTS = 500000
 
-# 1x1 transparent PNG (minimal valid image for testing)
-TINY_PNG = bytes([
-    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-    0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-    0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
-    0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41,
-    0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
-    0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
-    0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
-    0x42, 0x60, 0x82,
-])
+def _png_chunk(tag: bytes, payload: bytes) -> bytes:
+    checksum = zlib.crc32(tag + payload) & 0xFFFFFFFF
+    return struct.pack(">I", len(payload)) + tag + payload + struct.pack(">I", checksum)
+
+
+def _make_test_png(width=32, height=32, rgba=(0x40, 0x80, 0xC0, 0xFF)) -> bytes:
+    row = b"\x00" + bytes(rgba) * width
+    raw = row * height
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + _png_chunk(b"IHDR", ihdr)
+        + _png_chunk(b"IDAT", zlib.compress(raw, level=9))
+        + _png_chunk(b"IEND", b"")
+    )
+
+
+# Small but non-trivial PNG fixture that passes provider-side image validation.
+TINY_PNG = _make_test_png()
 
 
 # ============================================================================
@@ -76,6 +87,36 @@ def video_client(db_connection):
     """Authenticated client for video API tests."""
     token = get_or_create_test_token()
     return APIClient(API_BASE_URL, token)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def ensure_video_test_wallet_balance(db_connection):
+    """Keep a large wallet balance so video tests reach handler validation paths."""
+    cursor = db_connection.cursor()
+    cursor.execute(
+        """
+        INSERT INTO gm_user_wallets (
+            user_id,
+            balance_points,
+            frozen_points,
+            created_at,
+            updated_at,
+            deposit_cny,
+            deposit_usd
+        )
+        VALUES (%s, %s, 0, NOW(), NOW(), 0, 0)
+        ON CONFLICT (user_id)
+        DO UPDATE SET
+            balance_points = EXCLUDED.balance_points,
+            frozen_points = 0,
+            updated_at = NOW(),
+            deposit_cny = 0,
+            deposit_usd = 0
+        """,
+        (TEST_USER_ID, VIDEO_TEST_BALANCE_POINTS),
+    )
+    db_connection.commit()
+    cursor.close()
 
 
 def _make_text_to_video_form(prompt="A cute cat playing in a garden", model_id=None,
@@ -321,9 +362,9 @@ class TestLaoZhangDualImageToVideo:
         assert resp.status_code in (400, 422, 500)
 
     def test_dual_image_incomplete(self, video_client):
-        """Providing only start_frame without end_frame should fail."""
+        """Providing only end_frame without start_frame should fail."""
         files = {
-            "start_frame": ("start.png", io.BytesIO(TINY_PNG), "image/png"),
+            "end_frame": ("end.png", io.BytesIO(TINY_PNG), "image/png"),
         }
         data_fields = {
             "prompt": "Transition test",
@@ -355,14 +396,14 @@ class TestVideoParameterValidation:
         assert resp.status_code in (400, 422)
 
     def test_invalid_seconds(self, video_client):
-        """Seconds must be 10 or 15."""
+        """Seconds must be one of the supported provider durations."""
         form_data = _make_text_to_video_form(seconds="7")
         resp = video_client.post(VIDEO_GENERATE_URL, data=form_data)
         assert resp.status_code in (400, 422)
 
     def test_invalid_size(self, video_client):
-        """Size must be valid."""
-        form_data = _make_text_to_video_form(size="1920x1080")
+        """Unsupported size should be rejected."""
+        form_data = _make_text_to_video_form(size="640x480")
         resp = video_client.post(VIDEO_GENERATE_URL, data=form_data)
         assert resp.status_code in (400, 422)
 

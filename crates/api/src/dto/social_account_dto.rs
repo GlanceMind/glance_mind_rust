@@ -1,5 +1,6 @@
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
+use validator::Validate;
 
 // Account List Request DTO (dedicated query params for account listing)
 #[derive(Debug, Deserialize)]
@@ -54,7 +55,7 @@ pub struct UpdateSocialGroupDto {
 }
 
 // Social Account DTOs
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Validate)]
 pub struct CreateSocialAccountDto {
     /// Platform ID (1=reddit, 2=tiktok, 3=facebook, etc.)
     /// Defaults to 2 (TikTok) if not provided
@@ -64,7 +65,8 @@ pub struct CreateSocialAccountDto {
     #[serde(default)]
     pub cookie: Option<String>,
     pub proxy_url: Option<String>,
-    pub daily_max_replies: Option<i32>, // Optional, defaults to 50
+    #[validate(range(min = 1, max = 10000))]
+    pub daily_max_replies: Option<i32>,
     #[serde(default)]
     pub device_id: Option<String>,
     #[serde(default)]
@@ -75,13 +77,14 @@ fn default_platform_id() -> i32 {
     2 // Default to TikTok
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Validate)]
 pub struct UpdateSocialAccountDto {
     pub username: Option<String>,
     pub cookie: Option<String>,
     pub proxy_url: Option<String>,
     pub status: Option<String>,
     pub group_id: Option<i32>,
+    #[validate(range(min = 1, max = 10000))]
     pub daily_max_replies: Option<i32>,
     pub device_id: Option<String>,
     pub profile_name: Option<String>,

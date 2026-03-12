@@ -14,6 +14,7 @@ use axum::routing::get;
 use axum::{middleware, Router};
 use std::sync::Arc;
 use tower::ServiceBuilder;
+use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 pub fn routes(
@@ -34,6 +35,9 @@ pub fn routes(
         if let Some(svc) = redis_service {
             user_state.set_redis_service(svc);
         }
+
+        // Background self-healing for lost payment callbacks.
+        user_state.wallet_service.spawn_recharge_reconciliation_loop();
 
         // /api/v1
         Router::new()
@@ -387,4 +391,10 @@ pub fn routes(
         .route("/health", get(|| async { "Healthy..." }))
         .nest("/api/v1", merged_router)
         .layer(TraceLayer::new_for_http())
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        )
 }

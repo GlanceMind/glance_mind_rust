@@ -180,7 +180,7 @@ class TestHealthEndpoint:
 
     def test_health_endpoint(self, api_client):
         """Test health endpoint returns OK."""
-        resp = api_client.get("/api/v1/health")
+        resp = api_client.get("/health")
         assert_response_success(resp)
 
 

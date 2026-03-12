@@ -46,6 +46,16 @@ impl EmailVerificationService {
 
     /// Verify Turnstile token
     async fn verify_turnstile(&self, token: &str) -> Result<bool, ApiError> {
+        if self.turnstile_secret.trim().is_empty() {
+            tracing::info!("Skipping Turnstile verification because TURNSTILE_SECRET_KEY is empty");
+            return Ok(true);
+        }
+
+        if token.trim().is_empty() {
+            tracing::warn!("Turnstile token missing while verification is enabled");
+            return Ok(false);
+        }
+
         let client = reqwest::Client::new();
 
         let response = client
@@ -83,6 +93,15 @@ impl EmailVerificationService {
 
     /// Send verification code email (using Resend template)
     async fn send_email(&self, email: &str, code: &str) -> Result<(), ApiError> {
+        if self.resend_api_key.trim().is_empty() {
+            tracing::info!(
+                "Skipping verification email delivery because RESEND_API_KEY is empty: email={}, code={}",
+                email,
+                code
+            );
+            return Ok(());
+        }
+
         let resend = Resend::new(&self.resend_api_key);
 
         // Send email using Resend template
@@ -242,6 +261,15 @@ impl EmailVerificationService {
 
     /// Send password reset email (reuse registration verification code template)
     async fn send_password_reset_email(&self, email: &str, code: &str) -> Result<(), ApiError> {
+        if self.resend_api_key.trim().is_empty() {
+            tracing::info!(
+                "Skipping password reset email delivery because RESEND_API_KEY is empty: email={}, code={}",
+                email,
+                code
+            );
+            return Ok(());
+        }
+
         let resend = Resend::new(&self.resend_api_key);
 
         let from = "GlanceMind <noreply@glancemind.org>";

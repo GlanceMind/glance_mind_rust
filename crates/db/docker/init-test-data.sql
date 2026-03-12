@@ -53,32 +53,36 @@ SELECT setval('regions_id_seq', (SELECT MAX(id) FROM gm_regions));
 -- ============================================================================
 -- 3. Pricing Rules (cost per action per platform)
 -- ============================================================================
-INSERT INTO gm_pricing_rules (id, platform_id, action_type, cost_points) VALUES
+INSERT INTO gm_pricing_rules (platform_id, action_type, cost_points) VALUES
 -- Reddit pricing
-(1, 1, 'SCAN_POST', 0.50),
-(2, 1, 'AI_ANALYZE', 1.00),
-(3, 1, 'REPLY_COMMENT', 2.00),
+(1, 'SCAN_POST', 0.50),
+(1, 'AI_ANALYZE', 1.00),
+(1, 'REPLY_COMMENT', 2.00),
 -- TikTok pricing
-(4, 2, 'SCAN_POST', 0.50),
-(5, 2, 'AI_ANALYZE', 1.00),
-(6, 2, 'REPLY_COMMENT', 2.00),
+(2, 'SCAN_POST', 0.50),
+(2, 'AI_ANALYZE', 1.00),
+(2, 'REPLY_COMMENT', 2.00),
 -- Facebook pricing
-(7, 3, 'SCAN_POST', 0.50),
-(8, 3, 'AI_ANALYZE', 1.00),
-(9, 3, 'REPLY_COMMENT', 2.00),
+(3, 'SCAN_POST', 0.50),
+(3, 'AI_ANALYZE', 1.00),
+(3, 'REPLY_COMMENT', 2.00),
 -- Instagram pricing
-(10, 4, 'SCAN_POST', 0.50),
-(11, 4, 'AI_ANALYZE', 1.00),
-(12, 4, 'REPLY_COMMENT', 2.00),
+(4, 'SCAN_POST', 0.50),
+(4, 'AI_ANALYZE', 1.00),
+(4, 'REPLY_COMMENT', 2.00),
 -- Twitter pricing
-(13, 5, 'SCAN_POST', 0.50),
-(14, 5, 'AI_ANALYZE', 1.00),
-(15, 5, 'REPLY_COMMENT', 2.00),
--- Global pricing (platform_id IS NULL) for billing system
-(16, NULL, 'AI_ANALYZE', 1.00),
-(17, NULL, 'IMAGE', 5.00),
-(18, NULL, 'VIDEO_GENERATE', 200.00)
+(5, 'SCAN_POST', 0.50),
+(5, 'AI_ANALYZE', 1.00),
+(5, 'REPLY_COMMENT', 2.00)
 ON CONFLICT (action_type, platform_id) DO UPDATE SET
+    cost_points = EXCLUDED.cost_points;
+
+-- Global pricing (platform_id IS NULL) for billing system
+INSERT INTO gm_pricing_rules (platform_id, action_type, cost_points) VALUES
+(NULL, 'AI_ANALYZE', 1.00),
+(NULL, 'IMAGE', 5.00),
+(NULL, 'VIDEO_GENERATE', 200.00)
+ON CONFLICT (action_type) WHERE platform_id IS NULL DO UPDATE SET
     cost_points = EXCLUDED.cost_points;
 
 SELECT setval('pricing_rules_id_seq', (SELECT MAX(id) FROM gm_pricing_rules));
@@ -86,6 +90,8 @@ SELECT setval('pricing_rules_id_seq', (SELECT MAX(id) FROM gm_pricing_rules));
 -- ============================================================================
 -- 4. AI Models (for campaign configuration)
 -- ============================================================================
+TRUNCATE TABLE gm_ai_models RESTART IDENTITY CASCADE;
+
 INSERT INTO gm_ai_models (id, name, provider, model_key, model_type, cost_multiplier, is_active) VALUES
 (1, 'Gemini 3.1 Pro', 'google', 'gemini-3.1-pro-preview', 'chat', 0.5, true),
 (2, 'GPT-5.2', 'openai', 'gpt-5.2', 'chat', 1.0, true),
@@ -122,7 +128,8 @@ SELECT setval('ai_models_id_seq', (SELECT MAX(id) FROM gm_ai_models));
 INSERT INTO gm_users (id, email, username, password_hash, full_name, role, status, is_active, invite_code) VALUES
 (1, 'admin@glancemind.test', 'admin', '$2b$12$Ikc.R4FMMGahbGhfHlLl4.PciMiV37qXfHpPNCjGGQg/yOEgk7k/e', 'Test Admin', 'admin', 'ACTIVE', true, 'ADMIN001'),
 (2, 'user@glancemind.test', 'testuser', '$2b$12$Ikc.R4FMMGahbGhfHlLl4.PciMiV37qXfHpPNCjGGQg/yOEgk7k/e', 'Test User', 'user', 'ACTIVE', true, 'USER0001'),
-(3, 'premium@glancemind.test', 'premiumuser', '$2b$12$Ikc.R4FMMGahbGhfHlLl4.PciMiV37qXfHpPNCjGGQg/yOEgk7k/e', 'Premium User', 'user', 'ACTIVE', true, 'PREM0001')
+(3, 'premium@glancemind.test', 'premiumuser', '$2b$12$Ikc.R4FMMGahbGhfHlLl4.PciMiV37qXfHpPNCjGGQg/yOEgk7k/e', 'Premium User', 'user', 'ACTIVE', true, 'PREM0001'),
+(999, 'e2e@glancemind.test', 'e2e_user', '$2b$12$Ikc.R4FMMGahbGhfHlLl4.PciMiV37qXfHpPNCjGGQg/yOEgk7k/e', 'E2E Test User', 'user', 'ACTIVE', true, 'E2E0999')
 ON CONFLICT (id) DO UPDATE SET
     email = EXCLUDED.email,
     username = EXCLUDED.username,
@@ -136,7 +143,8 @@ SELECT setval('users_id_seq', (SELECT MAX(id) FROM gm_users));
 INSERT INTO gm_user_wallets (user_id, balance_points, frozen_points, deposit_cny, deposit_usd) VALUES
 (1, 100000.00, 0.00, 10000.00, 1500.00),  -- Admin: large balance
 (2, 10000.00, 0.00, 1000.00, 150.00),     -- Regular user: moderate balance
-(3, 50000.00, 5000.00, 5000.00, 750.00)   -- Premium user: has frozen points
+(3, 50000.00, 5000.00, 5000.00, 750.00),  -- Premium user: has frozen points
+(999, 10000.00, 0.00, 1000.00, 150.00)    -- Dedicated API E2E wallet user
 ON CONFLICT (user_id) DO UPDATE SET
     balance_points = EXCLUDED.balance_points,
     frozen_points = EXCLUDED.frozen_points;
@@ -325,11 +333,11 @@ ON CONFLICT (id) DO NOTHING;
 SELECT setval('gm_agent_facebook_posts_id_seq', (SELECT MAX(id) FROM gm_agent_facebook_posts));
 
 INSERT INTO gm_agent_facebook_comments (id, post_db_id, campaign_id, facebook_comment_id, comment_text, reason, suggested_reply, status, comment_username, like_count, reply_count) VALUES
-(1, 1, 3, 'fb_cmt_001', 'Love this outfit! Where can I buy it?', 'Purchase inquiry', 'Thank you! You can find this at our online store: fashiondaily.com', 'pending', 'sarah_style', 50, 3),
-(2, 1, 3, 'fb_cmt_002', 'The colors are amazing!', 'Positive feedback', 'We love bold colors this season!', 'pending', 'color_queen', 30, 1),
-(3, 1, 3, 'fb_cmt_003', 'Not my style tbh', 'Neutral feedback', 'Fashion is personal - find what works for you!', 'replied', 'honest_bob', 5, 0),
-(4, 2, 3, 'fb_cmt_004', 'Great tips! More please!', 'Content request', 'Stay tuned for more style tips every week!', 'pending', 'tips_lover', 45, 2),
-(5, 2, 3, 'fb_cmt_005', 'Can you do a video on accessories?', 'Content suggestion', 'Great idea! We will cover accessories next week.', 'pending', 'accessory_fan', 25, 0)
+(1, 1, 3, 'fb_cmt_001', 'Love this outfit! Where can I buy it?', 'Purchase inquiry', 'Thank you! You can find this at our online store: fashiondaily.com', 0, 'sarah_style', 50, 3),
+(2, 1, 3, 'fb_cmt_002', 'The colors are amazing!', 'Positive feedback', 'We love bold colors this season!', 0, 'color_queen', 30, 1),
+(3, 1, 3, 'fb_cmt_003', 'Not my style tbh', 'Neutral feedback', 'Fashion is personal - find what works for you!', 2, 'honest_bob', 5, 0),
+(4, 2, 3, 'fb_cmt_004', 'Great tips! More please!', 'Content request', 'Stay tuned for more style tips every week!', 0, 'tips_lover', 45, 2),
+(5, 2, 3, 'fb_cmt_005', 'Can you do a video on accessories?', 'Content suggestion', 'Great idea! We will cover accessories next week.', 0, 'accessory_fan', 25, 0)
 ON CONFLICT (id) DO NOTHING;
 
 SELECT setval('gm_agent_facebook_comments_id_seq', (SELECT MAX(id) FROM gm_agent_facebook_comments));
@@ -346,13 +354,13 @@ ON CONFLICT (id) DO NOTHING;
 SELECT setval('gm_agent_instagram_posts_id_seq', (SELECT MAX(id) FROM gm_agent_instagram_posts));
 
 INSERT INTO gm_agent_instagram_comments (id, post_db_id, campaign_id, instagram_comment_id, comment_text, reason, suggested_reply, status, comment_username, like_count, child_comment_count) VALUES
-(1, 1, 4, 'ig_cmt_001', 'Goals! 💎', 'Aspirational comment', 'Keep dreaming big! 🌟', 'pending', 'dreamer_99', 120, 5),
-(2, 1, 4, 'ig_cmt_002', 'What brand is that bag?', 'Product inquiry', 'Its Hermès Birkin - timeless elegance!', 'pending', 'bag_lover', 85, 3),
-(3, 1, 4, 'ig_cmt_003', 'So jealous right now 😍', 'Emotional response', 'Everyone deserves some luxury moments!', 'replied', 'envious_emma', 45, 1),
-(4, 2, 4, 'ig_cmt_004', 'That Rolex is stunning!', 'Product appreciation', 'A classic choice that never goes out of style.', 'pending', 'watch_enthusiast', 200, 8),
-(5, 2, 4, 'ig_cmt_005', 'Price?', 'Price inquiry', 'DM us for exclusive pricing!', 'pending', 'curious_buyer', 30, 0),
-(6, 2, 4, 'ig_cmt_006', 'Can you show the Patek Philippe?', 'Product request', 'Coming soon in our next post!', 'pending', 'patek_fan', 75, 2),
-(7, 3, 4, 'ig_cmt_007', 'Which resort is this?', 'Location inquiry', 'This is the Amanpuri in Phuket!', 'pending', 'travel_planner', 65, 4)
+(1, 1, 4, 'ig_cmt_001', 'Goals! 💎', 'Aspirational comment', 'Keep dreaming big! 🌟', 0, 'dreamer_99', 120, 5),
+(2, 1, 4, 'ig_cmt_002', 'What brand is that bag?', 'Product inquiry', 'Its Hermès Birkin - timeless elegance!', 0, 'bag_lover', 85, 3),
+(3, 1, 4, 'ig_cmt_003', 'So jealous right now 😍', 'Emotional response', 'Everyone deserves some luxury moments!', 2, 'envious_emma', 45, 1),
+(4, 2, 4, 'ig_cmt_004', 'That Rolex is stunning!', 'Product appreciation', 'A classic choice that never goes out of style.', 0, 'watch_enthusiast', 200, 8),
+(5, 2, 4, 'ig_cmt_005', 'Price?', 'Price inquiry', 'DM us for exclusive pricing!', 0, 'curious_buyer', 30, 0),
+(6, 2, 4, 'ig_cmt_006', 'Can you show the Patek Philippe?', 'Product request', 'Coming soon in our next post!', 0, 'patek_fan', 75, 2),
+(7, 3, 4, 'ig_cmt_007', 'Which resort is this?', 'Location inquiry', 'This is the Amanpuri in Phuket!', 0, 'travel_planner', 65, 4)
 ON CONFLICT (id) DO NOTHING;
 
 SELECT setval('gm_agent_instagram_comments_id_seq', (SELECT MAX(id) FROM gm_agent_instagram_comments));
@@ -368,11 +376,11 @@ ON CONFLICT (id) DO NOTHING;
 SELECT setval('gm_agent_reddit_posts_id_seq', (SELECT MAX(id) FROM gm_agent_reddit_posts));
 
 INSERT INTO gm_agent_reddit_comments (id, post_db_id, campaign_id, comment_id, comment_name, author, body, reason, suggested_reply, status, score, depth, comment_created_at) VALUES
-(1, 1, 1, 'rc_001', 't1_rc001', 'helpful_marketer', 'I highly recommend checking out HubSpot AI features!', 'Tool recommendation', 'Great suggestion! Our tool integrates seamlessly with HubSpot.', 'pending', 85, 0, '2025-01-14 10:00:00+00'),
-(2, 1, 1, 'rc_002', 't1_rc002', 'skeptic_sam', 'Most AI tools are overhyped imo', 'Skeptical comment', 'We understand the skepticism! Try our free trial to see the results.', 'pending', 42, 0, '2025-01-14 11:30:00+00'),
-(3, 1, 1, 'rc_003', 't1_rc003', 'startup_founder', 'Budget is a concern for us', 'Budget constraint', 'We have startup-friendly pricing! Check out our website.', 'replied', 28, 0, '2025-01-14 14:00:00+00'),
-(4, 2, 1, 'rc_004', 't1_rc004', 'curious_dev', 'What models do you use?', 'Technical inquiry', 'We use a combination of GPT-4 and custom fine-tuned models.', 'pending', 65, 0, '2025-01-15 12:00:00+00'),
-(5, 2, 1, 'rc_005', 't1_rc005', 'content_creator', 'This changed my workflow completely!', 'Success story', 'Love hearing success stories! Would you like to share more?', 'pending', 110, 0, '2025-01-15 15:00:00+00')
+(1, 1, 1, 'rc_001', 't1_rc001', 'helpful_marketer', 'I highly recommend checking out HubSpot AI features!', 'Tool recommendation', 'Great suggestion! Our tool integrates seamlessly with HubSpot.', 0, 85, 0, '2025-01-14 10:00:00+00'),
+(2, 1, 1, 'rc_002', 't1_rc002', 'skeptic_sam', 'Most AI tools are overhyped imo', 'Skeptical comment', 'We understand the skepticism! Try our free trial to see the results.', 0, 42, 0, '2025-01-14 11:30:00+00'),
+(3, 1, 1, 'rc_003', 't1_rc003', 'startup_founder', 'Budget is a concern for us', 'Budget constraint', 'We have startup-friendly pricing! Check out our website.', 2, 28, 0, '2025-01-14 14:00:00+00'),
+(4, 2, 1, 'rc_004', 't1_rc004', 'curious_dev', 'What models do you use?', 'Technical inquiry', 'We use a combination of GPT-4 and custom fine-tuned models.', 0, 65, 0, '2025-01-15 12:00:00+00'),
+(5, 2, 1, 'rc_005', 't1_rc005', 'content_creator', 'This changed my workflow completely!', 'Success story', 'Love hearing success stories! Would you like to share more?', 0, 110, 0, '2025-01-15 15:00:00+00')
 ON CONFLICT (id) DO NOTHING;
 
 SELECT setval('gm_agent_reddit_comments_id_seq', (SELECT MAX(id) FROM gm_agent_reddit_comments));
@@ -388,11 +396,11 @@ ON CONFLICT (id) DO NOTHING;
 SELECT setval('gm_agent_twitter_tweets_id_seq', (SELECT MAX(id) FROM gm_agent_twitter_tweets));
 
 INSERT INTO gm_agent_twitter_comments (id, tweet_db_id, campaign_id, twitter_comment_id, conversation_id, comment_screen_name, comment_user_name, comment_text, reason, suggested_reply, status, favorite_count, reply_count) VALUES
-(1, 1, 5, 'tc_001', 'conv_001', 'curious_user', 'Curious User', 'What tool is it?', 'Product inquiry', 'Its called ProductivityPro! Check it out.', 'pending', 45, 5),
-(2, 1, 5, 'tc_002', 'conv_001', 'remote_worker', 'Remote Worker', 'Does it work for remote teams?', 'Feature inquiry', 'Absolutely! Built specifically for remote collaboration.', 'pending', 32, 3),
-(3, 1, 5, 'tc_003', 'conv_001', 'enterprise_pm', 'Enterprise PM', 'Any enterprise features?', 'Enterprise inquiry', 'Yes! We have SSO, advanced analytics, and dedicated support.', 'replied', 28, 2),
-(4, 2, 5, 'tc_004', 'conv_002', 'startup_ceo', 'Startup CEO', 'Adding this to my stack!', 'Positive engagement', 'Great choice! Let us know if you need any help getting started.', 'pending', 150, 8),
-(5, 2, 5, 'tc_005', 'conv_002', 'productivity_nerd', 'Productivity Nerd', 'Finally a good list!', 'Appreciation', 'Thanks! We curate only the best tools.', 'pending', 85, 4)
+(1, 1, 5, 'tc_001', 'conv_001', 'curious_user', 'Curious User', 'What tool is it?', 'Product inquiry', 'Its called ProductivityPro! Check it out.', 0, 45, 5),
+(2, 1, 5, 'tc_002', 'conv_001', 'remote_worker', 'Remote Worker', 'Does it work for remote teams?', 'Feature inquiry', 'Absolutely! Built specifically for remote collaboration.', 0, 32, 3),
+(3, 1, 5, 'tc_003', 'conv_001', 'enterprise_pm', 'Enterprise PM', 'Any enterprise features?', 'Enterprise inquiry', 'Yes! We have SSO, advanced analytics, and dedicated support.', 2, 28, 2),
+(4, 2, 5, 'tc_004', 'conv_002', 'startup_ceo', 'Startup CEO', 'Adding this to my stack!', 'Positive engagement', 'Great choice! Let us know if you need any help getting started.', 0, 150, 8),
+(5, 2, 5, 'tc_005', 'conv_002', 'productivity_nerd', 'Productivity Nerd', 'Finally a good list!', 'Appreciation', 'Thanks! We curate only the best tools.', 0, 85, 4)
 ON CONFLICT (id) DO NOTHING;
 
 SELECT setval('gm_agent_twitter_comments_id_seq', (SELECT MAX(id) FROM gm_agent_twitter_comments));
@@ -446,11 +454,11 @@ INSERT INTO gm_agent_comments
 VALUES
   (101, 1, 'dup_cmt_001', 'dup_user_a', 'dup_uid_a', 'Duplicate comment test',
    'Test', 'Reply A', '2025-06-01 10:00:00', 2, 0),
-  (102, 1, 'dup_cmt_001', 'dup_user_a', 'dup_uid_a', 'Duplicate comment test',
+  (102, 1, 'dup_cmt_001_b', 'dup_user_a', 'dup_uid_a', 'Duplicate comment test',
    'Test', 'Reply A', '2025-06-01 10:00:00', 2, 0),
   (103, 1, 'dup_cmt_002', 'dup_user_b', 'dup_uid_b', 'Another duplicate',
    'Test', 'Reply B', '2025-06-01 10:01:00', 2, 0),
-  (104, 1, 'dup_cmt_002', 'dup_user_b', 'dup_uid_b', 'Another duplicate',
+  (104, 1, 'dup_cmt_002_b', 'dup_user_b', 'dup_uid_b', 'Another duplicate',
    'Test', 'Reply B', '2025-06-01 10:01:00', 2, 0)
 ON CONFLICT (id) DO NOTHING;
 

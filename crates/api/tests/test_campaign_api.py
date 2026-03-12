@@ -23,6 +23,12 @@ from conftest import (
 class TestCampaignCRUD:
     """Tests for campaign CRUD operations."""
 
+    def _get_auth_user_id(self, auth_client):
+        resp = auth_client.get("/api/v1/user/me")
+        assert_response_success(resp)
+        data = extract_data(resp.json())
+        return data.get("id") or data.get("user_id")
+
     def _get_config_ids(self, api_client):
         """Helper to get platform, region, and AI model IDs."""
         # Get platform
@@ -71,14 +77,30 @@ class TestCampaignCRUD:
 
     def test_get_campaign_details(self, auth_client, api_client, db_cursor):
         """Test getting campaign details."""
-        # Use existing mock campaign
-        db_cursor.execute("SELECT id FROM gm_campaigns WHERE user_id = 2 LIMIT 1")
+        user_id = self._get_auth_user_id(auth_client)
+        db_cursor.execute(
+            "SELECT id FROM gm_campaigns WHERE user_id = %s ORDER BY id DESC LIMIT 1",
+            (user_id,),
+        )
         result = db_cursor.fetchone()
-        
-        if not result:
-            pytest.skip("No mock campaign available")
-        
-        campaign_id = result["id"]
+
+        if result:
+            campaign_id = result["id"]
+        else:
+            platform_id, region_id, ai_model_id = self._get_config_ids(api_client)
+            create_resp = auth_client.post(
+                "/api/v1/campaigns",
+                json={
+                    "name": "Owned Campaign Detail Test",
+                    "platform_id": platform_id,
+                    "region_id": region_id,
+                    "ai_model_id": ai_model_id,
+                    "schedule_type": "ONCE",
+                    "product_prompt": "Owned detail test product",
+                },
+            )
+            assert_response_success(create_resp)
+            campaign_id = extract_data(create_resp.json()).get("id")
         
         resp = auth_client.get(f"/api/v1/campaigns/{campaign_id}")
         assert_response_success(resp)
@@ -90,8 +112,11 @@ class TestCampaignCRUD:
 
     def test_update_campaign(self, auth_client, api_client, db_cursor):
         """Test updating a campaign."""
-        # Use existing mock campaign
-        db_cursor.execute("SELECT id FROM gm_campaigns WHERE user_id = 2 AND status = 'DRAFT' LIMIT 1")
+        user_id = self._get_auth_user_id(auth_client)
+        db_cursor.execute(
+            "SELECT id FROM gm_campaigns WHERE user_id = %s AND status = 'DRAFT' ORDER BY id DESC LIMIT 1",
+            (user_id,),
+        )
         result = db_cursor.fetchone()
         
         if not result:
@@ -148,8 +173,11 @@ class TestCampaignCRUD:
 
     def test_get_campaign_logs(self, auth_client, db_cursor):
         """Test getting campaign logs."""
-        # Use existing mock campaign
-        db_cursor.execute("SELECT id FROM gm_campaigns WHERE user_id = 2 LIMIT 1")
+        user_id = self._get_auth_user_id(auth_client)
+        db_cursor.execute(
+            "SELECT id FROM gm_campaigns WHERE user_id = %s ORDER BY id DESC LIMIT 1",
+            (user_id,),
+        )
         result = db_cursor.fetchone()
         
         if not result:
@@ -171,9 +199,19 @@ class TestCampaignCRUD:
 class TestCampaignTemplates:
     """Tests for campaign template operations."""
 
+    def _get_auth_user_id(self, auth_client):
+        resp = auth_client.get("/api/v1/user/me")
+        assert_response_success(resp)
+        data = extract_data(resp.json())
+        return data.get("id") or data.get("user_id")
+
     def _get_or_create_campaign(self, auth_client, api_client, db_cursor):
         """Helper to get or create a campaign for template testing."""
-        db_cursor.execute("SELECT id FROM gm_campaigns WHERE user_id = 2 LIMIT 1")
+        user_id = self._get_auth_user_id(auth_client)
+        db_cursor.execute(
+            "SELECT id FROM gm_campaigns WHERE user_id = %s ORDER BY id DESC LIMIT 1",
+            (user_id,),
+        )
         result = db_cursor.fetchone()
         
         if result:

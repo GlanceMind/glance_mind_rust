@@ -104,7 +104,7 @@ class TestGroomingPlanCreate:
         auth_client.delete(f"/api/v1/publish_plans/{plan_id}")
 
     def test_create_plan_defaults_ai_task_types(self, auth_client, db_cursor):
-        """When ai_task_types omitted, should default to name_gen + avatar_gen."""
+        """When ai_task_types omitted, should default to the aggregate grooming task."""
         group = get_test_group_with_accounts(db_cursor)
         if not group:
             pytest.skip("No group with accounts available")
@@ -129,8 +129,7 @@ class TestGroomingPlanCreate:
         types = row["ai_task_types"]
         assert types is not None, "ai_task_types should be set"
         flat = [t for t in types if t is not None]
-        assert "name_gen" in flat, f"Should contain name_gen, got {flat}"
-        assert "avatar_gen" in flat, f"Should contain avatar_gen, got {flat}"
+        assert flat == ["account_grooming"], f"Should default to aggregate grooming task, got {flat}"
         print(f"  OK: ai_task_types defaulted to {flat}")
 
         auth_client.delete(f"/api/v1/publish_plans/{plan_id}")

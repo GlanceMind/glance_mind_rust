@@ -48,18 +48,18 @@ class TestWalletBalance:
             print(f"\n  Frozen points: {data['frozen_points']}")
 
 
-class TestWalletOrders:
-    """Tests for wallet order/recharge endpoints."""
+class TestWalletRecharge:
+    """Tests for wallet recharge endpoints."""
 
     def test_create_recharge_order(self, auth_client):
         """Test creating a recharge order."""
         order_payload = {
             "amount": "10.00",
-            "payment_method": "STRIPE"
+            "channel": "wechat"
         }
         
         resp = auth_client.post(
-            "/api/v1/wallet/orders",
+            "/api/v1/wallet/recharge",
             json=order_payload
         )
         
@@ -68,8 +68,8 @@ class TestWalletOrders:
             data = extract_data(resp.json())
             print(f"\nRecharge order: {data}")
             
-            # Should have transaction info
-            assert "transaction_id" in data or "id" in data, \
+            # Should have order info
+            assert "order_no" in data, \
                 "Should return transaction info"
         else:
             print(f"\n  Order creation returned: {resp.status_code}")
@@ -115,6 +115,22 @@ class TestWalletRouteExists:
         
         assert resp.status_code == 401, \
             f"Expected 401 (route exists), got {resp.status_code}"
+
+    def test_wallet_recharge_route_exists(self, api_client):
+        """Test that XunhuPay recharge route exists."""
+        resp = api_client.post("/api/v1/wallet/recharge", json={
+            "amount": "1.00", "channel": "wechat"
+        })
+        assert resp.status_code == 401, \
+            f"Expected 401 (route exists), got {resp.status_code}"
+
+    def test_payment_notify_route_exists(self, api_client):
+        """Test that public payment notify route exists (no auth required)."""
+        resp = api_client.post("/api/v1/public/payment/notify", data={
+            "trade_order_id": "test"
+        })
+        assert resp.status_code != 404, \
+            "Payment notify route should exist"
 
 
 class TestWalletDatabaseState:

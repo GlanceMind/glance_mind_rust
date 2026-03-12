@@ -157,7 +157,7 @@ class TestPermissionMiddleware:
         """AI endpoints return 403 when ai_content_gen bit is 0."""
         set_permissions(db_cursor, TEST_USER_ID, DEFAULT_PERMS & ~AI_CONTENT_GEN)
 
-        resp = auth_client.get("/api/v1/ai/models")
+        resp = auth_client.post("/api/v1/ai/generate", json={"prompt": "test"})
         assert resp.status_code == 403, f"Expected 403, got {resp.status_code}"
         print("  OK: AI blocked")
 
@@ -165,7 +165,7 @@ class TestPermissionMiddleware:
         """AI endpoints succeed when ai_content_gen bit is set."""
         set_permissions(db_cursor, TEST_USER_ID, DEFAULT_PERMS)
 
-        resp = auth_client.get("/api/v1/ai/models")
+        resp = auth_client.post("/api/v1/ai/generate", json={"prompt": "test"})
         assert resp.status_code != 403
         print(f"  OK: AI allowed (status: {resp.status_code})")
 
@@ -189,7 +189,7 @@ class TestPermissionMiddleware:
         """Upload-tasks return 403 when ai_publish bit is 0."""
         set_permissions(db_cursor, TEST_USER_ID, DEFAULT_PERMS & ~AI_PUBLISH)
 
-        resp = auth_client.get("/api/v1/upload-tasks")
+        resp = auth_client.get("/api/v1/upload-tasks/my")
         assert resp.status_code == 403, f"Expected 403, got {resp.status_code}"
         print("  OK: upload-tasks blocked")
 
@@ -197,7 +197,7 @@ class TestPermissionMiddleware:
         """Upload-tasks succeed when ai_publish bit is set."""
         set_permissions(db_cursor, TEST_USER_ID, DEFAULT_PERMS)
 
-        resp = auth_client.get("/api/v1/upload-tasks")
+        resp = auth_client.get("/api/v1/upload-tasks/my")
         assert resp.status_code != 403
         print(f"  OK: upload-tasks allowed (status: {resp.status_code})")
 
@@ -205,7 +205,7 @@ class TestPermissionMiddleware:
         """Agent endpoints return 403 when ai_lead_gen bit is 0."""
         set_permissions(db_cursor, TEST_USER_ID, DEFAULT_PERMS & ~AI_LEAD_GEN)
 
-        resp = auth_client.get("/api/v1/agent/comments")
+        resp = auth_client.post("/api/v1/agent/analyze", json={})
         assert resp.status_code == 403, f"Expected 403, got {resp.status_code}"
         print("  OK: agent blocked")
 
@@ -213,7 +213,7 @@ class TestPermissionMiddleware:
         """Agent endpoints succeed when ai_lead_gen bit is set."""
         set_permissions(db_cursor, TEST_USER_ID, DEFAULT_PERMS)
 
-        resp = auth_client.get("/api/v1/agent/comments")
+        resp = auth_client.post("/api/v1/agent/analyze", json={})
         assert resp.status_code != 403
         print(f"  OK: agent allowed (status: {resp.status_code})")
 
@@ -221,7 +221,7 @@ class TestPermissionMiddleware:
         """Scan endpoints return 403 when ai_lead_gen bit is 0."""
         set_permissions(db_cursor, TEST_USER_ID, DEFAULT_PERMS & ~AI_LEAD_GEN)
 
-        resp = auth_client.get("/api/v1/scan/tasks")
+        resp = auth_client.post("/api/v1/scan/post", json={})
         assert resp.status_code == 403, f"Expected 403, got {resp.status_code}"
         print("  OK: scan blocked")
 
@@ -229,7 +229,7 @@ class TestPermissionMiddleware:
         """Scan endpoints succeed when ai_lead_gen bit is set."""
         set_permissions(db_cursor, TEST_USER_ID, DEFAULT_PERMS)
 
-        resp = auth_client.get("/api/v1/scan/tasks")
+        resp = auth_client.post("/api/v1/scan/post", json={})
         assert resp.status_code != 403
         print(f"  OK: scan allowed (status: {resp.status_code})")
 
@@ -247,7 +247,7 @@ class TestPermissionBoundary:
         ("/api/v1/dm/conversations", "dm_control"),
         ("/api/v1/campaigns", "ai_lead_gen"),
         ("/api/v1/video/tasks", "ai_content_gen"),
-        ("/api/v1/upload-tasks", "ai_publish"),
+        ("/api/v1/upload-tasks/my", "ai_publish"),
     ]
 
     def test_20_all_off_blocks_everything(self, auth_client, db_cursor):

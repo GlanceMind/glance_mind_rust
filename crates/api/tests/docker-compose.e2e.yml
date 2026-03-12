@@ -30,6 +30,83 @@ services:
       retries: 10
       start_period: 15s
 
+  xunhupay-mock:
+    build:
+      context: ../../../../mock-services
+      dockerfile: Dockerfile
+    container_name: api-e2e-xunhupay-mock
+    command: ["python", "-m", "uvicorn", "mock_services.xunhupay_mock:app", "--host", "0.0.0.0", "--port", "8500"]
+    ports:
+      - "8500:8500"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8500/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  laozhang-mock:
+    build:
+      context: ../../../../mock-services
+      dockerfile: Dockerfile
+    container_name: api-e2e-laozhang-mock
+    command: ["python", "-m", "uvicorn", "mock_services.laozhang_mock:app", "--host", "0.0.0.0", "--port", "8100"]
+    ports:
+      - "8100:8100"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  tikhub-mock:
+    build:
+      context: ../../../../mock-services
+      dockerfile: Dockerfile
+    container_name: api-e2e-tikhub-mock
+    command: ["python", "-m", "uvicorn", "mock_services.tikhub_mock:app", "--host", "0.0.0.0", "--port", "8200"]
+    ports:
+      - "8200:8200"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8200/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  jimeng-mock:
+    build:
+      context: ../../../../mock-services
+      dockerfile: Dockerfile
+    container_name: api-e2e-jimeng-mock
+    command: ["python", "-m", "uvicorn", "mock_services.jimeng_mock:app", "--host", "0.0.0.0", "--port", "8300"]
+    ports:
+      - "8300:8300"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8300/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  vidu-mock:
+    build:
+      context: ../../../../mock-services
+      dockerfile: Dockerfile
+    container_name: api-e2e-vidu-mock
+    command: ["python", "-m", "uvicorn", "mock_services.vidu_mock:app", "--host", "0.0.0.0", "--port", "8400"]
+    ports:
+      - "8400:8400"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8400/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
   # API Server
   api:
     build:
@@ -41,14 +118,37 @@ services:
       PORT: 8080
       JWT_SECRET: e2e_test_jwt_secret_key_12345
       RUST_LOG: info
-      # Disable external services for testing
-      LAOZHANG_API_KEY: ""
+      OPENAI_API_KEY: mock-openai-key
+      OPENAI_BASE_URL: http://laozhang-mock:8100/v1
+      LAOZHANG_API_KEY: mock-laozhang-key
+      LAOZHANG_BASE_URL: http://laozhang-mock:8100
+      TIKHUB_BASE_URL: http://tikhub-mock:8200
+      JIMENG_ACCESS_KEY_ID: mock-jimeng-ak
+      JIMENG_SECRET_ACCESS_KEY: mock-jimeng-sk
+      JIMENG_BASE_URL: http://jimeng-mock:8300
+      VIDU_API_KEY: mock-vidu-key
+      VIDU_BASE_URL: http://vidu-mock:8400
       RESEND_API_KEY: ""
       TURNSTILE_SECRET_KEY: ""
+      # XunhuPay -> mock
+      XUNHUPAY_APP_ID: mock-app-id
+      XUNHUPAY_APP_SECRET: mock-xunhupay-secret
+      XUNHUPAY_GATEWAY_URL: http://xunhupay-mock:8500
+      API_BASE_URL: http://api:8080
     ports:
       - "8080:8080"
     depends_on:
       db:
+        condition: service_healthy
+      laozhang-mock:
+        condition: service_healthy
+      tikhub-mock:
+        condition: service_healthy
+      jimeng-mock:
+        condition: service_healthy
+      vidu-mock:
+        condition: service_healthy
+      xunhupay-mock:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]

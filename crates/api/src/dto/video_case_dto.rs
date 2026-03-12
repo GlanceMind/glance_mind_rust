@@ -53,8 +53,8 @@ pub struct VideoCaseListItem {
 // ===== Video Case Detail Response =====
 
 /// Video item within a case
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct VideoCaseVideo {
     /// Video ID
     pub video_id: i32,
@@ -154,13 +154,13 @@ pub struct VideoCaseListQuery {
 impl From<glance_mind_db::entity::video_case::VideoCase> for VideoCaseListItem {
     fn from(case: glance_mind_db::entity::video_case::VideoCase) -> Self {
         Self {
-            video_id: case.video_id,
+            video_id: Some(i64::from(case.id)),
             case_id: case.case_id,
             user_id: case.user_id,
             tt_category_id: case.tt_category_id,
             category_name_en: case.category_name_en,
             category_name_cn: case.category_name_cn,
-            model: case.video_model.clone(), // Use video_model as model
+            model: case.video_model.clone().or(case.model.clone()),
             favorite_status: case.favorite_status.unwrap_or(0),
             script: case.script,
             task_no: case.task_no,
@@ -172,7 +172,7 @@ impl From<glance_mind_db::entity::video_case::VideoCase> for VideoCaseListItem {
             refer_image_url: case.refer_image_url,
             video_status: case.video_status.unwrap_or_else(|| "pending".to_string()),
             error_message: case.error_message,
-            size: case.video_size, // Use video_size as size
+            size: case.size,
             case_status: case.case_status.unwrap_or(0),
         }
     }
@@ -198,17 +198,13 @@ impl From<glance_mind_db::entity::video_case::VideoCase> for VideoCaseDetail {
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
 
-        // Format create_time
-        let create_time = case
-            .create_time
-            .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
-            .unwrap_or_default();
+        let create_time = case.created_at.format("%Y-%m-%d %H:%M:%S").to_string();
 
         Self {
-            id: case.detail_id, // Use detail_id as id
+            id: Some(case.id),
             task_no: case.task_no,
             num: case.num.unwrap_or(1),
-            status: case.detail_status.unwrap_or(0), // Use detail_status as status
+            status: case.status.unwrap_or(0),
             tt_category_id: case.tt_category_id,
             category_name_cn: case.category_name_cn,
             image_urls,
@@ -219,7 +215,7 @@ impl From<glance_mind_db::entity::video_case::VideoCase> for VideoCaseDetail {
             product_name: case.product_name,
             brand_name: case.brand_name,
             video_language: case.video_language,
-            video_model: case.video_model,
+            video_model: case.video_model.or(case.model),
             create_time,
             completed_num: case.completed_num,
             videos,

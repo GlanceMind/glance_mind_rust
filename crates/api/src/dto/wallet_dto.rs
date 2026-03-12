@@ -2,6 +2,79 @@ use bigdecimal::BigDecimal;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum PaymentStatus {
+    Pending,
+    Paid,
+    Failed,
+    Refunding,
+    Refunded,
+}
+
+impl PaymentStatus {
+    pub fn as_db_value(self) -> &'static str {
+        match self {
+            Self::Pending => "PENDING",
+            Self::Paid => "PAID",
+            Self::Failed => "FAILED",
+            Self::Refunding => "REFUNDING",
+            Self::Refunded => "REFUNDED",
+        }
+    }
+
+    pub fn from_db_value(value: Option<&str>) -> Option<Self> {
+        match value {
+            Some("PENDING") => Some(Self::Pending),
+            Some("PAID") => Some(Self::Paid),
+            Some("FAILED") => Some(Self::Failed),
+            Some("REFUNDING") => Some(Self::Refunding),
+            Some("REFUNDED") => Some(Self::Refunded),
+            _ => None,
+        }
+    }
+
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Failed | Self::Refunded)
+    }
+
+    pub fn can_transition_to(self, next: Self) -> bool {
+        match self {
+            Self::Pending => matches!(
+                next,
+                Self::Paid | Self::Failed | Self::Refunding | Self::Refunded
+            ),
+            Self::Paid => matches!(next, Self::Refunding | Self::Refunded),
+            Self::Refunding => matches!(next, Self::Paid | Self::Failed | Self::Refunded),
+            Self::Failed | Self::Refunded => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RechargeChannel {
+    Wechat,
+    Alipay,
+}
+
+impl RechargeChannel {
+    pub fn as_db_value(self) -> &'static str {
+        match self {
+            Self::Wechat => "wechat",
+            Self::Alipay => "alipay",
+        }
+    }
+
+    pub fn from_db_value(value: Option<&str>) -> Option<Self> {
+        match value {
+            Some("wechat") => Some(Self::Wechat),
+            Some("alipay") => Some(Self::Alipay),
+            _ => None,
+        }
+    }
+}
+
 // Wallet DTOs
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WalletBalanceDto {
@@ -28,17 +101,32 @@ pub struct WalletTransactionDto {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TopUpRequestDto {
-    pub amount: BigDecimal,
-    pub payment_method: String,
+// --------------- XunhuPay recharge DTOs ---------------
+
+#[derive(Debug, Deserialize)]
+pub struct RechargeRequestDto {
+    /// Amount in CNY (e.g. "9.90")
+    pub amount: String,
+    /// Supported channels: wechat / alipay
+    pub channel: RechargeChannel,
+    /// Optional: URL to redirect after payment
+    pub return_url: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TopUpResponseDto {
-    pub transaction_id: i32,
-    pub payment_url: Option<String>, // Mocking a payment gateway URL
-    pub message: String,
+#[derive(Debug, Serialize)]
+pub struct RechargeResponseDto {
+    pub order_no: String,
+    pub payment_url: Option<String>,
+    pub qrcode_url: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RechargeOrderStatusDto {
+    pub order_no: String,
+    pub status: PaymentStatus,
+    pub amount: String,
+    pub channel: RechargeChannel,
+    pub paid_at: Option<DateTime<Utc>>,
 }
 
 #[allow(dead_code)]

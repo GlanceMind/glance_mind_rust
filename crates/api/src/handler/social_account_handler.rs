@@ -10,6 +10,7 @@ use axum::{
     Extension, Json,
 };
 use glance_mind_db::entity::user::User;
+use validator::Validate;
 
 pub async fn list_accounts(
     Extension(user): Extension<User>,
@@ -28,6 +29,7 @@ pub async fn create_account(
     Extension(state): Extension<UserState>,
     Json(dto): Json<CreateSocialAccountDto>,
 ) -> Result<impl IntoResponse, ApiError> {
+    dto.validate().map_err(|e| ApiError::BadRequest(format!("Validation error: {e}")))?;
     let account = state
         .social_account_service
         .create_account(user.id, dto)
@@ -41,6 +43,7 @@ pub async fn update_account(
     Path(id): Path<i32>,
     Json(dto): Json<UpdateSocialAccountDto>,
 ) -> Result<impl IntoResponse, ApiError> {
+    dto.validate().map_err(|e| ApiError::BadRequest(format!("Validation error: {e}")))?;
     let account = state
         .social_account_service
         .update_account(id, user.id, dto)

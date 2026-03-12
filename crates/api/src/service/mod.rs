@@ -29,3 +29,4 @@ pub mod vidu_client;
 pub(crate) mod wallet_service;
 pub mod nats_dm_service;
 pub mod redis_service;
+pub mod xunhupay_client;

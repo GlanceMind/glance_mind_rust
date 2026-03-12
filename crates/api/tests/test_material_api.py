@@ -395,12 +395,25 @@ class TestGetMaterial:
 
     def test_get_material_other_user(self, auth_client, db_connection, cleanup_materials):
         """Should not be able to access another user's material."""
+        other_user_id = TEST_USER_ID + 998
         cursor = db_connection.cursor()
         cursor.execute("""
+            INSERT INTO gm_users
+                (id, email, username, password_hash, full_name, role, status, is_active, invite_code)
+            VALUES (%s, %s, %s,
+                    '$2b$12$Ikc.R4FMMGahbGhfHlLl4.PciMiV37qXfHpPNCjGGQg/yOEgk7k/e',
+                    'Other Material User', 'user', 'ACTIVE', true, 'MATL0998')
+            ON CONFLICT (id) DO NOTHING
+        """, (
+            other_user_id,
+            f"other_material_{other_user_id}@glancemind.test",
+            f"other_material_{other_user_id}",
+        ))
+        cursor.execute("""
             INSERT INTO gm_user_materials (user_id, video_url, tag, title, is_active, created_at)
-            VALUES (99998, 'https://example.com/other-user.mp4', 'other', 'e2e_test_other_user', true, NOW())
+            VALUES (%s, 'https://example.com/other-user.mp4', 'other', 'e2e_test_other_user', true, NOW())
             RETURNING id
-        """)
+        """, (other_user_id,))
         other_id = cursor.fetchone()[0]
         db_connection.commit()
         cursor.close()
@@ -412,6 +425,7 @@ class TestGetMaterial:
         # Cleanup
         cursor = db_connection.cursor()
         cursor.execute("DELETE FROM gm_user_materials WHERE id = %s", (other_id,))
+        cursor.execute("DELETE FROM gm_users WHERE id = %s", (other_user_id,))
         db_connection.commit()
         cursor.close()
 

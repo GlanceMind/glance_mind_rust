@@ -49,6 +49,15 @@ impl AipubService {
             )));
         }
 
+        if let Err(err) = self.repo.get_platform_name(dto.platform_id) {
+            return match err {
+                DieselError::NotFound => Err(ApiError::BusinessError(BusinessError::InvalidInput(
+                    format!("Invalid platform_id: {}", dto.platform_id),
+                ))),
+                _ => Err(ApiError::from(DbError::SomethingWentWrong(err.to_string()))),
+            };
+        }
+
         // Validate target based on plan_type
         match PlanType::parse(plan_type.as_str()) {
             Some(PlanType::BatchText) => {

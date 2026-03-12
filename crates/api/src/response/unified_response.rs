@@ -170,6 +170,7 @@ impl From<i32> for ErrorCode {
             4003 => ErrorCode::EmailAlreadyInUse,
             4004 => ErrorCode::InvalidVerificationCode,
             4005 => ErrorCode::VerificationCodeExpired,
+            4050 => ErrorCode::PermissionDenied,
             4100 => ErrorCode::InsufficientBalance,
             4101 => ErrorCode::ChargeFailed,
             4102 => ErrorCode::PricingRuleNotFound,
@@ -316,5 +317,12 @@ mod tests {
     fn test_err_macro() {
         let response = api_err!(ErrorCode::BadRequest);
         assert_eq!(response.code, 2001);
+    }
+
+    #[test]
+    fn test_permission_denied_code_maps_correctly() {
+        let error = ErrorCode::from(4050);
+        assert_eq!(error, ErrorCode::PermissionDenied);
+        assert_eq!(error.http_status(), axum::http::StatusCode::FORBIDDEN);
     }
 }

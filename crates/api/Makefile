@@ -5,8 +5,22 @@
 # Test environment configuration
 DATABASE_URL := postgres://glancemind:testpassword@localhost:5434/glancemind_test
 API_BASE_URL := http://localhost:8081
+PAYMENT_NOTIFY_BASE_URL := http://host.docker.internal:8081
 API_PORT := 8081
 JWT_SECRET := e2e_test_jwt_secret_key_12345
+XUNHUPAY_APP_ID := mock-app-id
+XUNHUPAY_APP_SECRET := mock-xunhupay-secret
+XUNHUPAY_GATEWAY_URL := http://localhost:8500
+OPENAI_API_KEY := mock-openai-key
+OPENAI_BASE_URL := http://localhost:8100/v1
+LAOZHANG_API_KEY := mock-laozhang-key
+LAOZHANG_BASE_URL := http://localhost:8100
+TIKHUB_BASE_URL := http://localhost:8200
+JIMENG_ACCESS_KEY_ID := mock-jimeng-ak
+JIMENG_SECRET_ACCESS_KEY := mock-jimeng-sk
+JIMENG_BASE_URL := http://localhost:8300
+VIDU_API_KEY := mock-vidu-key
+VIDU_BASE_URL := http://localhost:8400
 TESTS_DIR := tests
 DOCKER_COMPOSE := docker compose -f $(TESTS_DIR)/docker-compose.e2e.yml
 API_PID_FILE := /tmp/glance_mind_api_e2e.pid
@@ -84,6 +98,20 @@ start-api:
 	@sleep 1
 	@DATABASE_URL="$(DATABASE_URL)" \
 		JWT_SECRET="$(JWT_SECRET)" \
+		API_BASE_URL="$(PAYMENT_NOTIFY_BASE_URL)" \
+		XUNHUPAY_APP_ID="$(XUNHUPAY_APP_ID)" \
+		XUNHUPAY_APP_SECRET="$(XUNHUPAY_APP_SECRET)" \
+		XUNHUPAY_GATEWAY_URL="$(XUNHUPAY_GATEWAY_URL)" \
+		OPENAI_API_KEY="$(OPENAI_API_KEY)" \
+		OPENAI_BASE_URL="$(OPENAI_BASE_URL)" \
+		LAOZHANG_API_KEY="$(LAOZHANG_API_KEY)" \
+		LAOZHANG_BASE_URL="$(LAOZHANG_BASE_URL)" \
+		TIKHUB_BASE_URL="$(TIKHUB_BASE_URL)" \
+		JIMENG_ACCESS_KEY_ID="$(JIMENG_ACCESS_KEY_ID)" \
+		JIMENG_SECRET_ACCESS_KEY="$(JIMENG_SECRET_ACCESS_KEY)" \
+		JIMENG_BASE_URL="$(JIMENG_BASE_URL)" \
+		VIDU_API_KEY="$(VIDU_API_KEY)" \
+		VIDU_BASE_URL="$(VIDU_BASE_URL)" \
 		PORT="$(API_PORT)" \
 		RUST_LOG=info \
 		nohup ../../target/release/glance_mind_api > /tmp/glance_mind_api.log 2>&1 & \
@@ -105,11 +133,17 @@ up: up-db-only wait-db start-api wait-api
 	@echo "✓ Test environment ready"
 	@echo "Database: localhost:5434"
 	@echo "API: localhost:$(API_PORT)"
+	@echo "LaoZhang mock: localhost:8100"
+	@echo "TikHub mock: localhost:8200"
+	@echo "Jimeng mock: localhost:8300"
+	@echo "Vidu mock: localhost:8400"
+	@echo "XunhuPay mock: localhost:8500"
 
 # Start database only (for local development)
 up-db-only:
-	@echo ">>> Starting test database..."
-	$(DOCKER_COMPOSE) up -d --build db
+	@echo ">>> Starting test database and mock services..."
+	$(DOCKER_COMPOSE) build db laozhang-mock tikhub-mock jimeng-mock vidu-mock xunhupay-mock
+	$(DOCKER_COMPOSE) up -d db laozhang-mock tikhub-mock jimeng-mock vidu-mock xunhupay-mock
 	@echo "Database: localhost:5434"
 
 # Wait for services to be ready
@@ -128,7 +162,7 @@ wait-db:
 wait-api:
 	@echo ">>> Waiting for API..."
 	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
-		if curl -sf http://localhost:$(API_PORT)/api/v1/health > /dev/null 2>&1; then \
+		if curl -sf http://localhost:$(API_PORT)/health > /dev/null 2>&1; then \
 			echo "✓ API ready"; \
 			exit 0; \
 		fi; \

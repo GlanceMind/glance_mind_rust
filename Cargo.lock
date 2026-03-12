@@ -1085,6 +1085,7 @@ dependencies = [
  "hmac",
  "hyper 0.14.32",
  "jsonwebtoken",
+ "md5",
  "mime",
  "mockall",
  "once_cell",
@@ -1775,6 +1776,12 @@ dependencies = [
  "quote",
  "syn 2.0.114",
 ]
+
+[[package]]
+name = "md5"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
 
 [[package]]
 name = "memchr"

@@ -190,11 +190,15 @@ impl LlmClient {
                                             let id = tc
                                                 .get("id")
                                                 .and_then(|i| i.as_str())
+                                                .map(str::trim)
+                                                .filter(|v| !v.is_empty())
                                                 .map(String::from);
                                             let name = tc
                                                 .get("function")
                                                 .and_then(|f| f.get("name"))
                                                 .and_then(|n| n.as_str())
+                                                .map(str::trim)
+                                                .filter(|v| !v.is_empty())
                                                 .map(String::from);
                                             let args = tc
                                                 .get("function")
@@ -252,16 +256,28 @@ impl LlmClient {
         indices.sort();
         let calls: Vec<ToolCall> = indices
             .into_iter()
-            .map(|i| {
+            .filter_map(|i| {
                 let ptc = &pending[&i];
-                ToolCall {
-                    id: ptc.id.clone(),
+                let tool_name = ptc.name.trim();
+                if tool_name.is_empty() {
+                    return None;
+                }
+                Some(ToolCall {
+                    id: if ptc.id.trim().is_empty() {
+                        format!("stream_tool_call_{}", i)
+                    } else {
+                        ptc.id.clone()
+                    },
                     call_type: "function".into(),
                     function: FunctionCall {
-                        name: ptc.name.clone(),
-                        arguments: ptc.arguments.clone(),
+                        name: tool_name.to_string(),
+                        arguments: if ptc.arguments.trim().is_empty() {
+                            "{}".into()
+                        } else {
+                            ptc.arguments.clone()
+                        },
                     },
-                }
+                })
             })
             .collect();
         if calls.is_empty() {
@@ -341,5 +357,70 @@ impl LlmClient {
         };
 
         Ok((msg, usage))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stub_client() -> LlmClient {
+        LlmClient {
+            client: Client::new(),
+            api_key: "test-key".into(),
+            base_url: "http://localhost".into(),
+            model: "test-model".into(),
+        }
+    }
+
+    #[test]
+    fn assemble_tool_calls_filters_blank_names() {
+        let client = stub_client();
+        let pending = HashMap::from([
+            (
+                0usize,
+                PartialToolCall {
+                    id: "call_valid".into(),
+                    name: "create_social_group".into(),
+                    arguments: "{\"group_name\":\"A\"}".into(),
+                },
+            ),
+            (
+                1usize,
+                PartialToolCall {
+                    id: "call_blank".into(),
+                    name: "   ".into(),
+                    arguments: "{}".into(),
+                },
+            ),
+        ]);
+
+        let calls = client
+            .assemble_tool_calls(&pending)
+            .expect("valid call should remain");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call_valid");
+        assert_eq!(calls[0].function.name, "create_social_group");
+    }
+
+    #[test]
+    fn assemble_tool_calls_defaults_missing_id_and_arguments() {
+        let client = stub_client();
+        let pending = HashMap::from([(
+            2usize,
+            PartialToolCall {
+                id: "".into(),
+                name: "create_plan_proposal".into(),
+                arguments: "   ".into(),
+            },
+        )]);
+
+        let calls = client
+            .assemble_tool_calls(&pending)
+            .expect("call should be assembled");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "stream_tool_call_2");
+        assert_eq!(calls[0].function.name, "create_plan_proposal");
+        assert_eq!(calls[0].function.arguments, "{}");
     }
 }

@@ -2,6 +2,7 @@ use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, PooledConnection};
 use diesel::PgConnection as DieselPgConnection;
 use diesel::SelectableHelper;
+use std::convert::TryFrom;
 
 use glance_mind_db::entity::video_case::{NewVideoCase, UpdateVideoCase, VideoCase};
 use glance_mind_db::schema::gm_data_video_cases;
@@ -14,29 +15,31 @@ impl VideoCaseRepository {
     /// Get video case by task_no (primary key)
     pub fn get_by_task_no(
         conn: &mut PgConnection,
-        task_no: &str,
+        task_no_param: &str,
     ) -> Result<VideoCase, diesel::result::Error> {
         gm_data_video_cases::table
-            .find(task_no)
+            .filter(gm_data_video_cases::task_no.eq(task_no_param))
             .select(VideoCase::as_select())
             .first(conn)
             .map_err(|e| {
-                tracing::error!("Failed to get video case task_no={}: {:?}", task_no, e);
+                tracing::error!("Failed to get video case task_no={}: {:?}", task_no_param, e);
                 e
             })
     }
 
-    /// Get video case by video_id
+    /// Get video case by row id.
     pub fn get_by_video_id(
         conn: &mut PgConnection,
-        video_id: i64,
+        video_id_param: i64,
     ) -> Result<VideoCase, diesel::result::Error> {
+        let case_id = i32::try_from(video_id_param).map_err(|_| diesel::result::Error::NotFound)?;
+
         gm_data_video_cases::table
-            .filter(gm_data_video_cases::video_id.eq(video_id))
+            .filter(gm_data_video_cases::id.eq(case_id))
             .select(VideoCase::as_select())
             .first(conn)
             .map_err(|e| {
-                tracing::error!("Failed to get video case video_id={}: {:?}", video_id, e);
+                tracing::error!("Failed to get video case id={}: {:?}", video_id_param, e);
                 e
             })
     }
@@ -55,7 +58,7 @@ impl VideoCaseRepository {
         let mut count_query = gm_data_video_cases::table.into_boxed();
 
         if let Some(s) = detail_status {
-            count_query = count_query.filter(gm_data_video_cases::detail_status.eq(s));
+            count_query = count_query.filter(gm_data_video_cases::status.eq(s));
         }
         if let Some(ref vs) = video_status {
             count_query = count_query.filter(gm_data_video_cases::video_status.eq(vs));
@@ -73,7 +76,7 @@ impl VideoCaseRepository {
         let mut data_query = gm_data_video_cases::table.into_boxed();
 
         if let Some(s) = detail_status {
-            data_query = data_query.filter(gm_data_video_cases::detail_status.eq(s));
+            data_query = data_query.filter(gm_data_video_cases::status.eq(s));
         }
         if let Some(vs) = video_status {
             data_query = data_query.filter(gm_data_video_cases::video_status.eq(vs));
@@ -86,7 +89,7 @@ impl VideoCaseRepository {
         }
 
         let cases = data_query
-            .order(gm_data_video_cases::create_time.desc().nulls_last())
+            .order(gm_data_video_cases::created_at.desc())
             .limit(page_size as i64)
             .offset(((page - 1) * page_size) as i64)
             .select(VideoCase::as_select())
@@ -117,25 +120,25 @@ impl VideoCaseRepository {
     /// Update a video case by task_no
     pub fn update(
         conn: &mut PgConnection,
-        task_no: &str,
+        task_no_param: &str,
         update: UpdateVideoCase,
     ) -> Result<VideoCase, diesel::result::Error> {
-        diesel::update(gm_data_video_cases::table.find(task_no))
+        diesel::update(gm_data_video_cases::table.filter(gm_data_video_cases::task_no.eq(task_no_param)))
             .set(&update)
             .returning(VideoCase::as_select())
             .get_result(conn)
             .map_err(|e| {
-                tracing::error!("Failed to update video case task_no={}: {:?}", task_no, e);
+                tracing::error!("Failed to update video case task_no={}: {:?}", task_no_param, e);
                 e
             })
     }
 
     /// Delete a video case by task_no
-    pub fn delete(conn: &mut PgConnection, task_no: &str) -> Result<usize, diesel::result::Error> {
-        diesel::delete(gm_data_video_cases::table.find(task_no))
+    pub fn delete(conn: &mut PgConnection, task_no_param: &str) -> Result<usize, diesel::result::Error> {
+        diesel::delete(gm_data_video_cases::table.filter(gm_data_video_cases::task_no.eq(task_no_param)))
             .execute(conn)
             .map_err(|e| {
-                tracing::error!("Failed to delete video case task_no={}: {:?}", task_no, e);
+                tracing::error!("Failed to delete video case task_no={}: {:?}", task_no_param, e);
                 e
             })
     }

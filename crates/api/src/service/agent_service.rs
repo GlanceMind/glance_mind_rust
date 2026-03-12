@@ -8,6 +8,7 @@ use crate::repository::agent_repository::AgentRepository;
 use crate::service::redis_service::RedisService;
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::PgConnection;
+use rand::seq::SliceRandom;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone)]
@@ -71,12 +72,12 @@ impl AgentService {
             )
             .map_err(|e| ApiError::InternalServerError(e.to_string()))?;
 
-        let original_total = page_response.total;
         let filtered = self.enforce_daily_limits(page_response.list);
+        let filtered_total = filtered.len() as i64;
 
         Ok(UnifiedCommentWithConfigDto::to_protocol_response(
             filtered,
-            original_total,
+            filtered_total,
             query.page,
             query.per_page,
         ))
@@ -181,9 +182,13 @@ impl AgentService {
                 }
             };
 
+            // Shuffle accounts so load is distributed fairly across them
+            let mut shuffled = accounts.clone();
+            shuffled.shuffle(&mut rand::rng());
+
             let mut assigned = false;
             let cmt_id_for_log = comment.comment_id.clone();
-            for (account_id, profile_name, daily_limit) in accounts {
+            for (account_id, profile_name, daily_limit) in &shuffled {
                 match redis.try_reserve(*account_id, &today, *daily_limit) {
                     Ok(true) => {
                         comment.profile_name = profile_name.clone();
@@ -571,7 +576,85 @@ mod tests {
     }
 
     // ========================================================================
-    // 8. test_campaign_without_group
+    // 8. test_daily_limit_zero_drops_all
+    // ========================================================================
+    #[test]
+    fn test_daily_limit_zero_drops_all() {
+        let svc = match get_test_redis() {
+            Some(s) => s,
+            None => {
+                eprintln!("Skipping test_daily_limit_zero_drops_all: Redis not available");
+                return;
+            }
+        };
+
+        let group_accounts: HashMap<i32, Vec<(i32, Option<String>, i32)>> =
+            [(8010, vec![(7050, Some("Zero Limit Account".to_string()), 0)])].into();
+        let campaign_to_group: HashMap<i32, i32> = [(700, 8010)].into();
+
+        let comments = vec![
+            mock_comment(1, "z1", Some(700)),
+            mock_comment(2, "z2", Some(700)),
+        ];
+
+        let result = AgentService::enforce_daily_limits_inner(
+            comments, &campaign_to_group, &group_accounts, Some(&svc),
+        );
+
+        assert_eq!(result.len(), 0, "Zero-limit accounts should reject all comments");
+    }
+
+    // ========================================================================
+    // 9. test_account_shuffle_distribution
+    // ========================================================================
+    #[test]
+    fn test_account_shuffle_distribution() {
+        let svc = match get_test_redis() {
+            Some(s) => s,
+            None => {
+                eprintln!("Skipping test_account_shuffle_distribution: Redis not available");
+                return;
+            }
+        };
+
+        let account_ids = [7060, 7061, 7062];
+        let group_accounts: HashMap<i32, Vec<(i32, Option<String>, i32)>> = [(
+            8020,
+            vec![
+                (7060, Some("A".to_string()), 200),
+                (7061, Some("B".to_string()), 200),
+                (7062, Some("C".to_string()), 200),
+            ],
+        )].into();
+        let campaign_to_group: HashMap<i32, i32> = [(800, 8020)].into();
+
+        flush_keys(&svc, &account_ids);
+
+        let mut assignment_count: HashMap<String, usize> = HashMap::new();
+        for i in 0..90 {
+            let comments = vec![mock_comment(i, &format!("shuffle_{}", i), Some(800))];
+            let result = AgentService::enforce_daily_limits_inner(
+                comments, &campaign_to_group, &group_accounts, Some(&svc),
+            );
+            if let Some(c) = result.first() {
+                *assignment_count.entry(c.profile_name.clone().unwrap_or_default()).or_insert(0) += 1;
+            }
+        }
+
+        // Each account should get roughly 30 out of 90 (±20 for randomness)
+        for profile in ["A", "B", "C"] {
+            let count = assignment_count.get(profile).copied().unwrap_or(0);
+            assert!(
+                count >= 10 && count <= 60,
+                "Profile '{}' got {} assignments (expected ~30 ± margin)", profile, count
+            );
+        }
+
+        flush_keys(&svc, &account_ids);
+    }
+
+    // ========================================================================
+    // 10. test_campaign_without_group
     // ========================================================================
     #[test]
     fn test_campaign_without_group() {

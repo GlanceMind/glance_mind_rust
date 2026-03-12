@@ -21,12 +21,23 @@ impl AiChatService {
         }
     }
 
-    pub fn create_conversation(&self, user_id: i32, title: Option<String>) -> Result<ConversationDto, ApiError> {
-        let conv = self.repo.create_conversation(user_id, &title.unwrap_or_else(|| "New Chat".into()))?;
+    pub fn create_conversation(
+        &self,
+        user_id: i32,
+        title: Option<String>,
+    ) -> Result<ConversationDto, ApiError> {
+        let conv = self
+            .repo
+            .create_conversation(user_id, &title.unwrap_or_else(|| "New Chat".into()))?;
         Ok(ConversationDto::from(conv))
     }
 
-    pub fn list_conversations(&self, user_id: i32, page: i32, page_size: i32) -> Result<PageResponse<ConversationDto>, ApiError> {
+    pub fn list_conversations(
+        &self,
+        user_id: i32,
+        page: i32,
+        page_size: i32,
+    ) -> Result<PageResponse<ConversationDto>, ApiError> {
         let (items, total) = self.repo.list_conversations(user_id, page, page_size)?;
         let total_pages = (total + page_size as i64 - 1) / page_size as i64;
         Ok(PageResponse {
@@ -45,7 +56,12 @@ impl AiChatService {
             .ok_or(ApiError::NotFound("Conversation not found".into()))
     }
 
-    pub fn update_conversation(&self, id: i32, user_id: i32, req: UpdateConversationRequest) -> Result<ConversationDto, ApiError> {
+    pub fn update_conversation(
+        &self,
+        id: i32,
+        user_id: i32,
+        req: UpdateConversationRequest,
+    ) -> Result<ConversationDto, ApiError> {
         let update = UpdateAiConversation {
             title: req.title,
             status: None,
@@ -63,10 +79,13 @@ impl AiChatService {
     }
 
     pub fn get_messages(&self, conv_id: i32, user_id: i32) -> Result<Vec<MessageDto>, ApiError> {
-        self.repo.get_conversation(conv_id, user_id)?
+        self.repo
+            .get_conversation(conv_id, user_id)?
             .ok_or(ApiError::NotFound("Conversation not found".into()))?;
 
-        let messages = self.repo.list_messages(conv_id, MAX_CONTEXT_MESSAGES as i64)?;
+        let messages = self
+            .repo
+            .list_messages(conv_id, MAX_CONTEXT_MESSAGES as i64)?;
         Ok(messages.into_iter().map(MessageDto::from).collect())
     }
 
@@ -89,13 +108,17 @@ impl AiChatService {
 
         // Pre-index: for each assistant message with tool_calls, find all required tool_call_ids
         // and map them to the indices of their corresponding tool result messages.
-        let mut assistant_tool_ids: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
-        let mut tool_result_index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut assistant_tool_ids: std::collections::HashMap<usize, Vec<String>> =
+            std::collections::HashMap::new();
+        let mut tool_result_index: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
 
         for (idx, msg) in history.iter().enumerate() {
             if msg.role == "assistant" {
                 if let Some(tc_json) = &msg.tool_calls {
-                    if let Ok(tcs) = serde_json::from_value::<Vec<llm_client::ToolCall>>(tc_json.clone()) {
+                    if let Ok(tcs) =
+                        serde_json::from_value::<Vec<llm_client::ToolCall>>(tc_json.clone())
+                    {
                         let ids: Vec<String> = tcs.iter().map(|tc| tc.id.clone()).collect();
                         assistant_tool_ids.insert(idx, ids);
                     }
@@ -122,7 +145,8 @@ impl AiChatService {
             // For assistant messages with tool_calls, include as a complete group or skip entirely.
             if msg.role == "assistant" && assistant_tool_ids.contains_key(&i) {
                 let tc_ids = &assistant_tool_ids[&i];
-                let tool_indices: Vec<usize> = tc_ids.iter()
+                let tool_indices: Vec<usize> = tc_ids
+                    .iter()
                     .filter_map(|id| tool_result_index.get(id).copied())
                     .collect();
 
@@ -138,7 +162,8 @@ impl AiChatService {
                     let tmsg = &history[tidx];
                     let content = if let Some(tc_id) = &tmsg.tool_call_id {
                         let tool_name = self.find_tool_name_for_call(history, tc_id);
-                        let result: Value = serde_json::from_str(&tmsg.content).unwrap_or(Value::Null);
+                        let result: Value =
+                            serde_json::from_str(&tmsg.content).unwrap_or(Value::Null);
                         compress_tool_result(&tool_name, &result)
                     } else {
                         tmsg.content.clone()
@@ -187,7 +212,11 @@ impl AiChatService {
                 }
             } else if msg.content.is_empty() {
                 let has_tc = msg.tool_calls.is_some();
-                if has_tc || msg.role == "assistant" { Some(String::new()) } else { None }
+                if has_tc || msg.role == "assistant" {
+                    Some(String::new())
+                } else {
+                    None
+                }
             } else {
                 Some(msg.content.clone())
             };
@@ -210,7 +239,9 @@ impl AiChatService {
     fn find_tool_name_for_call(&self, history: &[AiMessage], tool_call_id: &str) -> String {
         for msg in history.iter().rev() {
             if let Some(tc_json) = &msg.tool_calls {
-                if let Ok(tcs) = serde_json::from_value::<Vec<llm_client::ToolCall>>(tc_json.clone()) {
+                if let Ok(tcs) =
+                    serde_json::from_value::<Vec<llm_client::ToolCall>>(tc_json.clone())
+                {
                     for tc in &tcs {
                         if tc.id == tool_call_id {
                             return tc.function.name.clone();
@@ -239,23 +270,37 @@ impl AiChatService {
         }
 
         let model_key: Option<String> = if let Some(mid) = model_id {
-            let model = state.config_service.get_ai_model_by_id(mid).await
+            let model = state
+                .config_service
+                .get_ai_model_by_id(mid)
+                .await
                 .map_err(|e| ApiError::DatabaseError(e.to_string()))?
                 .ok_or_else(|| ApiError::BadRequest(format!("AI model id={} not found", mid)))?;
             if !model.is_active {
-                return Err(ApiError::BadRequest(format!("AI model '{}' is not active", model.name)));
+                return Err(ApiError::BadRequest(format!(
+                    "AI model '{}' is not active",
+                    model.name
+                )));
             }
             if model.model_type != "chat" {
-                return Err(ApiError::BadRequest(format!("AI model '{}' is not a chat model", model.name)));
+                return Err(ApiError::BadRequest(format!(
+                    "AI model '{}' is not a chat model",
+                    model.name
+                )));
             }
-            tracing::info!("AI Chat using model override: {} (id={})", model.model_key, mid);
+            tracing::info!(
+                "AI Chat using model override: {} (id={})",
+                model.model_key,
+                mid
+            );
             Some(model.model_key)
         } else {
             tracing::info!("AI Chat using default model (no override)");
             None
         };
 
-        self.repo.get_conversation(conv_id, user_id)?
+        self.repo
+            .get_conversation(conv_id, user_id)?
             .ok_or(ApiError::NotFound("Conversation not found".into()))?;
 
         let _user_msg = self.repo.create_message(&NewAiMessage {
@@ -267,12 +312,15 @@ impl AiChatService {
             plan_id: None,
         })?;
 
-        let history = self.repo.list_messages(conv_id, MAX_CONTEXT_MESSAGES as i64)?;
+        let history = self
+            .repo
+            .list_messages(conv_id, MAX_CONTEXT_MESSAGES as i64)?;
         let mut messages = self.build_context(&history);
 
         let tools = ToolRegistry::openai_tools();
         let mut tool_call_count = 0;
         let mut total_usage = llm_client::LlmUsage::default();
+        let mut empty_response_retry_count = 0usize;
 
         loop {
             let (stream_tx, mut stream_rx) = mpsc::channel::<llm_client::LlmStreamEvent>(64);
@@ -282,7 +330,13 @@ impl AiChatService {
             let model_override = model_key.clone();
 
             let stream_handle = tokio::spawn(async move {
-                llm.chat_stream(&msgs_clone, &tools_clone, stream_tx, model_override.as_deref()).await
+                llm.chat_stream(
+                    &msgs_clone,
+                    &tools_clone,
+                    stream_tx,
+                    model_override.as_deref(),
+                )
+                .await
             });
 
             let mut text_content = String::new();
@@ -305,7 +359,8 @@ impl AiChatService {
                 }
             }
 
-            let assembled_tool_calls = stream_handle.await
+            let assembled_tool_calls = stream_handle
+                .await
                 .map_err(|e| ApiError::AiServiceError(format!("Stream task failed: {}", e)))?
                 .map_err(|e| ApiError::AiServiceError(e))?;
 
@@ -324,15 +379,21 @@ impl AiChatService {
 
                     messages.push(llm_client::ChatMessage {
                         role: "assistant".into(),
-                        content: if text_content.is_empty() { Some(String::new()) } else { Some(text_content.clone()) },
+                        content: if text_content.is_empty() {
+                            Some(String::new())
+                        } else {
+                            Some(text_content.clone())
+                        },
                         tool_calls: Some(tool_calls.clone()),
                         tool_call_id: None,
                     });
 
                     // Execute tools - parallel for ReadOnly, sequential for mutations
-                    let (readonly_calls, mutation_calls): (Vec<_>, Vec<_>) = tool_calls.iter().partition(|tc| {
-                        ToolRegistry::get_safety_level(&tc.function.name) == SafetyLevel::ReadOnly
-                    });
+                    let (readonly_calls, mutation_calls): (Vec<_>, Vec<_>) =
+                        tool_calls.iter().partition(|tc| {
+                            ToolRegistry::get_safety_level(&tc.function.name)
+                                == SafetyLevel::ReadOnly
+                        });
 
                     // Parallel execution of ReadOnly tools
                     if !readonly_calls.is_empty() {
@@ -340,29 +401,44 @@ impl AiChatService {
                         for tc in &readonly_calls {
                             tool_call_count += 1;
                             if tool_call_count > MAX_TOOL_CALLS_PER_TURN {
-                                let _ = tx.send(SseEvent::Error {
-                                    message: "Too many tool calls in this turn".into(),
-                                }).await;
+                                let _ = tx
+                                    .send(SseEvent::Error {
+                                        message: "Too many tool calls in this turn".into(),
+                                    })
+                                    .await;
                                 break;
                             }
-                            let _ = tx.send(SseEvent::ToolCallStart {
-                                tool_call_id: tc.id.clone(),
-                                tool_name: tc.function.name.clone(),
-                            }).await;
+                            let _ = tx
+                                .send(SseEvent::ToolCallStart {
+                                    tool_call_id: tc.id.clone(),
+                                    tool_name: tc.function.name.clone(),
+                                })
+                                .await;
 
-                            let params: Value = serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                            let params: Value =
+                                serde_json::from_str(&tc.function.arguments).unwrap_or_default();
                             let name = tc.function.name.clone();
                             let tc_id = tc.id.clone();
                             let st = state.clone();
                             handles.push(tokio::spawn(async move {
-                                let result = ToolRegistry::execute(&name, params, user_id, &st).await;
+                                let result =
+                                    ToolRegistry::execute(&name, params, user_id, &st).await;
                                 (tc_id, name, result)
                             }));
                         }
                         let results = futures::future::join_all(handles).await;
                         for join_result in results {
                             if let Ok((tc_id, name, tool_result)) = join_result {
-                                self.process_tool_result(conv_id, user_id, &tc_id, &name, tool_result, &tx, &mut messages).await?;
+                                self.process_tool_result(
+                                    conv_id,
+                                    user_id,
+                                    &tc_id,
+                                    &name,
+                                    tool_result,
+                                    &tx,
+                                    &mut messages,
+                                )
+                                .await?;
                             }
                         }
                     }
@@ -371,19 +447,34 @@ impl AiChatService {
                     for tc in &mutation_calls {
                         tool_call_count += 1;
                         if tool_call_count > MAX_TOOL_CALLS_PER_TURN {
-                            let _ = tx.send(SseEvent::Error {
-                                message: "Too many tool calls in this turn".into(),
-                            }).await;
+                            let _ = tx
+                                .send(SseEvent::Error {
+                                    message: "Too many tool calls in this turn".into(),
+                                })
+                                .await;
                             break;
                         }
-                        let _ = tx.send(SseEvent::ToolCallStart {
-                            tool_call_id: tc.id.clone(),
-                            tool_name: tc.function.name.clone(),
-                        }).await;
+                        let _ = tx
+                            .send(SseEvent::ToolCallStart {
+                                tool_call_id: tc.id.clone(),
+                                tool_name: tc.function.name.clone(),
+                            })
+                            .await;
 
-                        let params: Value = serde_json::from_str(&tc.function.arguments).unwrap_or_default();
-                        let tool_result = ToolRegistry::execute(&tc.function.name, params, user_id, state).await;
-                        self.process_tool_result(conv_id, user_id, &tc.id, &tc.function.name, tool_result, &tx, &mut messages).await?;
+                        let params: Value =
+                            serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                        let tool_result =
+                            ToolRegistry::execute(&tc.function.name, params, user_id, state).await;
+                        self.process_tool_result(
+                            conv_id,
+                            user_id,
+                            &tc.id,
+                            &tc.function.name,
+                            tool_result,
+                            &tx,
+                            &mut messages,
+                        )
+                        .await?;
                     }
 
                     if tool_call_count > MAX_TOOL_CALLS_PER_TURN {
@@ -391,6 +482,28 @@ impl AiChatService {
                     }
                     continue;
                 }
+            }
+
+            if text_content.trim().is_empty() {
+                empty_response_retry_count += 1;
+                if empty_response_retry_count <= 2 {
+                    tracing::warn!(
+                        conv_id = conv_id,
+                        user_id = user_id,
+                        retry = empty_response_retry_count,
+                        "LLM returned empty response without valid tool calls, retrying"
+                    );
+                    continue;
+                }
+
+                let _ = tx
+                    .send(SseEvent::Error {
+                        message: "AI service returned an empty response".into(),
+                    })
+                    .await;
+                return Err(ApiError::AiServiceError(
+                    "LLM returned an empty response without text or valid tool calls".into(),
+                ));
             }
 
             // No tool calls - text was already streamed. Persist and finish.
@@ -415,10 +528,12 @@ impl AiChatService {
                 );
             }
 
-            let _ = tx.send(SseEvent::MessageEnd {
-                message_id: assistant_msg.id,
-                finish_reason: "stop".into(),
-            }).await;
+            let _ = tx
+                .send(SseEvent::MessageEnd {
+                    message_id: assistant_msg.id,
+                    finish_reason: "stop".into(),
+                })
+                .await;
 
             break;
         }
@@ -450,30 +565,41 @@ impl AiChatService {
             tool_name: tool_name.to_string(),
             safety_level: safety.as_str().to_string(),
             success,
-            error_message: if success { None } else { Some(result_value["error"].as_str().unwrap_or("").to_string()) },
+            error_message: if success {
+                None
+            } else {
+                Some(result_value["error"].as_str().unwrap_or("").to_string())
+            },
         });
 
-        let _ = tx.send(SseEvent::ToolCallResult {
-            tool_call_id: tc_id.to_string(),
-            result: result_value.clone(),
-            success,
-        }).await;
+        let _ = tx
+            .send(SseEvent::ToolCallResult {
+                tool_call_id: tc_id.to_string(),
+                result: result_value.clone(),
+                success,
+            })
+            .await;
 
         if tool_name == "create_plan_proposal" && success {
             if let Ok(proposal) = serde_json::from_value::<PlanProposal>(result_value.clone()) {
                 let plan = self.create_plan_from_proposal(conv_id, user_id, &proposal)?;
                 let steps = self.repo.get_plan_steps(plan.id)?;
-                let _ = tx.send(SseEvent::PlanCreated {
-                    plan_id: plan.id,
-                    title: proposal.title.clone(),
-                    steps: steps.iter().map(|s| PlanStepSse {
-                        step_id: s.id,
-                        step_order: s.step_order,
-                        tool_name: s.tool_name.clone(),
-                        description: s.description.clone(),
-                        tool_params: s.tool_params.clone(),
-                    }).collect(),
-                }).await;
+                let _ = tx
+                    .send(SseEvent::PlanCreated {
+                        plan_id: plan.id,
+                        title: proposal.title.clone(),
+                        steps: steps
+                            .iter()
+                            .map(|s| PlanStepSse {
+                                step_id: s.id,
+                                step_order: s.step_order,
+                                tool_name: s.tool_name.clone(),
+                                description: s.description.clone(),
+                                tool_params: s.tool_params.clone(),
+                            })
+                            .collect(),
+                    })
+                    .await;
             }
         }
 
@@ -500,7 +626,12 @@ impl AiChatService {
         Ok(())
     }
 
-    fn create_plan_from_proposal(&self, conv_id: i32, user_id: i32, proposal: &PlanProposal) -> Result<AiPlan, ApiError> {
+    fn create_plan_from_proposal(
+        &self,
+        conv_id: i32,
+        user_id: i32,
+        proposal: &PlanProposal,
+    ) -> Result<AiPlan, ApiError> {
         let plan = self.repo.create_plan(&NewAiPlan {
             conversation_id: conv_id,
             message_id: None,
@@ -510,23 +641,28 @@ impl AiChatService {
             status: "draft".into(),
         })?;
 
-        let steps: Vec<NewAiPlanStep> = proposal.steps.iter().enumerate().map(|(i, s)| {
-            NewAiPlanStep {
+        let steps: Vec<NewAiPlanStep> = proposal
+            .steps
+            .iter()
+            .enumerate()
+            .map(|(i, s)| NewAiPlanStep {
                 plan_id: plan.id,
                 step_order: i as i32 + 1,
                 tool_name: s.tool_name.clone(),
                 tool_params: s.tool_params.clone(),
                 description: s.description.clone(),
                 status: "pending".into(),
-            }
-        }).collect();
+            })
+            .collect();
 
         self.repo.create_plan_steps(&steps)?;
         Ok(plan)
     }
 
     pub fn get_plan(&self, plan_id: i32, user_id: i32) -> Result<PlanDetailDto, ApiError> {
-        let plan = self.repo.get_plan(plan_id, user_id)?
+        let plan = self
+            .repo
+            .get_plan(plan_id, user_id)?
             .ok_or(ApiError::NotFound("Plan not found".into()))?;
         let steps = self.repo.get_plan_steps(plan_id)?;
         Ok(PlanDetailDto::from_plan_and_steps(plan, steps))
@@ -539,109 +675,163 @@ impl AiChatService {
         state: &UserState,
         tx: mpsc::Sender<SseEvent>,
     ) -> Result<(), ApiError> {
-        let plan = self.repo.get_plan(plan_id, user_id)?
+        let plan = self
+            .repo
+            .get_plan(plan_id, user_id)?
             .ok_or(ApiError::NotFound("Plan not found".into()))?;
 
         if plan.status != "draft" {
-            return Err(ApiError::BadRequest(format!("Plan status is '{}', expected 'draft'", plan.status)));
+            return Err(ApiError::BadRequest(format!(
+                "Plan status is '{}', expected 'draft'",
+                plan.status
+            )));
         }
 
-        self.repo.update_plan(plan_id, user_id, &UpdateAiPlan {
-            status: Some("executing".into()),
-            ..Default::default()
-        })?;
+        self.repo.update_plan(
+            plan_id,
+            user_id,
+            &UpdateAiPlan {
+                status: Some("executing".into()),
+                ..Default::default()
+            },
+        )?;
 
         let steps = self.repo.get_plan_steps(plan_id)?;
         let mut all_success = true;
 
         for step in &steps {
-            let _ = tx.send(SseEvent::StepStart {
-                step_id: step.id,
-                step_order: step.step_order,
-                description: step.description.clone(),
-            }).await;
+            let _ = tx
+                .send(SseEvent::StepStart {
+                    step_id: step.id,
+                    step_order: step.step_order,
+                    description: step.description.clone(),
+                })
+                .await;
 
-            self.repo.update_plan_step(step.id, &UpdateAiPlanStep {
-                status: Some("executing".into()),
-                ..Default::default()
-            })?;
+            self.repo.update_plan_step(
+                step.id,
+                &UpdateAiPlanStep {
+                    status: Some("executing".into()),
+                    ..Default::default()
+                },
+            )?;
 
-            let result = ToolRegistry::execute(&step.tool_name, step.tool_params.clone(), user_id, state).await;
+            let result =
+                ToolRegistry::execute(&step.tool_name, step.tool_params.clone(), user_id, state)
+                    .await;
 
             let _ = self.repo.log_tool_call(&NewAiToolAuditLog {
                 user_id,
                 conversation_id: Some(plan.conversation_id),
                 tool_name: step.tool_name.clone(),
-                safety_level: ToolRegistry::get_safety_level(&step.tool_name).as_str().to_string(),
+                safety_level: ToolRegistry::get_safety_level(&step.tool_name)
+                    .as_str()
+                    .to_string(),
                 success: result.is_ok(),
                 error_message: result.as_ref().err().map(|e| e.to_string()),
             });
 
             match result {
                 Ok(val) => {
-                    self.repo.update_plan_step(step.id, &UpdateAiPlanStep {
-                        status: Some("completed".into()),
-                        result: Some(val.clone()),
-                        ..Default::default()
-                    })?;
-                    let _ = tx.send(SseEvent::StepCompleted {
-                        step_id: step.id,
-                        result: val,
-                    }).await;
+                    self.repo.update_plan_step(
+                        step.id,
+                        &UpdateAiPlanStep {
+                            status: Some("completed".into()),
+                            result: Some(val.clone()),
+                            ..Default::default()
+                        },
+                    )?;
+                    let _ = tx
+                        .send(SseEvent::StepCompleted {
+                            step_id: step.id,
+                            result: val,
+                        })
+                        .await;
                 }
                 Err(e) => {
                     all_success = false;
-                    self.repo.update_plan_step(step.id, &UpdateAiPlanStep {
-                        status: Some("failed".into()),
-                        error_message: Some(Some(e.to_string())),
-                        ..Default::default()
-                    })?;
-                    let _ = tx.send(SseEvent::StepFailed {
-                        step_id: step.id,
-                        error: e.to_string(),
-                    }).await;
+                    self.repo.update_plan_step(
+                        step.id,
+                        &UpdateAiPlanStep {
+                            status: Some("failed".into()),
+                            error_message: Some(Some(e.to_string())),
+                            ..Default::default()
+                        },
+                    )?;
+                    let _ = tx
+                        .send(SseEvent::StepFailed {
+                            step_id: step.id,
+                            error: e.to_string(),
+                        })
+                        .await;
                     break;
                 }
             }
         }
 
         let final_status = if all_success { "completed" } else { "failed" };
-        self.repo.update_plan(plan_id, user_id, &UpdateAiPlan {
-            status: Some(final_status.into()),
-            ..Default::default()
-        })?;
-
-        let _ = tx.send(SseEvent::PlanCompleted {
+        self.repo.update_plan(
             plan_id,
-            summary: if all_success { "所有步骤执行成功".into() } else { "部分步骤执行失败".into() },
-        }).await;
+            user_id,
+            &UpdateAiPlan {
+                status: Some(final_status.into()),
+                ..Default::default()
+            },
+        )?;
+
+        let _ = tx
+            .send(SseEvent::PlanCompleted {
+                plan_id,
+                summary: if all_success {
+                    "所有步骤执行成功".into()
+                } else {
+                    "部分步骤执行失败".into()
+                },
+            })
+            .await;
 
         Ok(())
     }
 
     pub fn cancel_plan(&self, plan_id: i32, user_id: i32) -> Result<PlanDetailDto, ApiError> {
-        let plan = self.repo.get_plan(plan_id, user_id)?
+        let plan = self
+            .repo
+            .get_plan(plan_id, user_id)?
             .ok_or(ApiError::NotFound("Plan not found".into()))?;
 
         if plan.status != "draft" {
             return Err(ApiError::BadRequest("Can only cancel draft plans".into()));
         }
 
-        let plan = self.repo.update_plan(plan_id, user_id, &UpdateAiPlan {
-            status: Some("cancelled".into()),
-            ..Default::default()
-        })?;
+        let plan = self.repo.update_plan(
+            plan_id,
+            user_id,
+            &UpdateAiPlan {
+                status: Some("cancelled".into()),
+                ..Default::default()
+            },
+        )?;
 
         let steps = self.repo.get_plan_steps(plan_id)?;
         Ok(PlanDetailDto::from_plan_and_steps(plan, steps))
     }
 
-    pub fn update_plan_step(&self, plan_id: i32, step_id: i32, user_id: i32, req: UpdatePlanStepRequest) -> Result<PlanStepDto, ApiError> {
-        let plan = self.repo.get_plan(plan_id, user_id)?
+    pub fn update_plan_step(
+        &self,
+        plan_id: i32,
+        step_id: i32,
+        user_id: i32,
+        req: UpdatePlanStepRequest,
+    ) -> Result<PlanStepDto, ApiError> {
+        let plan = self
+            .repo
+            .get_plan(plan_id, user_id)?
             .ok_or(ApiError::NotFound("Plan not found".into()))?;
 
         if plan.status != "draft" {
-            return Err(ApiError::BadRequest("Can only modify draft plan steps".into()));
+            return Err(ApiError::BadRequest(
+                "Can only modify draft plan steps".into(),
+            ));
         }
 
         let update = UpdateAiPlanStep {
@@ -652,7 +842,9 @@ impl AiChatService {
 
         let step = self.repo.update_plan_step(step_id, &update)?;
         if step.plan_id != plan_id {
-            return Err(ApiError::NotFound("Step does not belong to this plan".into()));
+            return Err(ApiError::NotFound(
+                "Step does not belong to this plan".into(),
+            ));
         }
 
         Ok(PlanStepDto::from(step))

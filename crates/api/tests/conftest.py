@@ -71,7 +71,33 @@ class APIClient:
         return self.session.get(f"{self.base_url}{path}", **kwargs)
     
     def post(self, path: str, **kwargs) -> requests.Response:
-        return self.session.post(f"{self.base_url}{path}", **kwargs)
+        url = f"{self.base_url}{path}"
+
+        # The video generate endpoint uses Axum's multipart extractor, so
+        # text-only form submissions also need to be encoded as multipart.
+        if path == "/api/v1/video/generate" and "json" not in kwargs and "data" in kwargs:
+            data = kwargs.pop("data") or {}
+            raw_files = kwargs.pop("files", None) or {}
+
+            headers = kwargs.get("headers")
+            if headers:
+                headers = dict(headers)
+                headers.pop("Content-Type", None)
+                kwargs["headers"] = headers
+
+            if isinstance(data, dict) and isinstance(raw_files, dict):
+                files = dict(raw_files)
+                for key, value in data.items():
+                    if value is None:
+                        continue
+                    files[key] = (None, str(value))
+                return self.session.post(url, files=files, **kwargs)
+
+            kwargs["data"] = data
+            if raw_files:
+                kwargs["files"] = raw_files
+
+        return self.session.post(url, **kwargs)
     
     def put(self, path: str, **kwargs) -> requests.Response:
         return self.session.put(f"{self.base_url}{path}", **kwargs)
@@ -137,6 +163,11 @@ def login_user(email: str, password: str) -> str:
     if "data" in data and isinstance(data["data"], dict):
         return data["data"].get("token")
     return data.get("token")
+
+
+def login_test_user() -> str:
+    """Backward-compatible helper used by older API E2E tests."""
+    return get_or_create_test_token()
 
 
 @pytest.fixture

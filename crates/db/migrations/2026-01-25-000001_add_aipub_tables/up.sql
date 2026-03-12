@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS public.gm_aipub_plans (
     
     -- 内容配置
     content_type VARCHAR(20) NOT NULL,       -- post/video/reel/story
+    plan_type VARCHAR(20) DEFAULT 'batch_text' NOT NULL, -- batch_text/single_video
     
     -- AI 配置 (直接存储，不使用独立模板表)
     ai_task_types TEXT[],                    -- 需要的 AI 任务类型: ['video_gen', 'content_gen']
@@ -35,6 +36,7 @@ CREATE TABLE IF NOT EXISTS public.gm_aipub_plans (
     updated_at TIMESTAMPTZ,
     
     CONSTRAINT aipub_plans_valid_content_type CHECK (content_type IN ('post', 'video', 'reel', 'story')),
+    CONSTRAINT aipub_plans_valid_plan_type CHECK (plan_type IN ('batch_text', 'single_video')),
     CONSTRAINT aipub_plans_valid_status CHECK (status IN ('pending', 'ai_processing', 'ready', 'completed', 'failed')),
     CONSTRAINT aipub_plans_valid_target CHECK (
         (group_id IS NOT NULL AND social_account_id IS NULL) OR
@@ -75,6 +77,7 @@ CREATE TABLE IF NOT EXISTS public.gm_aipub_ai_tasks (
     progress INTEGER DEFAULT 0,             -- 进度 0-100
     error_message TEXT,
     retry_count INTEGER DEFAULT 0,
+    sequence INTEGER DEFAULT 0 NOT NULL,    -- 任务执行顺序（0=第一个）
     
     -- 时间戳
     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
@@ -103,6 +106,7 @@ CREATE TABLE IF NOT EXISTS public.gm_aipub_tasks (
     id SERIAL PRIMARY KEY,
     plan_id INTEGER NOT NULL REFERENCES gm_aipub_plans(id) ON DELETE CASCADE,
     social_account_id INTEGER NOT NULL REFERENCES gm_social_accounts(id),
+    ai_task_id INTEGER REFERENCES gm_aipub_ai_tasks(id),
     
     -- 最终内容 (从 AI 结果或 Plan 复制, JSONB 支持灵活格式)
     content JSONB NOT NULL,
@@ -126,6 +130,7 @@ CREATE TABLE IF NOT EXISTS public.gm_aipub_tasks (
 -- 索引
 CREATE INDEX idx_aipub_tasks_plan ON gm_aipub_tasks(plan_id);
 CREATE INDEX idx_aipub_tasks_account ON gm_aipub_tasks(social_account_id);
+CREATE INDEX idx_aipub_tasks_ai_task ON gm_aipub_tasks(ai_task_id);
 CREATE INDEX idx_aipub_tasks_status ON gm_aipub_tasks(status);
 CREATE INDEX idx_aipub_tasks_ready ON gm_aipub_tasks(status) WHERE status = 'ready';
 CREATE INDEX idx_aipub_tasks_video_pending ON gm_aipub_tasks(status) WHERE status = 'video_pending';
