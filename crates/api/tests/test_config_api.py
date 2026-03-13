@@ -174,7 +174,14 @@ class TestPricingAPI:
         rules = extract_data(resp.json())
         action_types = set(r["action_type"] for r in rules)
         
-        required_actions = ["SCAN_POST", "AI_ANALYZE"]
+        required_actions = [
+            "SCAN_POST",
+            "AI_ANALYZE",
+            "REPLY_COMMENT",
+            "POST_REPLY",
+            "IMAGE",
+            "VIDEO_GENERATE",
+        ]
         for action in required_actions:
             assert action in action_types, f"Action type '{action}' should be present"
 

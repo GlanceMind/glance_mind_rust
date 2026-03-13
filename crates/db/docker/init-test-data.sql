@@ -55,33 +55,40 @@ SELECT setval('regions_id_seq', (SELECT MAX(id) FROM gm_regions));
 -- ============================================================================
 INSERT INTO gm_pricing_rules (platform_id, action_type, cost_points) VALUES
 -- Reddit pricing
-(1, 'SCAN_POST', 0.50),
+(1, 'SCAN_POST', 2.00),
 (1, 'AI_ANALYZE', 1.00),
-(1, 'REPLY_COMMENT', 2.00),
+(1, 'REPLY_COMMENT', 0.00),
+(1, 'POST_REPLY', 0.00),
 -- TikTok pricing
-(2, 'SCAN_POST', 0.50),
+(2, 'SCAN_POST', 2.00),
 (2, 'AI_ANALYZE', 1.00),
-(2, 'REPLY_COMMENT', 2.00),
+(2, 'REPLY_COMMENT', 0.00),
+(2, 'POST_REPLY', 0.00),
 -- Facebook pricing
-(3, 'SCAN_POST', 0.50),
+(3, 'SCAN_POST', 2.00),
 (3, 'AI_ANALYZE', 1.00),
-(3, 'REPLY_COMMENT', 2.00),
+(3, 'REPLY_COMMENT', 0.00),
+(3, 'POST_REPLY', 0.00),
 -- Instagram pricing
-(4, 'SCAN_POST', 0.50),
+(4, 'SCAN_POST', 2.00),
 (4, 'AI_ANALYZE', 1.00),
-(4, 'REPLY_COMMENT', 2.00),
+(4, 'REPLY_COMMENT', 0.00),
+(4, 'POST_REPLY', 0.00),
 -- Twitter pricing
-(5, 'SCAN_POST', 0.50),
+(5, 'SCAN_POST', 2.00),
 (5, 'AI_ANALYZE', 1.00),
-(5, 'REPLY_COMMENT', 2.00)
+(5, 'REPLY_COMMENT', 0.00),
+(5, 'POST_REPLY', 0.00)
 ON CONFLICT (action_type, platform_id) DO UPDATE SET
     cost_points = EXCLUDED.cost_points;
 
 -- Global pricing (platform_id IS NULL) for billing system
 INSERT INTO gm_pricing_rules (platform_id, action_type, cost_points) VALUES
 (NULL, 'AI_ANALYZE', 1.00),
-(NULL, 'IMAGE', 5.00),
-(NULL, 'VIDEO_GENERATE', 200.00)
+(NULL, 'IMAGE', 10.00),
+(NULL, 'VIDEO_GENERATE', 400.00),
+(NULL, 'REPLY_COMMENT', 0.00),
+(NULL, 'POST_REPLY', 0.00)
 ON CONFLICT (action_type) WHERE platform_id IS NULL DO UPDATE SET
     cost_points = EXCLUDED.cost_points;
 
@@ -100,17 +107,17 @@ INSERT INTO gm_ai_models (id, name, provider, model_key, model_type, cost_multip
 (5, 'Sora 2', 'openai', 'sora2', 'video', 1.0, true),
 (6, 'Jimeng 3.0 720P', 'jimeng', 'jimeng-video-3.0-720p', 'video', 2.0, true),
 (7, 'Jimeng 3.0 1080P', 'jimeng', 'jimeng-video-3.0-1080p', 'video', 3.0, true),
-(8, 'Jimeng 3.0 Pro', 'jimeng', 'jimeng-video-3.0-pro', 'video', 5.0, true),
-(9, 'Veo-2', 'google', 'veo-2', 'video', 5.0, true),
+(8, 'Jimeng 3.0 Pro', 'jimeng', 'jimeng-video-3.0-pro', 'video', 4.0, true),
+(9, 'Veo-2', 'google', 'veo-2', 'video', 1.0, true),
 (10, 'Vidu 文生视频',   'vidu', 'vidu-t2v',        'video', 1.5, true),
 (11, 'Vidu 图生视频',   'vidu', 'vidu-i2v',        'video', 2.0, true),
-(12, 'Vidu 参考生视频', 'vidu', 'vidu-ref2v',      'video', 3.0, true),
-(13, 'Vidu 首尾帧',     'vidu', 'vidu-startend',   'video', 2.5, true),
-(14, 'Vidu 智能多帧',   'vidu', 'vidu-multiframe', 'video', 4.0, true),
+(12, 'Vidu 参考生视频', 'vidu', 'vidu-ref2v',      'video', 2.5, true),
+(13, 'Vidu 首尾帧',     'vidu', 'vidu-startend',   'video', 2.0, true),
+(14, 'Vidu 智能多帧',   'vidu', 'vidu-multiframe', 'video', 3.0, true),
 (15, 'Vidu 快速生成',   'vidu', 'vidu-fast',       'video', 1.0, true),
-(16, 'Vidu 模板视频',   'vidu', 'vidu-template',   'video', 3.0, true),
-(17, 'Vidu 通用成片',   'vidu', 'vidu-general-film','video', 5.0, true),
-(18, 'Vidu 电商成片',   'vidu', 'vidu-ad-film',     'video', 6.0, true)
+(16, 'Vidu 模板视频',   'vidu', 'vidu-template',   'video', 2.5, true),
+(17, 'Vidu 通用成片',   'vidu', 'vidu-general-film','video', 3.0, true),
+(18, 'Vidu 电商成片',   'vidu', 'vidu-ad-film',     'video', 3.75, true)
 ON CONFLICT (id) DO UPDATE SET
     name = EXCLUDED.name,
     provider = EXCLUDED.provider,

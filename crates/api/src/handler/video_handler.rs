@@ -8,6 +8,7 @@ use crate::dto::video_dto::{
     CreateVideoRequest, CreateVideoResponse, VideoOrientation, VideoTaskListResponse,
 };
 use crate::error::{api_error::ApiError, business_error::BusinessError};
+use crate::middleware::charging::ActionType;
 use crate::response::api_result::ApiResult;
 use crate::state::user_state::UserState;
 use glance_mind_db::entity::user::User;
@@ -183,6 +184,13 @@ pub async fn create_video(
         .validate_params()
         .map_err(|e| ApiError::BusinessError(BusinessError::ValidationFailed(e)))?;
 
+    // Charge video generation using the parsed multipart model id so billing
+    // always matches the actual model selected by the request body.
+    let charging_context = state
+        .charging_manager
+        .prepare_charging(user.id, ActionType::VideoGenerate, request.ai_model_id, None)
+        .await?;
+
     // Call service to process
     let result = state
         .video_service
@@ -199,6 +207,11 @@ pub async fn create_video(
             reference_images,
             keyframe_prompts,
         )
+        .await?;
+
+    state
+        .charging_manager
+        .execute_charging(user.id, &charging_context, None)
         .await?;
 
     Ok(ApiResult::ok(result))

@@ -1,6 +1,4 @@
-use super::extractor::{
-    AiAnalyzeExtractor, ChargingParamExtractor, ScanPostExtractor, VideoGenerateExtractor,
-};
+use super::extractor::{AiAnalyzeExtractor, ChargingParamExtractor, ScanPostExtractor};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,9 +11,6 @@ pub static ROUTE_CHARGING_MAP: Lazy<HashMap<&'static str, Arc<dyn ChargingParamE
 
         // AI_ANALYZE charging mode (fixed fee, no extra headers needed)
         map.insert("/api/v1/ai/generate", Arc::new(AiAnalyzeExtractor));
-
-        // VIDEO_GENERATE charging mode (X-AI-Model-ID optional; defaults to base multiplier)
-        map.insert("/api/v1/video/generate", Arc::new(VideoGenerateExtractor));
 
         // SCAN_POST charging mode (requires X-PLATFORM-ID)
         map.insert("/api/v1/scan/post", Arc::new(ScanPostExtractor));

@@ -19,6 +19,11 @@ except ImportError:
 
 TEST_USER_ID = 999
 PLATFORM_TIKTOK = 2
+AI_ANALYZE_POINTS = Decimal('1.00')
+IMAGE_POINTS = Decimal('10.00')
+VIDEO_GENERATE_POINTS = Decimal('400.00')
+ACCOUNT_GROOMING_FROZEN = AI_ANALYZE_POINTS + (IMAGE_POINTS * 3)
+SINGLE_VIDEO_FROZEN = AI_ANALYZE_POINTS + VIDEO_GENERATE_POINTS
 
 
 # =============================================================================
@@ -158,15 +163,15 @@ class TestFreezeBudget:
         user_id = setup_billing_test(db_cursor, balance=500)
         plan_id = create_test_plan(db_cursor, user_id, 'account_grooming')
 
-        # AI_ANALYZE=1.00, IMAGE=5.00, no model multiplier (default 1.0)
+        # AI_ANALYZE=1.00, IMAGE=10.00, no model multiplier (default 1.0)
         db_cursor.execute(
             "SELECT fn_freeze_budget(%s, 1, 3, 0, NULL, NULL, NULL, 'aipub_plan', %s)",
             (user_id, plan_id))
         frozen = list(db_cursor.fetchone().values())[0]
         db_cursor.connection.commit()
 
-        # 1×1.00 + 3×5.00 = 16.00
-        assert frozen > 0, f"Expected 16.00, got {frozen}"
+        # 1×1.00 + 3×10.00 = 31.00
+        assert frozen == ACCOUNT_GROOMING_FROZEN, f"Expected {ACCOUNT_GROOMING_FROZEN}, got {frozen}"
 
         wallet = get_wallet(db_cursor, user_id)
         assert wallet['balance_points'] < Decimal('500.00')
@@ -180,11 +185,11 @@ class TestFreezeBudget:
 
         txns = get_transactions(db_cursor, user_id, txn_type='FREEZE')
         assert len(txns) == 1
-        assert txns[0]['amount'] == Decimal('-16.00')
+        assert txns[0]['amount'] == -ACCOUNT_GROOMING_FROZEN
         assert txns[0]['reference_id'] == plan_id
 
         cleanup_plan(db_cursor, plan_id)
-        print("  OK: freeze_grooming chat=1, image=3 → frozen=16.00")
+        print(f"  OK: freeze_grooming chat=1, image=3 → frozen={ACCOUNT_GROOMING_FROZEN}")
 
     def test_freeze_batch_text(self, db_cursor):
         """batch_text: chat=4 → frozen = 4×AI_ANALYZE."""
@@ -248,16 +253,16 @@ class TestFreezeBudget:
         frozen = cur.fetchone()['val']
         db_connection.commit()
 
-        assert frozen > 0, f"Expected positive frozen, got {frozen}"
+        assert frozen == SINGLE_VIDEO_FROZEN, f"Expected {SINGLE_VIDEO_FROZEN}, got {frozen}"
 
         # Cleanup
         cur.execute("DELETE FROM gm_aipub_plans WHERE id = %s", (plan_id,))
         db_connection.commit()
         cur.close()
-        print(f"  OK: freeze_single_video chat=1, video=1 → frozen={frozen}")
+        print(f"  OK: freeze_single_video chat=1, video=1 → frozen={SINGLE_VIDEO_FROZEN}")
 
     def test_freeze_insufficient_balance(self, db_cursor):
-        """Balance=5, need=16 → exception, wallet unchanged."""
+        """Balance=5, need=31 → exception, wallet unchanged."""
         user_id = setup_billing_test(db_cursor, balance=5)
         plan_id = create_test_plan(db_cursor, user_id, 'account_grooming')
 
@@ -319,7 +324,7 @@ class TestConsumeFromFrozen:
         db_cursor.connection.commit()
 
     def test_consume_single_image(self, db_cursor):
-        """Consume 1×IMAGE → consumed_cost += 5, frozen -= 5."""
+        """Consume 1×IMAGE → consumed_cost += 10, frozen -= 10."""
         user_id = setup_billing_test(db_cursor, balance=500)
         plan_id = create_test_plan(db_cursor, user_id)
         self._freeze_plan(db_cursor, user_id, plan_id)
@@ -340,10 +345,10 @@ class TestConsumeFromFrozen:
 
         txns = get_transactions(db_cursor, user_id, txn_type='SETTLE')
         assert len(txns) >= 1
-        assert txns[0]['amount'] == Decimal('-5.00')
+        assert txns[0]['amount'] == -IMAGE_POINTS
 
         cleanup_plan(db_cursor, plan_id)
-        print("  OK: consume_single_image → consumed=5, frozen=11")
+        print("  OK: consume_single_image → consumed=10, frozen=21")
 
     def test_consume_incremental(self, db_cursor):
         """3 consecutive consumes → consumed_cost increments, 3 SETTLE transactions."""
@@ -358,24 +363,24 @@ class TestConsumeFromFrozen:
             db_cursor.connection.commit()
 
         plan = get_plan(db_cursor, plan_id)
-        assert plan['consumed_cost'] == Decimal('15.00')  # 3×5
+        assert plan['consumed_cost'] == (IMAGE_POINTS * 3)
 
         wallet = get_wallet(db_cursor, user_id)
-        assert wallet['frozen_points'] >= 0  # 16 - 15
+        assert wallet['frozen_points'] >= Decimal('0.00')
 
         txns = get_transactions(db_cursor, user_id, txn_type='SETTLE')
         assert len(txns) >= 3
 
         cleanup_plan(db_cursor, plan_id)
-        print("  OK: consume_incremental 3× → consumed=15, frozen=1")
+        print("  OK: consume_incremental 3× → consumed=30, frozen=1")
 
     def test_consume_exceeds_remaining(self, db_cursor):
         """Consume more than remaining → capped at frozen_cost."""
         user_id = setup_billing_test(db_cursor, balance=500)
         plan_id = create_test_plan(db_cursor, user_id)
-        self._freeze_plan(db_cursor, user_id, plan_id)  # frozen=16
+        self._freeze_plan(db_cursor, user_id, plan_id)  # frozen=31
 
-        # Consume 4×IMAGE = 20 > 16 → should cap at remaining
+        # Consume 4×IMAGE = 40 > 31 → should cap at remaining
         db_cursor.execute(
             "SELECT fn_consume_from_frozen(%s, 'IMAGE', NULL, 4, 'aipub_plan', %s)",
             (user_id, plan_id))
@@ -428,6 +433,36 @@ class TestConsumeFromFrozen:
         cleanup_plan(db_cursor, plan_id)
         print("  OK: consume_chat_ai_analyze → consumed=1.00")
 
+    def test_consume_zero_cost_reply_actions(self, db_cursor):
+        """Zero-cost reply actions should leave consumed/frozen totals unchanged."""
+        user_id = setup_billing_test(db_cursor, balance=500)
+        plan_id = create_test_plan(db_cursor, user_id)
+        self._freeze_plan(db_cursor, user_id, plan_id)
+
+        plan_before = get_plan(db_cursor, plan_id)
+        wallet_before = get_wallet(db_cursor, user_id)
+
+        for action in ('REPLY_COMMENT', 'POST_REPLY'):
+            db_cursor.execute(
+                "SELECT fn_consume_from_frozen(%s, %s, NULL, 1, 'aipub_plan', %s)",
+                (user_id, action, plan_id))
+            consumed = list(db_cursor.fetchone().values())[0]
+            db_cursor.connection.commit()
+            assert consumed == Decimal('0.00'), f"{action} should not increase consumed cost"
+
+        plan_after = get_plan(db_cursor, plan_id)
+        wallet_after = get_wallet(db_cursor, user_id)
+
+        assert plan_before['consumed_cost'] == plan_after['consumed_cost']
+        assert plan_before['frozen_cost'] == plan_after['frozen_cost']
+        assert wallet_before == wallet_after
+
+        settle_txns = get_transactions(db_cursor, user_id, txn_type='SETTLE')
+        assert len(settle_txns) == 0
+
+        cleanup_plan(db_cursor, plan_id)
+        print("  OK: consume_zero_cost_reply_actions → no wallet impact")
+
 
 # =============================================================================
 # TestFinalizePlan
@@ -451,7 +486,7 @@ class TestFinalizePlan:
         plan = get_plan(db_cursor, plan_id)
         frozen = plan['frozen_cost']
 
-        # Consume all: 1×AI_ANALYZE + 3×IMAGE = 16
+        # Consume all: 1×AI_ANALYZE + 3×IMAGE = 31
         db_cursor.execute(
             "SELECT fn_consume_from_frozen(%s, 'AI_ANALYZE', NULL, 1, 'aipub_plan', %s)",
             (user_id, plan_id))
@@ -497,14 +532,14 @@ class TestFinalizePlan:
 
         refund_txns = get_transactions(db_cursor, user_id, txn_type='REFUND')
         assert len(refund_txns) == 1
-        assert refund_txns[0]['amount'] == Decimal('15.00')  # 16 - 1
+        assert refund_txns[0]['amount'] == (ACCOUNT_GROOMING_FROZEN - AI_ANALYZE_POINTS)
 
         wallet = get_wallet(db_cursor, user_id)
         assert wallet['frozen_points'] == Decimal('0')
-        assert wallet['balance_points'] < Decimal('500.00')  # 500 - 16 + 15
+        assert wallet['balance_points'] == Decimal('469.00')
 
         cleanup_plan(db_cursor, plan_id)
-        print("  OK: finalize_partial → refund=15.00")
+        print("  OK: finalize_partial → refund=30.00")
 
     def test_finalize_zero_consumed(self, db_cursor):
         """consumed=0 → full refund."""
@@ -520,14 +555,14 @@ class TestFinalizePlan:
 
         refund_txns = get_transactions(db_cursor, user_id, txn_type='REFUND')
         assert len(refund_txns) == 1
-        assert refund_txns[0]['amount'] == Decimal('16.00')
+        assert refund_txns[0]['amount'] == ACCOUNT_GROOMING_FROZEN
 
         wallet = get_wallet(db_cursor, user_id)
         assert wallet['balance_points'] >= Decimal('499.00')  # Fully restored
         assert wallet['frozen_points'] == Decimal('0')
 
         cleanup_plan(db_cursor, plan_id)
-        print("  OK: finalize_zero_consumed → full refund=16.00")
+        print(f"  OK: finalize_zero_consumed → full refund={ACCOUNT_GROOMING_FROZEN}")
 
     def test_finalize_idempotent(self, db_cursor):
         """Call finalize twice → second is no-op."""

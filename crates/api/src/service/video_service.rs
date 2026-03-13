@@ -166,7 +166,8 @@ impl VideoService {
             request.prompt.as_ref().map(|p| p.len()).unwrap_or(0)
         );
 
-        // Note: Fee calculation and deduction already handled by charging_middleware
+        // Note: Fee calculation and deduction are handled by the video handler
+        // after it parses the multipart ai_model_id field.
 
         // Route to Vidu if model is vidu-*
         if is_vidu_model(&model_key) {

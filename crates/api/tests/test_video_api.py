@@ -203,6 +203,18 @@ class TestVideoModelDiscovery:
             assert model["model_type"] == "video"
             assert model["is_active"] is True
 
+    def test_video_model_multipliers_match_pricing_schedule(self, video_client):
+        """Representative video models expose the refreshed multiplier table."""
+        resp = video_client.get(f"{CONFIG_AI_MODELS_URL}?model_type=video")
+        assert_response_success(resp)
+
+        data = extract_data(resp.json())
+        models_by_key = {model["model_key"]: model for model in data}
+
+        assert float(models_by_key["veo-2"]["cost_multiplier"]) == 1.0
+        assert float(models_by_key["vidu-multiframe"]["cost_multiplier"]) == 3.0
+        assert float(models_by_key["vidu-ad-film"]["cost_multiplier"]) == 3.75
+
 
 # ============================================================================
 # Test Class: LaoZhang Text-to-Video
@@ -259,6 +271,7 @@ class TestLaoZhangTextToVideo:
         data = extract_data(resp.json())
         assert data["task_id"] is not None
         assert data["status"] in ("pending", "submitted")
+        assert float(data["cost_points"]) == 400.0
 
     def test_text_to_video_portrait(self, video_client):
         """Portrait mode: 720x1280."""

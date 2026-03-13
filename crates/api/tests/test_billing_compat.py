@@ -12,6 +12,11 @@ import pytest
 from decimal import Decimal
 
 TEST_USER_ID = 999
+IMAGE_POINTS = Decimal('10.00')
+VIDEO_GENERATE_POINTS = Decimal('400.00')
+SOCIAL_SCAN_POINTS = Decimal('2.00')
+SOCIAL_ANALYZE_POINTS = Decimal('1.00')
+ZERO_POINTS = Decimal('0.00')
 
 
 # =============================================================================
@@ -49,8 +54,58 @@ class TestMigrationSafety:
         """)
         row = db_cursor.fetchone()
         assert row is not None, "IMAGE pricing rule should exist"
-        assert row['cost_points'] == Decimal('5.00')
-        print("  OK: IMAGE pricing rule = 5.00")
+        assert row['cost_points'] == IMAGE_POINTS
+        print(f"  OK: IMAGE pricing rule = {IMAGE_POINTS}")
+
+    def test_global_video_pricing_rule_exists(self, db_cursor):
+        """VIDEO_GENERATE global rule matches the refreshed schedule."""
+        db_cursor.execute("""
+            SELECT action_type, cost_points FROM gm_pricing_rules
+            WHERE action_type = 'VIDEO_GENERATE' AND platform_id IS NULL
+        """)
+        row = db_cursor.fetchone()
+        assert row is not None, "VIDEO_GENERATE pricing rule should exist"
+        assert row['cost_points'] == VIDEO_GENERATE_POINTS
+        print(f"  OK: VIDEO_GENERATE pricing rule = {VIDEO_GENERATE_POINTS}")
+
+    def test_platform_social_pricing_rules_exist(self, db_cursor):
+        """Each configured platform exposes the 2+1+0+0 social pricing bundle."""
+        db_cursor.execute("""
+            SELECT platform_id, action_type, cost_points
+            FROM gm_pricing_rules
+            WHERE platform_id IS NOT NULL
+              AND action_type IN ('SCAN_POST', 'AI_ANALYZE', 'REPLY_COMMENT', 'POST_REPLY')
+            ORDER BY platform_id, action_type
+        """)
+        rows = db_cursor.fetchall()
+        assert rows, "Expected platform-scoped social pricing rules"
+
+        rules_by_platform = {}
+        for row in rows:
+            rules_by_platform.setdefault(row['platform_id'], {})[row['action_type']] = row['cost_points']
+
+        for platform_id, rules in rules_by_platform.items():
+            assert rules['SCAN_POST'] == SOCIAL_SCAN_POINTS, f"platform {platform_id} scan price mismatch"
+            assert rules['AI_ANALYZE'] == SOCIAL_ANALYZE_POINTS, f"platform {platform_id} analyze price mismatch"
+            assert rules['REPLY_COMMENT'] == ZERO_POINTS, f"platform {platform_id} reply price mismatch"
+            assert rules['POST_REPLY'] == ZERO_POINTS, f"platform {platform_id} post-reply price mismatch"
+        print(f"  OK: {len(rules_by_platform)} platforms use the 2+1+0+0 pricing bundle")
+
+    def test_video_model_multipliers_refreshed(self, db_cursor):
+        """Representative video models use the new pricing multipliers."""
+        db_cursor.execute("""
+            SELECT model_key, cost_multiplier
+            FROM gm_ai_models
+            WHERE model_key IN ('veo-2', 'vidu-multiframe', 'vidu-ad-film')
+            ORDER BY model_key
+        """)
+        rows = db_cursor.fetchall()
+        multipliers = {row['model_key']: row['cost_multiplier'] for row in rows}
+
+        assert multipliers['veo-2'] == Decimal('1.00')
+        assert multipliers['vidu-multiframe'] == Decimal('3.00')
+        assert multipliers['vidu-ad-film'] == Decimal('3.75')
+        print("  OK: representative video model multipliers refreshed")
 
     def test_stored_procedures_exist(self, db_cursor):
         """All 3 stored procedures are callable."""
@@ -104,7 +159,13 @@ class TestBackwardCompatibility:
         group_row = db_cursor.fetchone()
         group_id = group_row['id'] if group_row else None
         if group_id is None:
-            pytest.skip("No groups in DB")
+            db_cursor.execute("""
+                INSERT INTO gm_social_groups (user_id, platform_id, group_name, created_at)
+                VALUES (%s, 2, 'compat_test_group', NOW())
+                RETURNING id
+            """, (user_id,))
+            group_id = db_cursor.fetchone()['id']
+            db_cursor.connection.commit()
 
         # Create plan with billing_status=none (simulate old plan)
         db_cursor.execute("""
@@ -156,8 +217,7 @@ class TestBackwardCompatibility:
             """, (func,))
             row = db_cursor.fetchone()
             exists = row['exists_flag']
-            if not exists:
-                pytest.skip(f"{func} not found (may not be deployed)")
+            assert exists, f"{func} not found"
         print("  OK: campaign stored procedures still exist")
 
     def test_wallet_constraints_intact(self, db_cursor):
@@ -186,3 +246,58 @@ class TestBackwardCompatibility:
         row = db_cursor.fetchone()
         # Old transactions with NULL reference_type are expected
         print(f"  OK: {row['cnt']} old transactions with reference_type=NULL (expected)")
+
+
+# =============================================================================
+# TestScanPostCharging
+# =============================================================================
+
+class TestScanPostCharging:
+    """Verify /api/v1/scan/post charges SCAN_POST=2 through ChargingManager."""
+
+    def test_scan_post_missing_platform_header(self, auth_client):
+        """POST /scan/post without X-PLATFORM-ID should fail (400 or 422)."""
+        resp = auth_client.post("/api/v1/scan/post", json={"video_url": "https://example.com/v1"})
+        assert resp.status_code in (400, 422), \
+            f"Missing X-PLATFORM-ID should fail, got {resp.status_code}"
+        print(f"  OK: scan/post without platform header → {resp.status_code}")
+
+    def test_scan_post_charges_2_points(self, auth_client, db_cursor):
+        """POST /scan/post with valid platform charges exactly SCAN_POST=2 via ChargingManager."""
+        db_cursor.execute(
+            "SELECT balance_points FROM gm_user_wallets WHERE user_id = %s",
+            (TEST_USER_ID,))
+        row = db_cursor.fetchone()
+        if row is None:
+            pytest.fail("Test user wallet not found")
+        balance_before = row['balance_points']
+
+        if balance_before < Decimal('2.00'):
+            db_cursor.execute(
+                "UPDATE gm_user_wallets SET balance_points = 1000 WHERE user_id = %s",
+                (TEST_USER_ID,))
+            db_cursor.connection.commit()
+            balance_before = Decimal('1000.00')
+
+        db_cursor.execute("SELECT id FROM gm_platforms WHERE is_active = true LIMIT 1")
+        platform_row = db_cursor.fetchone()
+        if platform_row is None:
+            pytest.fail("No active platform in DB")
+        platform_id = platform_row['id']
+
+        resp = auth_client.post(
+            "/api/v1/scan/post",
+            json={"url": "https://www.tiktok.com/@test/video/12345"},
+            headers={"X-PLATFORM-ID": str(platform_id)},
+        )
+        assert resp.status_code == 200, f"scan/post should succeed, got {resp.status_code}: {resp.text}"
+
+        db_cursor.execute(
+            "SELECT balance_points FROM gm_user_wallets WHERE user_id = %s",
+            (TEST_USER_ID,))
+        balance_after = db_cursor.fetchone()['balance_points']
+
+        deducted = balance_before - balance_after
+        assert deducted == SOCIAL_SCAN_POINTS, \
+            f"SCAN_POST should deduct {SOCIAL_SCAN_POINTS} points, got {deducted}"
+        print(f"  OK: scan/post charged {deducted} points (balance: {balance_before} → {balance_after})")

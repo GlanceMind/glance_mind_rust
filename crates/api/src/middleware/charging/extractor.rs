@@ -31,32 +31,6 @@ impl ChargingParamExtractor for AiAnalyzeExtractor {
     }
 }
 
-// Video generate extractor
-// Query pricing rules by action_type, then calculate multiplier with ai_model_id.
-// X-AI-Model-ID is optional for backward compatibility because the video handler
-// still supports requests that omit ai_model_id and fall back to the default model.
-pub struct VideoGenerateExtractor;
-
-#[async_trait]
-impl ChargingParamExtractor for VideoGenerateExtractor {
-    async fn extract(&self, req: &Request<Body>) -> Option<ChargingParams> {
-        let ai_model_id = match req.headers().get("X-AI-Model-ID") {
-            Some(value) => {
-                let value = value.to_str().ok()?;
-                Some(value.parse().ok()?)
-            }
-            None => None,
-        };
-
-        // video_generate queries first record by action_type, then calculates multiplier with ai_model_id
-        Some(ChargingParams {
-            action_type: ActionType::VideoGenerate,
-            ai_model_id,
-            platform_id: None,
-        })
-    }
-}
-
 // Scan post extractor
 // Query pricing rules by action_type + platform_id
 // Required parameter: X-PLATFORM-ID
@@ -82,51 +56,64 @@ impl ChargingParamExtractor for ScanPostExtractor {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChargingParamExtractor, VideoGenerateExtractor};
+    use super::{AiAnalyzeExtractor, ChargingParamExtractor, ScanPostExtractor};
     use axum::body::Body;
     use axum::http::Request;
 
     #[tokio::test]
-    async fn video_generate_allows_missing_model_header() {
+    async fn ai_analyze_extracts_without_headers() {
         let req = Request::builder()
-            .uri("/api/v1/video/generate")
+            .uri("/api/v1/ai/generate")
             .body(Body::empty())
             .expect("request");
 
-        let params = VideoGenerateExtractor
+        let params = AiAnalyzeExtractor
             .extract(&req)
             .await
-            .expect("extractor should allow missing header");
+            .expect("AI analyze should always succeed");
 
         assert_eq!(params.ai_model_id, None);
+        assert_eq!(params.platform_id, None);
+        assert_eq!(params.action_type.as_str(), "AI_ANALYZE");
     }
 
     #[tokio::test]
-    async fn video_generate_extracts_valid_model_header() {
+    async fn scan_post_extracts_valid_platform_header() {
         let req = Request::builder()
-            .uri("/api/v1/video/generate")
-            .header("X-AI-Model-ID", "9")
+            .uri("/api/v1/scan/post")
+            .header("X-PLATFORM-ID", "2")
             .body(Body::empty())
             .expect("request");
 
-        let params = VideoGenerateExtractor
+        let params = ScanPostExtractor
             .extract(&req)
             .await
-            .expect("extractor should parse valid header");
+            .expect("scan post should parse valid header");
 
-        assert_eq!(params.ai_model_id, Some(9));
+        assert_eq!(params.platform_id, Some(2));
+        assert_eq!(params.action_type.as_str(), "SCAN_POST");
     }
 
     #[tokio::test]
-    async fn video_generate_rejects_invalid_model_header() {
+    async fn scan_post_fails_without_platform_header() {
         let req = Request::builder()
-            .uri("/api/v1/video/generate")
-            .header("X-AI-Model-ID", "not-a-number")
+            .uri("/api/v1/scan/post")
             .body(Body::empty())
             .expect("request");
 
-        let params = VideoGenerateExtractor.extract(&req).await;
+        let params = ScanPostExtractor.extract(&req).await;
+        assert!(params.is_none(), "missing header should fail extraction");
+    }
 
+    #[tokio::test]
+    async fn scan_post_fails_with_invalid_platform_header() {
+        let req = Request::builder()
+            .uri("/api/v1/scan/post")
+            .header("X-PLATFORM-ID", "not-a-number")
+            .body(Body::empty())
+            .expect("request");
+
+        let params = ScanPostExtractor.extract(&req).await;
         assert!(params.is_none(), "invalid header should fail extraction");
     }
 }

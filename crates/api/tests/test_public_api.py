@@ -9,11 +9,17 @@ Test Coverage:
 3. Public config endpoints
 """
 
+from decimal import Decimal
+
 import pytest
 from conftest import (
     assert_response_success,
     extract_data,
 )
+
+
+def _decimal_value(value) -> Decimal:
+    return Decimal(str(value))
 
 
 class TestDeviceComments:
@@ -173,6 +179,48 @@ class TestPublicConfigEndpoints:
         """Test that pricing endpoint is public."""
         resp = api_client.get("/api/v1/config/pricing")
         assert_response_success(resp)
+        data = extract_data(resp.json())
+        assert isinstance(data, list) and len(data) > 0
+
+    def test_pricing_contains_points_first_schedule(self, api_client):
+        """Pricing payload exposes the refreshed platform and global rules."""
+        resp = api_client.get("/api/v1/config/pricing")
+        assert_response_success(resp)
+
+        data = extract_data(resp.json())
+        assert isinstance(data, list) and data
+
+        def find_rule(action_type, platform_id):
+            for rule in data:
+                if rule["action_type"] == action_type and rule["platform_id"] == platform_id:
+                    return rule
+            return None
+
+        scan_rule = next(
+            (rule for rule in data if rule["action_type"] == "SCAN_POST" and rule["platform_id"] is not None),
+            None,
+        )
+        assert scan_rule is not None, "Expected a platform-scoped SCAN_POST rule"
+        platform_id = scan_rule["platform_id"]
+
+        assert _decimal_value(scan_rule["cost_points"]) == Decimal("2.00")
+        assert _decimal_value(find_rule("AI_ANALYZE", platform_id)["cost_points"]) == Decimal("1.00")
+        assert _decimal_value(find_rule("REPLY_COMMENT", platform_id)["cost_points"]) == Decimal("0.00")
+        assert _decimal_value(find_rule("POST_REPLY", platform_id)["cost_points"]) == Decimal("0.00")
+        assert _decimal_value(find_rule("IMAGE", None)["cost_points"]) == Decimal("10.00")
+        assert _decimal_value(find_rule("VIDEO_GENERATE", None)["cost_points"]) == Decimal("400.00")
+
+    def test_video_models_expose_refreshed_multipliers(self, api_client):
+        """Public video model discovery matches the new multiplier table."""
+        resp = api_client.get("/api/v1/config/ai-models?model_type=video")
+        assert_response_success(resp)
+
+        data = extract_data(resp.json())
+        models_by_key = {model["model_key"]: model for model in data}
+
+        assert _decimal_value(models_by_key["veo-2"]["cost_multiplier"]) == Decimal("1.00")
+        assert _decimal_value(models_by_key["vidu-multiframe"]["cost_multiplier"]) == Decimal("3.00")
+        assert _decimal_value(models_by_key["vidu-ad-film"]["cost_multiplier"]) == Decimal("3.75")
 
 
 class TestHealthEndpoint:
