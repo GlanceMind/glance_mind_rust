@@ -324,9 +324,12 @@ impl AiChatService {
             if ui_capabilities.questionnaire {
                 directives.push_str(
                     "\n\n当前客户端支持结构化问卷：\n\
-                    - 当用户要创建 AI 视频且缺少参数时，优先调用 create_questionnaire_proposal，不要只输出 Q1/Q2/Q3 文本。\n\
+                    - 当用户要创建 AI 视频或创建 AI 发布计划且缺少参数时，必须调用 create_questionnaire_proposal，绝对不要输出 Q1/Q2/Q3 文本。\n\
+                    - AI 视频使用 create_questionnaire_proposal(intent=generate_video)。\n\
+                    - 发布计划使用 create_questionnaire_proposal(intent=create_publish_plan)，从用户输入中提取已知的 platform_id、content_type、group_id、content_prompt 作为参数传入。\n\
                     - create_questionnaire_proposal 返回后，正文只需用 1 句话提示用户在下方完成选择。\n\
-                    - 当用户提交 questionnaire_submission 后，不要再次追问已填写字段，直接使用这些结构化参数调用 create_plan_proposal，为 generate_video 生成待确认计划。\n",
+                    - 当用户提交 questionnaire_submission 后，不要再次追问已填写字段，直接使用这些结构化参数调用 create_plan_proposal 生成待确认计划。\n\
+                    - 严禁使用 Q1/Q2/Q3 + A/B/C 文本格式，必须使用 create_questionnaire_proposal 工具。\n",
                 );
             } else {
                 directives.push_str(
