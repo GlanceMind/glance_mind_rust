@@ -259,6 +259,8 @@ impl AiChatService {
         user_id: i32,
         content: &str,
         model_id: Option<i32>,
+        ui_capabilities: AiChatUiCapabilities,
+        questionnaire_submission: Option<QuestionnaireSubmission>,
         state: &UserState,
         tx: mpsc::Sender<SseEvent>,
     ) -> Result<(), ApiError> {
@@ -316,6 +318,44 @@ impl AiChatService {
             .repo
             .list_messages(conv_id, MAX_CONTEXT_MESSAGES as i64)?;
         let mut messages = self.build_context(&history);
+
+        if let Some(system_message) = messages.first_mut() {
+            let mut directives = String::new();
+            if ui_capabilities.questionnaire {
+                directives.push_str(
+                    "\n\n当前客户端支持结构化问卷：\n\
+                    - 当用户要创建 AI 视频且缺少参数时，优先调用 create_questionnaire_proposal，不要只输出 Q1/Q2/Q3 文本。\n\
+                    - create_questionnaire_proposal 返回后，正文只需用 1 句话提示用户在下方完成选择。\n\
+                    - 当用户提交 questionnaire_submission 后，不要再次追问已填写字段，直接使用这些结构化参数调用 create_plan_proposal，为 generate_video 生成待确认计划。\n",
+                );
+            } else {
+                directives.push_str(
+                    "\n\n当前客户端不支持结构化问卷：\n\
+                    - 不要调用 create_questionnaire_proposal。\n\
+                    - 继续使用 Q1/Q2/Q3 + A/B/C 的文本方式收集缺失参数。\n",
+                );
+            }
+
+            if questionnaire_submission.is_some() {
+                directives.push_str(
+                    "\n用户本轮消息包含 questionnaire_submission，结构化字段值比展示文本更可靠，必须以结构化字段为准。\n",
+                );
+            }
+
+            if let Some(existing) = &mut system_message.content {
+                existing.push_str(&directives);
+            } else {
+                system_message.content = Some(directives);
+            }
+        }
+
+        if let Some(submission) = &questionnaire_submission {
+            let normalized = ToolRegistry::normalize_questionnaire_submission(submission, state).await?;
+            if let Some(latest_user_message) = messages.iter_mut().rev().find(|msg| msg.role == "user")
+            {
+                latest_user_message.content = Some(normalized);
+            }
+        }
 
         let tools = ToolRegistry::openai_tools();
         let mut tool_call_count = 0;
@@ -572,13 +612,27 @@ impl AiChatService {
             },
         });
 
+        let display_hint = match tool_name {
+            "create_questionnaire_proposal" => Some("hidden".to_string()),
+            _ => None,
+        };
+
         let _ = tx
             .send(SseEvent::ToolCallResult {
                 tool_call_id: tc_id.to_string(),
                 result: result_value.clone(),
                 success,
+                display_hint: display_hint.clone(),
             })
             .await;
+
+        if tool_name == "create_questionnaire_proposal" && success {
+            if let Ok(questionnaire) = serde_json::from_value::<QuestionnairePayload>(result_value.clone()) {
+                let _ = tx
+                    .send(SseEvent::Questionnaire { questionnaire })
+                    .await;
+            }
+        }
 
         if tool_name == "create_plan_proposal" && success {
             if let Ok(proposal) = serde_json::from_value::<PlanProposal>(result_value.clone()) {

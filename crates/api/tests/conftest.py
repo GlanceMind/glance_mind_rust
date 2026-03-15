@@ -21,15 +21,20 @@ DATABASE_URL = os.getenv(
     "postgres://glancemind:testpassword@localhost:5434/glancemind_test"
 )
 
-# Test user credentials matching init-test-data.sql
-# Password: TestPassword123!
-TEST_USER_EMAIL = "e2e@glancemind.test"
-TEST_USER_PASSWORD = "TestPassword123!"
-TEST_USER_ID = 999
+# Test user credentials matching init-test-data.sql by default.
+# These can be overridden so API E2E tests can run against an already-running
+# local environment without requiring the legacy seed user.
+TEST_USER_IDENTIFIER = os.getenv(
+    "E2E_TEST_IDENTIFIER",
+    os.getenv("E2E_TEST_EMAIL", "e2e@glancemind.test"),
+)
+TEST_USER_EMAIL = os.getenv("E2E_TEST_EMAIL", "e2e@glancemind.test")
+TEST_USER_PASSWORD = os.getenv("E2E_TEST_PASSWORD", "TestPassword123!")
+TEST_USER_ID = int(os.getenv("E2E_TEST_USER_ID", "999"))
 
-TEST_ADMIN_EMAIL = "e2e@glancemind.test"
-TEST_ADMIN_PASSWORD = "TestPassword123!"
-TEST_ADMIN_ID = 999
+TEST_ADMIN_EMAIL = os.getenv("E2E_TEST_ADMIN_EMAIL", TEST_USER_EMAIL)
+TEST_ADMIN_PASSWORD = os.getenv("E2E_TEST_ADMIN_PASSWORD", TEST_USER_PASSWORD)
+TEST_ADMIN_ID = int(os.getenv("E2E_TEST_ADMIN_ID", str(TEST_USER_ID)))
 
 
 # =============================================================================
@@ -180,6 +185,37 @@ def api_client():
 _cached_token = None
 
 
+def resolve_test_user_id(db_connection) -> int:
+    """Resolve the authenticated test user's database id."""
+    if TEST_USER_ID and os.getenv("E2E_TEST_USER_ID"):
+        return TEST_USER_ID
+
+    cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+    candidates = []
+    if TEST_USER_EMAIL:
+        candidates.append(("SELECT id FROM gm_users WHERE email = %s", (TEST_USER_EMAIL,)))
+    if TEST_USER_IDENTIFIER and TEST_USER_IDENTIFIER != TEST_USER_EMAIL:
+        candidates.append(
+            (
+                "SELECT id FROM gm_users WHERE email = %s OR username = %s",
+                (TEST_USER_IDENTIFIER, TEST_USER_IDENTIFIER),
+            )
+        )
+
+    try:
+        for sql, params in candidates:
+            cursor.execute(sql, params)
+            row = cursor.fetchone()
+            if row:
+                return int(row["id"])
+    finally:
+        cursor.close()
+
+    raise LookupError(
+        f"Could not resolve test user id for identifier={TEST_USER_IDENTIFIER!r}, email={TEST_USER_EMAIL!r}"
+    )
+
+
 def get_or_create_test_token() -> str:
     """Get cached token or create a new test user.
     
@@ -196,12 +232,12 @@ def get_or_create_test_token() -> str:
     login_resp = requests.post(
         f"{API_BASE_URL}/api/v1/auth/login",
         json={
-            "identifier": TEST_USER_EMAIL,
+            "identifier": TEST_USER_IDENTIFIER,
             "password": TEST_USER_PASSWORD
         }
     )
     
-    print(f"\nLogin response for {TEST_USER_EMAIL}: {login_resp.status_code}")
+    print(f"\nLogin response for {TEST_USER_IDENTIFIER}: {login_resp.status_code}")
     
     if login_resp.status_code == 200:
         login_data = login_resp.json()
@@ -260,10 +296,11 @@ def auth_client(db_connection):
     """
     try:
         token = get_or_create_test_token()
+        user_id = resolve_test_user_id(db_connection)
         cursor = db_connection.cursor()
         cursor.execute(
             "UPDATE gm_users SET permissions = 15 WHERE id = %s",
-            (TEST_USER_ID,),
+            (user_id,),
         )
         db_connection.commit()
         cursor.close()
@@ -301,6 +338,20 @@ def assert_json_structure(data: dict, required_fields: list):
 # =============================================================================
 # Test Data Constants
 # =============================================================================
+
+# =============================================================================
+# Auto-skip @requires_llm when mock LLM is unreliable
+# =============================================================================
+
+def pytest_collection_modifyitems(config, items):
+    """Skip tests marked with @requires_llm unless RUN_LLM_TESTS=1 is set."""
+    if os.getenv("RUN_LLM_TESTS", "0") == "1":
+        return
+    skip_llm = pytest.mark.skip(reason="requires_llm: set RUN_LLM_TESTS=1 to enable")
+    for item in items:
+        if "requires_llm" in item.keywords:
+            item.add_marker(skip_llm)
+
 
 # Platform IDs (from init-test-data.sql)
 PLATFORM_REDDIT = 1

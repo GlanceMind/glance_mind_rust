@@ -89,9 +89,23 @@ pub async fn send_message(
     let user_id = user.id;
     let content = req.content.clone();
     let model_id = req.model_id;
+    let ui_capabilities = req.ui_capabilities.clone().unwrap_or_default();
+    let questionnaire_submission = req.questionnaire_submission.clone();
 
     tokio::spawn(async move {
-        if let Err(e) = service.send_message(conv_id, user_id, &content, model_id, &state, tx.clone()).await {
+        if let Err(e) = service
+            .send_message(
+                conv_id,
+                user_id,
+                &content,
+                model_id,
+                ui_capabilities,
+                questionnaire_submission,
+                &state,
+                tx.clone(),
+            )
+            .await
+        {
             let _ = tx.send(SseEvent::Error { message: e.to_string() }).await;
         }
     });
@@ -156,6 +170,7 @@ fn event_name(event: &SseEvent) -> &'static str {
         SseEvent::TextDelta { .. } => "text_delta",
         SseEvent::ToolCallStart { .. } => "tool_call_start",
         SseEvent::ToolCallResult { .. } => "tool_call_result",
+        SseEvent::Questionnaire { .. } => "questionnaire",
         SseEvent::PlanCreated { .. } => "plan_created",
         SseEvent::MessageEnd { .. } => "message_end",
         SseEvent::StepStart { .. } => "step_start",

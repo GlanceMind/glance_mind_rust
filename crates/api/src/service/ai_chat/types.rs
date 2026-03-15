@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,6 +67,7 @@ pub struct ToolCallResult {
     pub name: String,
     pub result: Value,
     pub success: bool,
+    pub display_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +82,75 @@ pub struct PlanProposal {
     pub title: String,
     pub description: String,
     pub steps: Vec<PlanStep>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestionnaireControl {
+    Choice,
+    Combobox,
+    Input,
+    Textarea,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuestionnaireOption {
+    pub value: String,
+    pub label: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuestionnaireField {
+    pub key: String,
+    pub label: String,
+    pub control: QuestionnaireControl,
+    pub required: bool,
+    pub options: Vec<QuestionnaireOption>,
+    pub placeholder: Option<String>,
+    pub helper_text: Option<String>,
+    pub default_value: Option<Value>,
+    pub max_length: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuestionnaireAutoFilled {
+    pub key: String,
+    pub label: String,
+    pub value: Value,
+    pub display: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuestionnairePayload {
+    pub questionnaire_id: String,
+    pub intent: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub submit_label: String,
+    pub fields: Vec<QuestionnaireField>,
+    pub auto_filled: Vec<QuestionnaireAutoFilled>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuestionnaireSubmission {
+    pub questionnaire_id: Option<String>,
+    pub intent: String,
+    #[serde(default)]
+    pub answers: BTreeMap<String, Value>,
+    #[serde(default)]
+    pub auto_filled: BTreeMap<String, Value>,
+    pub display_message: Option<String>,
+}
+
+impl QuestionnaireSubmission {
+    pub fn merged_values(&self) -> BTreeMap<String, Value> {
+        let mut merged = self.auto_filled.clone();
+        for (key, value) in &self.answers {
+            merged.insert(key.clone(), value.clone());
+        }
+        merged
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,6 +170,11 @@ pub enum SseEvent {
         tool_call_id: String,
         result: Value,
         success: bool,
+        display_hint: Option<String>,
+    },
+    #[serde(rename = "questionnaire")]
+    Questionnaire {
+        questionnaire: QuestionnairePayload,
     },
     #[serde(rename = "plan_created")]
     PlanCreated {
@@ -161,9 +237,19 @@ impl SseEvent {
                 tool_call_id,
                 result,
                 success,
+                display_hint,
             } => (
                 "tool_call_result",
-                serde_json::json!({ "tool_call_id": tool_call_id, "result": result, "success": success }),
+                serde_json::json!({
+                    "tool_call_id": tool_call_id,
+                    "result": result,
+                    "success": success,
+                    "display_hint": display_hint,
+                }),
+            ),
+            Self::Questionnaire { questionnaire } => (
+                "questionnaire",
+                serde_json::json!(questionnaire),
             ),
             Self::PlanCreated {
                 plan_id,
@@ -248,6 +334,14 @@ pub fn compress_tool_result(tool_name: &str, result: &Value) -> String {
             } else {
                 serde_json::to_string(result).unwrap_or_default()
             }
+        }
+        "create_questionnaire_proposal" => {
+            let intent = result["intent"].as_str().unwrap_or("unknown");
+            let field_count = result["fields"]
+                .as_array()
+                .map(|fields| fields.len())
+                .unwrap_or(0);
+            format!("questionnaire(intent=\"{}\",fields={})", intent, field_count)
         }
         "list_platforms" => {
             if let Some(arr) = result.as_array().or(list) {
@@ -446,9 +540,17 @@ pub const SYSTEM_PROMPT: &str = r#"你是 GlanceMind AI 助手，帮助用户管
 当用户表达创建意图时：
 1. 从用户输入中提取已知参数（如平台、预算、产品描述等）
 2. 一次性并行调用所有需要的查询工具（list_platforms、list_regions、list_social_groups、list_ai_models）
-3. 将所有缺失参数组织成编号问题 + 字母选项的格式，一次性呈现
+3. 如果当前客户端支持结构化问卷，优先调用 create_questionnaire_proposal 返回可渲染的字段定义；只有旧客户端才使用纯文本 Q1/Q2/Q3
 4. 已从输入提取的参数和有合理默认值的参数，在底部"已自动填充"区域展示
-5. 用户一条消息回复所有选择（如"1A 2B 3A"），或回复"确认"接受所有推荐值
+5. 新客户端中，用户会通过结构化问卷直接提交；旧客户端中，用户一条消息回复所有选择（如"1A 2B 3A"），或回复"确认"接受所有推荐值
+
+结构化问卷规则：
+- 当客户端支持结构化问卷时，不要把多字段参数收集主要依赖在自然语言文本上
+- 对于 AI 视频生成，优先调用 create_questionnaire_proposal(intent=generate_video)
+- 视频问卷至少应覆盖：orientation、seconds、prompt_mode、prompt_input；默认视频模型放在 auto_filled 区域
+- create_questionnaire_proposal 返回后，正文只需用 1 句话提示用户在下方完成选择
+- 当用户提交 questionnaire_submission 后，不要再次追问已提交字段，直接使用这些结构化参数调用 create_plan_proposal 生成待确认计划
+- 旧客户端回退时，仍可使用下面的 Q1/Q2/Q3 文本格式
 
 格式规范 -- 选项式问题：
 每个问题用 **Q{n}** 标记，选项用大写字母 A/B/C 标记。最后一个选项可以是"其他(请输入)"。

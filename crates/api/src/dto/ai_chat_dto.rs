@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use glance_mind_db::entity::ai_chat::*;
+use crate::service::ai_chat::QuestionnaireSubmission;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -19,6 +20,14 @@ pub struct UpdateConversationRequest {
 pub struct SendMessageRequest {
     pub content: String,
     pub model_id: Option<i32>,
+    pub ui_capabilities: Option<AiChatUiCapabilities>,
+    pub questionnaire_submission: Option<QuestionnaireSubmission>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct AiChatUiCapabilities {
+    #[serde(default)]
+    pub questionnaire: bool,
 }
 
 #[derive(Debug, Deserialize)]

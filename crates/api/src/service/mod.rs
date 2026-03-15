@@ -23,6 +23,7 @@ pub mod template_service;
 // pub mod tikhub_client; // Replaced by laozhang_client
 pub mod upload_task_service;
 pub mod user_service;
+pub mod video_capabilities;
 pub mod video_case_service;
 pub mod video_service;
 pub mod vidu_client;

@@ -215,6 +215,27 @@ class TestVideoModelDiscovery:
         assert float(models_by_key["vidu-multiframe"]["cost_multiplier"]) == 3.0
         assert float(models_by_key["vidu-ad-film"]["cost_multiplier"]) == 3.75
 
+    def test_video_models_expose_capabilities_and_default(self, video_client):
+        """Video model discovery should include a single preferred model and normalized capabilities."""
+        resp = video_client.get(f"{CONFIG_AI_MODELS_URL}?model_type=video")
+        assert_response_success(resp)
+
+        data = extract_data(resp.json())
+        defaults = [model for model in data if model.get("is_default")]
+        assert len(defaults) == 1, "Exactly one video model should be marked as default"
+
+        for model in data:
+            capabilities = model.get("capabilities")
+            assert isinstance(capabilities, dict), "Video models should expose capabilities"
+            assert capabilities["default_orientation"] in {"landscape", "portrait"}
+            assert capabilities["default_seconds"] in {
+                option["value"] for option in capabilities["duration_options"]
+            }
+            assert capabilities["default_orientation"] in {
+                option["value"] for option in capabilities["orientation_options"]
+            }
+            assert isinstance(capabilities["max_images"], int)
+
 
 # ============================================================================
 # Test Class: LaoZhang Text-to-Video

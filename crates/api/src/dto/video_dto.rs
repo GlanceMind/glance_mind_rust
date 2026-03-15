@@ -23,6 +23,26 @@ impl VideoOrientation {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoModelOptionDto {
+    pub value: String,
+    pub label: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoModelCapabilitiesDto {
+    pub default_orientation: String,
+    pub orientation_options: Vec<VideoModelOptionDto>,
+    pub default_seconds: String,
+    pub duration_options: Vec<VideoModelOptionDto>,
+    pub image_input_mode: String,
+    pub requires_image: bool,
+    pub min_images: Option<i32>,
+    pub max_images: i32,
+    pub supports_keyframe_prompts: bool,
+}
+
 // ===== Video Generation Related =====
 
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]

@@ -1,12 +1,26 @@
 use super::types::*;
 use crate::error::api_error::ApiError;
 use crate::state::user_state::UserState;
+use crate::service::video_capabilities::{build_video_model_capabilities, preferred_video_model};
 use glance_mind_db::entity::{platform::Platform, region::Region};
 use serde_json::{json, Value};
 
 pub struct ToolRegistry;
 
 impl ToolRegistry {
+    pub async fn normalize_questionnaire_submission(
+        submission: &QuestionnaireSubmission,
+        state: &UserState,
+    ) -> Result<String, ApiError> {
+        match submission.intent.as_str() {
+            "generate_video" => Self::normalize_generate_video_questionnaire(submission, state).await,
+            other => Err(ApiError::BadRequest(format!(
+                "Unsupported questionnaire intent: {}",
+                other
+            ))),
+        }
+    }
+
     pub fn definitions() -> Vec<ToolDefinition> {
         vec![
             // ── Query tools (ReadOnly) ──────────────────────────
@@ -37,6 +51,7 @@ impl ToolRegistry {
             Self::def("retry_publish_plan", "重试失败的发布计划", SafetyLevel::Modify, json!({ "type": "object", "properties": { "plan_id": { "type": "integer" } }, "required": ["plan_id"] })),
             Self::def("delete_campaign", "删除营销活动", SafetyLevel::Destructive, json!({ "type": "object", "properties": { "campaign_id": { "type": "integer" } }, "required": ["campaign_id"] })),
             Self::def("create_plan_proposal", "为需要确认的操作创建执行计划。当需要执行创建、修改、删除等操作时，先调用此工具生成计划让用户确认", SafetyLevel::ReadOnly, json!({ "type": "object", "properties": { "title": { "type": "string", "description": "计划标题" }, "description": { "type": "string", "description": "计划描述" }, "steps": { "type": "array", "items": { "type": "object", "properties": { "tool_name": { "type": "string", "description": "要执行的工具名称" }, "tool_params": { "type": "object", "description": "工具参数" }, "description": { "type": "string", "description": "步骤描述" } }, "required": ["tool_name", "tool_params", "description"] } } }, "required": ["title", "description", "steps"] })),
+            Self::def("create_questionnaire_proposal", "为支持结构化 UI 的客户端创建问卷。当前主要用于 AI 视频生成的缺参收集，返回前端可直接渲染的字段定义", SafetyLevel::ReadOnly, json!({ "type": "object", "properties": { "intent": { "type": "string", "description": "问卷意图，目前支持 generate_video" }, "title": { "type": "string", "description": "可选问卷标题" }, "submit_label": { "type": "string", "description": "可选提交按钮文案" }, "ai_model_id": { "type": "integer", "description": "可选视频模型ID，不传则自动选择默认视频模型" }, "orientation": { "type": "string", "description": "已识别到的方向: landscape/portrait" }, "seconds": { "type": "string", "description": "已识别到的时长秒数" }, "prompt_mode": { "type": "string", "description": "提示词模式: topic_outline/full_prompt" }, "prompt_input": { "type": "string", "description": "已从用户输入提取的主题要点或完整 prompt" } }, "required": ["intent"] })),
             // ── Phase 1: Template tools ───────────────────────────
             Self::def("get_template_detail", "获取回复模板详情", SafetyLevel::ReadOnly, json!({ "type": "object", "properties": { "template_id": { "type": "integer", "description": "模板ID" } }, "required": ["template_id"] })),
             Self::def("create_template", "为营销活动创建回复模板", SafetyLevel::Create, json!({ "type": "object", "properties": { "campaign_id": { "type": "integer", "description": "所属活动ID" }, "name": { "type": "string", "description": "模板名称" }, "reply_prompt": { "type": "string", "description": "评论回复提示词" }, "dm_prompt": { "type": "string", "description": "私信回复提示词" }, "reply_post_prompt": { "type": "string", "description": "帖子回复提示词" }, "weight": { "type": "integer", "description": "权重，默认1" } }, "required": ["campaign_id"] })),
@@ -48,7 +63,7 @@ impl ToolRegistry {
             Self::def("list_material_tags", "列出所有素材标签", SafetyLevel::ReadOnly, json!({ "type": "object", "properties": {}, "required": [] })),
             // ── Phase 1: Video tools ─────────────────────────────
             Self::def("get_video_task_detail", "获取视频生成任务详情", SafetyLevel::ReadOnly, json!({ "type": "object", "properties": { "task_id": { "type": "integer", "description": "任务ID" } }, "required": ["task_id"] })),
-            Self::def("generate_video", "生成AI视频。支持Vidu/Jimeng等模型，需扣费", SafetyLevel::Create, json!({ "type": "object", "properties": { "prompt": { "type": "string", "description": "视频描述提示词" }, "ai_model_id": { "type": "integer", "description": "视频AI模型ID，通过 list_ai_models(model_type=video) 获取" }, "orientation": { "type": "string", "description": "方向: landscape/portrait，默认landscape" }, "seconds": { "type": "string", "description": "时长(秒): 4/8，默认4" } }, "required": ["prompt"] })),
+            Self::def("generate_video", "生成AI视频。支持Vidu/Jimeng/Sora等模型，需扣费。正常交互中应先通过 create_plan_proposal 让用户确认，再执行本工具", SafetyLevel::Create, json!({ "type": "object", "properties": { "prompt": { "type": "string", "description": "视频描述提示词" }, "ai_model_id": { "type": "integer", "description": "视频AI模型ID，通过 list_ai_models(model_type=video) 获取" }, "orientation": { "type": "string", "description": "方向: landscape/portrait" }, "seconds": { "type": "string", "description": "时长秒数，使用当前模型支持的可选值" } }, "required": ["prompt"] })),
             // ── Phase 1: DM tools ────────────────────────────────
             Self::def("list_dm_conversations", "列出DM群控会话列表", SafetyLevel::ReadOnly, json!({ "type": "object", "properties": { "platform_id": { "type": "integer", "description": "按平台筛选" }, "device_id": { "type": "string", "description": "按设备筛选" }, "account_id": { "type": "integer", "description": "按账号筛选" } }, "required": [] })),
             Self::def("get_dm_messages", "获取DM会话消息列表", SafetyLevel::ReadOnly, json!({ "type": "object", "properties": { "conv_id": { "type": "string", "description": "会话ID" }, "limit": { "type": "integer", "description": "消息数量限制，默认50" } }, "required": ["conv_id"] })),
@@ -92,6 +107,55 @@ impl ToolRegistry {
             .find(|d| d.name == tool_name)
             .map(|d| d.safety_level)
             .unwrap_or(SafetyLevel::ReadOnly)
+    }
+
+    async fn normalize_generate_video_questionnaire(
+        submission: &QuestionnaireSubmission,
+        state: &UserState,
+    ) -> Result<String, ApiError> {
+        let merged = submission.merged_values();
+        let ai_model_id = merged
+            .get("ai_model_id")
+            .and_then(|value| value.as_i64())
+            .ok_or_else(|| ApiError::BadRequest("questionnaire ai_model_id required".into()))?
+            as i32;
+
+        let model = state
+            .config_service
+            .get_ai_model_by_id(ai_model_id)
+            .await
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?
+            .ok_or_else(|| ApiError::BadRequest(format!("AI model id={} not found", ai_model_id)))?;
+
+        let capabilities = build_video_model_capabilities(&model);
+        let orientation = merged
+            .get("orientation")
+            .and_then(|value| value.as_str())
+            .unwrap_or(capabilities.default_orientation.as_str());
+        let seconds = merged
+            .get("seconds")
+            .and_then(|value| value.as_str())
+            .unwrap_or(capabilities.default_seconds.as_str());
+        let prompt_mode = merged
+            .get("prompt_mode")
+            .and_then(|value| value.as_str())
+            .unwrap_or("full_prompt");
+        let prompt_input = merged
+            .get("prompt_input")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| ApiError::BadRequest("questionnaire prompt_input required".into()))?;
+
+        Ok(format!(
+            "结构化视频问卷已提交：intent=generate_video，ai_model_id={}，model_name={}，orientation={}，seconds={}，prompt_mode={}，prompt_input={}。请直接基于这些参数生成待确认的 create_plan_proposal，步骤中调用 generate_video。如果 prompt_mode=topic_outline，请先把主题要点扩写成可直接用于视频生成的完整 prompt，再写入 generate_video.prompt；如果 prompt_mode=full_prompt，则直接使用用户提供的完整 prompt。",
+            ai_model_id,
+            model.name,
+            orientation,
+            seconds,
+            prompt_mode,
+            prompt_input
+        ))
     }
 
     fn normalize_plan_tool_name(tool_name: &str) -> String {
@@ -322,6 +386,7 @@ impl ToolRegistry {
             "create_campaign" => {
                 Self::infer_create_campaign_params(&context, user_id, state).await
             }
+            "generate_video" => Self::infer_generate_video_params(&context, state).await,
             _ => Err(ApiError::BadRequest(format!(
                 "create_plan_proposal step for '{}' is missing tool_params; include all required arguments for this tool",
                 tool_name
@@ -567,6 +632,63 @@ impl ToolRegistry {
         Ok(Value::Object(tool_params))
     }
 
+    async fn infer_generate_video_params(
+        context: &str,
+        state: &UserState,
+    ) -> Result<Value, ApiError> {
+        let video_models = state
+            .config_service
+            .get_ai_models_by_type("video")
+            .await
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+        let selected_model = Self::extract_number_after_labels(context, &["ai_model_id="])
+            .map(|value| value as i32)
+            .and_then(|model_id| video_models.iter().find(|model| model.id == model_id).cloned())
+            .or_else(|| preferred_video_model(&video_models).cloned())
+            .ok_or_else(|| ApiError::BadRequest("No active video models available".into()))?;
+
+        let capabilities = build_video_model_capabilities(&selected_model);
+        let allowed_orientations: Vec<&str> = capabilities
+            .orientation_options
+            .iter()
+            .map(|option| option.value.as_str())
+            .collect();
+        let allowed_durations: Vec<&str> = capabilities
+            .duration_options
+            .iter()
+            .map(|option| option.value.as_str())
+            .collect();
+
+        let orientation = Self::choose_allowed_string(
+            Self::extract_after_labels(context, &["orientation=", "画面方向=", "方向="]).as_deref(),
+            &allowed_orientations,
+            capabilities.default_orientation.as_str(),
+        );
+        let seconds = Self::choose_allowed_string(
+            Self::extract_after_labels(context, &["seconds=", "时长=", "duration="]).as_deref(),
+            &allowed_durations,
+            capabilities.default_seconds.as_str(),
+        );
+        let prompt = Self::extract_after_labels(
+            context,
+            &[
+                "prompt=",
+                "提示词=",
+                "完整prompt=",
+                "完整 prompt=",
+                "prompt_input=",
+            ],
+        )
+        .ok_or_else(|| ApiError::BadRequest("create_plan_proposal could not infer generate_video.prompt".into()))?;
+
+        Ok(json!({
+            "prompt": prompt,
+            "ai_model_id": selected_model.id,
+            "orientation": orientation,
+            "seconds": seconds,
+        }))
+    }
+
     fn find_platform_id(text: &str, platforms: &[Platform]) -> Option<i32> {
         if let Some(explicit_platform_id) =
             Self::extract_number_after_labels(text, &["platform_id=", "平台ID=", "平台id="])
@@ -766,6 +888,202 @@ impl ToolRegistry {
             .map(|(idx, _)| idx)
             .unwrap_or(text.len());
         text[..end].trim()
+    }
+
+    async fn build_questionnaire_proposal(
+        params: &Value,
+        state: &UserState,
+    ) -> Result<QuestionnairePayload, ApiError> {
+        match params
+            .get("intent")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+        {
+            "generate_video" => Self::build_generate_video_questionnaire(params, state).await,
+            other => Err(ApiError::BadRequest(format!(
+                "Unsupported questionnaire intent: {}",
+                other
+            ))),
+        }
+    }
+
+    async fn build_generate_video_questionnaire(
+        params: &Value,
+        state: &UserState,
+    ) -> Result<QuestionnairePayload, ApiError> {
+        let video_models = state
+            .config_service
+            .get_ai_models_by_type("video")
+            .await
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+
+        let selected_model = params
+            .get("ai_model_id")
+            .and_then(|value| value.as_i64())
+            .map(|value| value as i32)
+            .and_then(|requested_id| {
+                video_models
+                    .iter()
+                    .find(|model| model.id == requested_id)
+                    .cloned()
+            })
+            .or_else(|| preferred_video_model(&video_models).cloned())
+            .ok_or_else(|| ApiError::BadRequest("No active video models available".into()))?;
+
+        let capabilities = build_video_model_capabilities(&selected_model);
+
+        let orientation_default = Self::choose_allowed_string(
+            params.get("orientation").and_then(|value| value.as_str()),
+            &capabilities
+                .orientation_options
+                .iter()
+                .map(|option| option.value.as_str())
+                .collect::<Vec<_>>(),
+            capabilities.default_orientation.as_str(),
+        );
+        let seconds_default = Self::choose_allowed_string(
+            params.get("seconds").and_then(|value| value.as_str()),
+            &capabilities
+                .duration_options
+                .iter()
+                .map(|option| option.value.as_str())
+                .collect::<Vec<_>>(),
+            capabilities.default_seconds.as_str(),
+        );
+        let prompt_mode_default = Self::choose_allowed_string(
+            params.get("prompt_mode").and_then(|value| value.as_str()),
+            &["topic_outline", "full_prompt"],
+            if params
+                .get("prompt_input")
+                .and_then(|value| value.as_str())
+                .map(|value| value.len() > 120 || value.contains('\n'))
+                .unwrap_or(false)
+            {
+                "full_prompt"
+            } else {
+                "topic_outline"
+            },
+        );
+        let prompt_input = params
+            .get("prompt_input")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+
+        Ok(QuestionnairePayload {
+            questionnaire_id: format!("generate_video:{}", selected_model.id),
+            intent: "generate_video".to_string(),
+            title: params
+                .get("title")
+                .and_then(|value| value.as_str())
+                .unwrap_or("确认视频生成参数")
+                .to_string(),
+            description: Some("选择画面方向、时长和提示词模式后提交，我会先生成待确认计划，再开始创建任务。".to_string()),
+            submit_label: params
+                .get("submit_label")
+                .and_then(|value| value.as_str())
+                .unwrap_or("确认后生成任务")
+                .to_string(),
+            fields: vec![
+                QuestionnaireField {
+                    key: "orientation".to_string(),
+                    label: "画面方向".to_string(),
+                    control: QuestionnaireControl::Choice,
+                    required: true,
+                    options: capabilities
+                        .orientation_options
+                        .iter()
+                        .map(|option| QuestionnaireOption {
+                            value: option.value.clone(),
+                            label: match option.value.as_str() {
+                                "landscape" => "landscape（横屏）".to_string(),
+                                "portrait" => "portrait（竖屏）".to_string(),
+                                _ => option.label.clone(),
+                            },
+                            description: option.description.clone(),
+                        })
+                        .collect(),
+                    placeholder: None,
+                    helper_text: None,
+                    default_value: Some(json!(orientation_default)),
+                    max_length: None,
+                },
+                QuestionnaireField {
+                    key: "seconds".to_string(),
+                    label: "时长".to_string(),
+                    control: QuestionnaireControl::Choice,
+                    required: true,
+                    options: capabilities
+                        .duration_options
+                        .iter()
+                        .map(|option| QuestionnaireOption {
+                            value: option.value.clone(),
+                            label: format!("{} 秒", option.value),
+                            description: option.description.clone(),
+                        })
+                        .collect(),
+                    placeholder: None,
+                    helper_text: None,
+                    default_value: Some(json!(seconds_default)),
+                    max_length: None,
+                },
+                QuestionnaireField {
+                    key: "prompt_mode".to_string(),
+                    label: "提示词模式".to_string(),
+                    control: QuestionnaireControl::Choice,
+                    required: true,
+                    options: vec![
+                        QuestionnaireOption {
+                            value: "topic_outline".to_string(),
+                            label: "你给我主题要点".to_string(),
+                            description: Some("填写主题/产品 + 风格 + 关键画面/镜头".to_string()),
+                        },
+                        QuestionnaireOption {
+                            value: "full_prompt".to_string(),
+                            label: "我直接粘贴完整 prompt".to_string(),
+                            description: Some("直接提供完整视频提示词".to_string()),
+                        },
+                    ],
+                    placeholder: None,
+                    helper_text: None,
+                    default_value: Some(json!(prompt_mode_default)),
+                    max_length: None,
+                },
+                QuestionnaireField {
+                    key: "prompt_input".to_string(),
+                    label: "Prompt / 主题要点".to_string(),
+                    control: QuestionnaireControl::Textarea,
+                    required: true,
+                    options: vec![],
+                    placeholder: Some(
+                        "请填写完整 prompt，或填写主题/产品 + 风格 + 关键画面/镜头".to_string(),
+                    ),
+                    helper_text: Some(
+                        "如果选择“你给我主题要点”，请至少提供主题/产品、风格和关键镜头。".to_string(),
+                    ),
+                    default_value: prompt_input.map(|value| json!(value)),
+                    max_length: Some(2000),
+                },
+            ],
+            auto_filled: vec![QuestionnaireAutoFilled {
+                key: "ai_model_id".to_string(),
+                label: "视频模型".to_string(),
+                value: json!(selected_model.id),
+                display: format!("{} ✓（ai_model_id={}）", selected_model.name, selected_model.id),
+            }],
+        })
+    }
+
+    fn choose_allowed_string<'a>(
+        candidate: Option<&'a str>,
+        allowed_values: &[&str],
+        fallback: &'a str,
+    ) -> String {
+        let chosen = candidate
+            .filter(|value| allowed_values.iter().any(|allowed| allowed == value))
+            .unwrap_or(fallback);
+        chosen.to_string()
     }
 
     pub fn openai_tools() -> Vec<Value> {
@@ -1124,6 +1442,10 @@ impl ToolRegistry {
                     .update_status(id, user_id, status)
                     .await?;
                 json!({ "deleted": true, "campaign_id": id, "final_status": campaign.status })
+            }
+            "create_questionnaire_proposal" => {
+                let questionnaire = Self::build_questionnaire_proposal(&params, state).await?;
+                serde_json::to_value(questionnaire).unwrap_or_default()
             }
             "create_plan_proposal" => {
                 let proposal = Self::build_plan_proposal(&params, user_id, state).await?;

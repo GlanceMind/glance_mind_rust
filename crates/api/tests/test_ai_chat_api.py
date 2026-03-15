@@ -10,9 +10,14 @@ Covers:
 - Conversation history ordering
 - Cascade delete verification
 """
+import asyncio
 import json
+import os
 import time
+import uuid
+from datetime import datetime, timezone
 
+import nats as nats_pkg
 import psycopg2
 import psycopg2.extras
 import pytest
@@ -24,6 +29,7 @@ from conftest import (
     get_or_create_test_token,
     TEST_USER_EMAIL,
     TEST_USER_PASSWORD,
+    resolve_test_user_id,
 )
 
 API_PREFIX = "/api/v1/ai-chat"
@@ -32,6 +38,8 @@ BCRYPT_HASH_TEST_PASSWORD = (
     "$2b$12$Ikc.R4FMMGahbGhfHlLl4.PciMiV37qXfHpPNCjGGQg/yOEgk7k/e"
 )
 SECOND_USER_EMAIL = "aichat_iso_test@glancemind.test"
+NATS_URL = os.getenv("E2E_NATS_URL", "nats://localhost:4223")
+NATS_TOKEN = os.getenv("E2E_NATS_TOKEN", "glancemind-dev-token")
 
 
 # ---------------------------------------------------------------------------
@@ -159,8 +167,9 @@ def create_plan_via_db(conn, user_id, conv_id, title="Test Plan", steps=None):
 @pytest.fixture(scope="module")
 def auth_client(db_connection):
     token = get_or_create_test_token()
+    user_id = resolve_test_user_id(db_connection)
     cur = db_connection.cursor()
-    cur.execute("UPDATE gm_users SET permissions = 15 WHERE email = %s", (TEST_USER_EMAIL,))
+    cur.execute("UPDATE gm_users SET permissions = 15 WHERE id = %s", (user_id,))
     db_connection.commit()
     cur.close()
     return APIClient(API_BASE_URL, token=token)
@@ -168,9 +177,7 @@ def auth_client(db_connection):
 
 @pytest.fixture(scope="module")
 def test_user_id(db_connection):
-    row = _q1(db_connection, "SELECT id FROM gm_users WHERE email = %s", (TEST_USER_EMAIL,))
-    assert row is not None, f"Test user {TEST_USER_EMAIL} not found in DB"
-    return row["id"]
+    return resolve_test_user_id(db_connection)
 
 
 @pytest.fixture(scope="module")
@@ -210,10 +217,11 @@ def second_auth_client(db_connection):
     db_connection.commit()
     cur.close()
 
+    second_user_password = "TestPassword123!"
     client = APIClient(API_BASE_URL)
     resp = client.post(
         "/api/v1/auth/login",
-        json={"identifier": SECOND_USER_EMAIL, "password": TEST_USER_PASSWORD},
+        json={"identifier": SECOND_USER_EMAIL, "password": second_user_password},
     )
     assert resp.status_code == 200, f"Second user login failed: {resp.status_code} {resp.text}"
 
@@ -1220,6 +1228,446 @@ class TestToolDirectExecution:
 
         return completes, fails
 
+    def _execute_single_tool(
+        self,
+        auth_client,
+        db_connection,
+        test_user_id,
+        tool_name,
+        tool_params,
+        *,
+        title=None,
+        description=None,
+    ):
+        """Create a single-step draft plan, confirm it, and return execution info."""
+        resp = auth_client.post(
+            f"{API_PREFIX}/conversations",
+            json={"title": title or f"{tool_name} direct exec"},
+        )
+        conv_id = extract_data(resp.json())["id"]
+        plan, _ = create_plan_via_db(
+            db_connection,
+            test_user_id,
+            conv_id,
+            title or f"{tool_name} plan",
+            [
+                {
+                    "tool_name": tool_name,
+                    "tool_params": tool_params if isinstance(tool_params, str) else json.dumps(tool_params),
+                    "description": description or f"Execute {tool_name}",
+                }
+            ],
+        )
+        events = self._confirm_and_collect(auth_client, plan["id"])
+        completes = [e for e in events if e["event"] == "step_completed"]
+        fails = [e for e in events if e["event"] == "step_failed"]
+        assert len(completes) + len(fails) == 1, (
+            f"{tool_name} should produce exactly one terminal step event, got completes={len(completes)} fails={len(fails)}"
+        )
+        return {
+            "conv_id": conv_id,
+            "plan_id": plan["id"],
+            "events": events,
+            "completes": completes,
+            "fails": fails,
+        }
+
+    def _execute_tool_success(
+        self,
+        auth_client,
+        db_connection,
+        test_user_id,
+        tool_name,
+        tool_params,
+        *,
+        title=None,
+        description=None,
+    ):
+        execution = self._execute_single_tool(
+            auth_client,
+            db_connection,
+            test_user_id,
+            tool_name,
+            tool_params,
+            title=title,
+            description=description,
+        )
+        assert len(execution["fails"]) == 0, (
+            f"{tool_name} should succeed, got {execution['fails'][0]['data'] if execution['fails'] else 'unknown failure'}"
+        )
+        return execution["conv_id"], execution["plan_id"], execution["completes"][0]["data"]["result"]
+
+    def _ensure_campaign(self, db_connection, test_user_id):
+        campaign = _q1(
+            db_connection,
+            "SELECT id, platform_id FROM gm_campaigns WHERE user_id = %s ORDER BY id DESC LIMIT 1",
+            (test_user_id,),
+        )
+        if campaign is not None:
+            return campaign
+
+        return _insert_ret(
+            db_connection,
+            """
+            INSERT INTO gm_campaigns
+                (user_id, name, platform_id, region_id, ai_model_id, status, product_prompt, schedule_type, created_at)
+            VALUES (%s, %s, 2, 1, 1, 'ACTIVE', 'AI chat direct coverage', 'ONCE', NOW())
+            RETURNING *
+            """,
+            (test_user_id, f"ai_chat_campaign_{uuid.uuid4().hex[:8]}"),
+        )
+
+    def _create_template_via_api(self, auth_client, campaign_id):
+        template_name = f"ai_chat_template_{uuid.uuid4().hex[:8]}"
+        resp = auth_client.post(
+            f"/api/v1/campaigns/{campaign_id}/templates",
+            json={
+                "campaign_id": campaign_id,
+                "name": template_name,
+                "reply_prompt": f"Reply for {template_name}",
+                "dm_prompt": f"DM for {template_name}",
+                "weight": 10,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        return extract_data(resp.json())
+
+    def _create_material_via_api(self, auth_client):
+        slug = uuid.uuid4().hex[:8]
+        resp = auth_client.post(
+            "/api/v1/materials",
+            json={
+                "video_url": f"https://example.com/ai-chat-{slug}.mp4",
+                "tag": "ai_chat_tool",
+                "title": f"ai_chat_material_{slug}",
+                "description": "AI chat material direct execution seed",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        return extract_data(resp.json())
+
+    def _create_social_group_via_api(self, auth_client, platform_id=2):
+        group_name = f"ai_chat_group_{uuid.uuid4().hex[:8]}"
+        resp = auth_client.post(
+            "/api/v1/social-groups",
+            json={"platform_id": platform_id, "group_name": group_name},
+        )
+        assert resp.status_code == 200, resp.text
+        return extract_data(resp.json())
+
+    def _create_social_account_via_api(
+        self,
+        auth_client,
+        *,
+        platform_id=2,
+        group_id=None,
+        device_id=None,
+        profile_name=None,
+    ):
+        username = f"ai_chat_account_{uuid.uuid4().hex[:8]}"
+        create_payload = {"platform_id": platform_id, "username": username}
+        if group_id is not None:
+            create_payload["group_id"] = group_id
+        resp = auth_client.post("/api/v1/accounts", json=create_payload)
+        assert resp.status_code == 200, resp.text
+        account = extract_data(resp.json())
+
+        update_payload = {}
+        if group_id is not None:
+            update_payload["group_id"] = group_id
+        if device_id is not None:
+            update_payload["device_id"] = device_id
+        if profile_name is not None:
+            update_payload["profile_name"] = profile_name
+        if update_payload:
+            update_resp = auth_client.put(f"/api/v1/accounts/{account['id']}", json=update_payload)
+            assert update_resp.status_code == 200, update_resp.text
+            account = extract_data(update_resp.json())
+
+        return account
+
+    def _ensure_publish_plan(self, db_connection, test_user_id, social_account_id):
+        plan = _q1(
+            db_connection,
+            """
+            SELECT *
+            FROM gm_aipub_plans
+            WHERE user_id = %s
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (test_user_id,),
+        )
+        if plan is not None:
+            return plan
+
+        return _insert_ret(
+            db_connection,
+            """
+            INSERT INTO gm_aipub_plans
+                (user_id, name, platform_id, content_type, plan_type, status, social_account_id, created_at)
+            VALUES (%s, %s, 2, 'video', 'single_video', 'pending', %s, NOW())
+            RETURNING *
+            """,
+            (test_user_id, f"ai_chat_publish_{uuid.uuid4().hex[:8]}", social_account_id),
+        )
+
+    def _insert_publish_plan(self, db_connection, test_user_id, social_account_id):
+        return _insert_ret(
+            db_connection,
+            """
+            INSERT INTO gm_aipub_plans
+                (user_id, name, platform_id, content_type, plan_type, status, social_account_id, created_at)
+            VALUES (%s, %s, 2, 'video', 'single_video', 'pending', %s, NOW())
+            RETURNING *
+            """,
+            (test_user_id, f"ai_chat_publish_{uuid.uuid4().hex[:8]}", social_account_id),
+        )
+
+    def _ensure_notification(self, db_connection):
+        notification = _q1(
+            db_connection,
+            """
+            SELECT id
+            FROM gm_notifications
+            WHERE published_at <= NOW()
+              AND (expires_at IS NULL OR expires_at > NOW())
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+        )
+        if notification is not None:
+            return notification
+
+        return _insert_ret(
+            db_connection,
+            """
+            INSERT INTO gm_notifications
+                (notification_type, title, title_zh, description, description_zh, important, published_at, created_at)
+            VALUES ('system', %s, %s, %s, %s, false, NOW(), NOW())
+            RETURNING id
+            """,
+            (
+                "AI Chat Notification",
+                "AI Chat Notification",
+                "Direct execution notification",
+                "Direct execution notification",
+            ),
+        )
+
+    def _insert_video_task(self, db_connection, test_user_id):
+        task_id = f"ai-chat-video-{uuid.uuid4().hex[:12]}"
+        return _insert_ret(
+            db_connection,
+            """
+            INSERT INTO gm_video_generation_tasks
+                (user_id, task_id, prompt, status, cost_points, retry_count, created_at, updated_at, title, orientation, video_seconds)
+            VALUES (%s, %s, %s, 'queued', 1, 0, NOW(), NOW(), %s, 'portrait', '8')
+            RETURNING *
+            """,
+            (
+                test_user_id,
+                task_id,
+                "AI chat direct execution video seed",
+                f"Video {task_id}",
+            ),
+        )
+
+    def _insert_video_case(self, db_connection, test_user_id):
+        task_no = f"ai-chat-case-{uuid.uuid4().hex[:12]}"
+        video_url = f"https://example.com/{task_no}.mp4"
+        image_url = f"https://example.com/{task_no}.jpg"
+        case_row = _insert_ret(
+            db_connection,
+            """
+            INSERT INTO gm_data_video_cases (
+                task_no, case_id, user_id, tt_category_id,
+                category_name_en, category_name_cn, task_type, num,
+                status, script, model, video_model, video_url,
+                ai_prompt, refer_image_url, progress, video_status,
+                image_urls, characters, videos, case_status, favorite_status
+            ) VALUES (
+                %s, %s, %s, %s,
+                %s, %s, %s, %s,
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s,
+                %s, %s, %s, %s, %s
+            )
+            RETURNING *
+            """,
+            (
+                task_no,
+                int(time.time()),
+                str(test_user_id),
+                "601152",
+                "Womenswear & Underwear",
+                "女装与女士内衣",
+                "5",
+                1,
+                500,
+                "AI chat direct execution case script",
+                "sora2-portrait-8s",
+                "sora2-portrait-8s",
+                video_url,
+                "AI chat direct execution case prompt",
+                image_url,
+                100,
+                "completed",
+                json.dumps([image_url]),
+                '[]',
+                json.dumps(
+                    [
+                        {
+                            "videoUrl": video_url,
+                            "taskNo": task_no,
+                            "aiPrompt": "AI chat direct execution case prompt",
+                            "progress": 100,
+                            "videoStatus": "completed",
+                        }
+                    ]
+                ),
+                1,
+                0,
+            ),
+        )
+        return {"id": case_row["id"], "task_no": task_no, "video_url": video_url}
+
+    def _ensure_crawler_task_with_result(self, db_connection, test_user_id):
+        campaign = self._ensure_campaign(db_connection, test_user_id)
+        task = _insert_ret(
+            db_connection,
+            """
+            INSERT INTO gm_crawler_tasks
+                (campaign_id, keywords, max_count, process_count, status, created_at, updated_at, search_offset, search_limit)
+            VALUES (%s, %s, 10, 1, 'pending', NOW(), NOW(), 0, 10)
+            RETURNING *
+            """,
+            (campaign["id"], ["ai-chat-tool"]),
+        )
+        _insert_ret(
+            db_connection,
+            """
+            INSERT INTO gm_crawler_results
+                (task_id, video_id, video_title, comment_count, created_at, updated_at, view_count, author_name, processed, replied)
+            VALUES (%s, %s, %s, 1, NOW(), NOW(), 10, %s, true, false)
+            RETURNING *
+            """,
+            (
+                task["id"],
+                f"video_{uuid.uuid4().hex[:8]}",
+                "AI Chat crawler result",
+                "ai_chat_author",
+            ),
+        )
+        return task
+
+    def _seed_dm_conversation(self, auth_client):
+        run_id = uuid.uuid4().hex[:8]
+        device_id = f"ai-chat-dm-{run_id}"
+        profile_name = f"profile_{run_id}"
+        account = self._create_social_account_via_api(
+            auth_client,
+            platform_id=4,
+            device_id=device_id,
+            profile_name=profile_name,
+        )
+        me_resp = auth_client.get("/api/v1/user/me")
+        assert me_resp.status_code == 200, me_resp.text
+        me_data = extract_data(me_resp.json())
+        user_id = me_data.get("id") or me_data.get("user_id")
+        conv_id = f"{account['id']}_alice_{run_id}"
+        timestamp = datetime.now(timezone.utc).isoformat()
+
+        async def _seed():
+            nc = await nats_pkg.connect(NATS_URL, token=NATS_TOKEN)
+            js = nc.jetstream()
+            for name, subjects in [
+                ("DM_MESSAGES", ["dm.msg.>"]),
+                ("DM_COMMANDS", ["dm.cmd.>"]),
+                ("DM_EVENTS", ["dm.evt.>"]),
+            ]:
+                try:
+                    await js.add_stream(name=name, subjects=subjects)
+                except Exception:
+                    pass
+
+            for bucket, options in [
+                ("dm_conversations", {}),
+                ("dm_device_heartbeat", {"ttl": 120}),
+            ]:
+                try:
+                    await js.create_key_value(bucket=bucket, **options)
+                except Exception:
+                    pass
+
+            msg = {
+                "msg_id": str(uuid.uuid4()),
+                "conv_id": conv_id,
+                "direction": "inbound",
+                "content": "Hi from AI chat DM seed",
+                "content_type": "text",
+                "attachments": [],
+                "status": "delivered",
+                "platform_msg_id": f"plat_{uuid.uuid4().hex[:8]}",
+                "timestamp": timestamp,
+            }
+            await js.publish(
+                f"dm.msg.{conv_id}",
+                json.dumps(msg).encode(),
+                headers={"Nats-Msg-Id": msg["platform_msg_id"]},
+            )
+
+            kv_conversations = await js.key_value("dm_conversations")
+            await kv_conversations.put(
+                f"{user_id}.{conv_id}",
+                json.dumps(
+                    {
+                        "conv_id": conv_id,
+                        "user_id": user_id,
+                        "social_account_id": account["id"],
+                        "device_id": device_id,
+                        "platform_id": account["platform_id"],
+                        "platform_name": "Instagram",
+                        "my_username": account["username"],
+                        "my_profile_name": profile_name,
+                        "remote_user_id": f"alice_{run_id}",
+                        "remote_username": f"alice_{run_id}",
+                        "remote_display_name": None,
+                        "remote_avatar_url": None,
+                        "last_message_at": timestamp,
+                        "last_message_preview": msg["content"],
+                        "last_message_direction": "inbound",
+                        "unread_count": 1,
+                        "status": "active",
+                        "reply_mode": "manual",
+                        "ai_suggestion": None,
+                        "updated_at": timestamp,
+                    }
+                ).encode(),
+            )
+
+            kv_heartbeat = await js.key_value("dm_device_heartbeat")
+            await kv_heartbeat.put(
+                device_id,
+                json.dumps(
+                    {
+                        "user_id": user_id,
+                        "device_id": device_id,
+                        "last_seen": timestamp,
+                    }
+                ).encode(),
+            )
+            await nc.drain()
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(_seed())
+        finally:
+            loop.close()
+
+        time.sleep(1)
+        return {"conv_id": conv_id, "account": account}
+
     # ── Query Tools Batch 1: No params needed ──────────────────
 
     def test_query_tools_batch1(self, auth_client, test_user_id, db_connection):
@@ -1319,6 +1767,53 @@ class TestToolDirectExecution:
         assert len(completes) == 1
         result = completes[0]["data"]["result"]
         assert "title" in result or "title" in str(result), "Proposal result should contain title"
+
+    def test_tool_create_questionnaire_proposal(self, auth_client, test_user_id, db_connection):
+        """Test create_questionnaire_proposal tool execution directly."""
+        _, _, result = self._execute_tool_success(
+            auth_client,
+            db_connection,
+            test_user_id,
+            "create_questionnaire_proposal",
+            {"intent": "generate_video"},
+        )
+        assert result["intent"] == "generate_video"
+        assert result["questionnaire_id"]
+        assert result["fields"]
+        assert result["auto_filled"]
+
+    def test_tool_generate_video(self, auth_client, test_user_id, db_connection):
+        """Test generate_video tool execution directly with mock providers."""
+        models_resp = auth_client.get("/api/v1/config/ai-models?model_type=video")
+        assert models_resp.status_code == 200, models_resp.text
+        models = extract_data(models_resp.json())
+        assert isinstance(models, list) and models, "Expected video models for generate_video test"
+
+        preferred_model = next((model for model in models if model.get("is_default")), models[0])
+        capabilities = preferred_model.get("capabilities") or {}
+        orientation = capabilities.get("default_orientation", "landscape")
+        seconds = capabilities.get("default_seconds", "4")
+
+        _, _, result = self._execute_tool_success(
+            auth_client,
+            db_connection,
+            test_user_id,
+            "generate_video",
+            {
+                "prompt": "A premium perfume bottle rotating on a reflective surface with cinematic lighting",
+                "ai_model_id": preferred_model["id"],
+                "orientation": orientation,
+                "seconds": seconds,
+            },
+        )
+        assert result["task_id"]
+
+        task_row = _q1(
+            db_connection,
+            "SELECT * FROM gm_video_generation_tasks WHERE task_id = %s AND user_id = %s",
+            (result["task_id"], test_user_id),
+        )
+        assert task_row is not None, "generate_video should create a video task record"
 
     # ── Mutation Tool: create_social_group ──────────────────────
 
@@ -1594,6 +2089,318 @@ class TestToolDirectExecution:
             assert log["user_id"] == test_user_id
             assert log["success"] is True
             assert log["safety_level"] == "read_only"
+
+    def test_additional_readonly_tool_coverage(self, auth_client, test_user_id, db_connection):
+        """Cover remaining read-only AI chat tools with deterministic seeded resources."""
+        campaign = self._ensure_campaign(db_connection, test_user_id)
+        template = self._create_template_via_api(auth_client, campaign["id"])
+        material = self._create_material_via_api(auth_client)
+        video_task = self._insert_video_task(db_connection, test_user_id)
+        dm_seed = self._seed_dm_conversation(auth_client)
+        notification = self._ensure_notification(db_connection)
+        video_case = self._insert_video_case(db_connection, test_user_id)
+        crawler_task = self._ensure_crawler_task_with_result(db_connection, test_user_id)
+
+        resp = auth_client.post(f"{API_PREFIX}/conversations", json={"title": "Additional Readonly Coverage"})
+        conv_id = extract_data(resp.json())["id"]
+
+        tools = [
+            ("list_regions", {"platform_id": 2}),
+            ("search_knowledge", {"query": "营销活动"}),
+            ("get_template_detail", {"template_id": template["id"]}),
+            ("get_material_detail", {"material_id": material["id"]}),
+            ("list_material_tags", {}),
+            ("get_video_task_detail", {"task_id": video_task["task_id"]}),
+            ("list_dm_conversations", {"account_id": dm_seed["account"]["id"]}),
+            ("get_dm_stats", {}),
+            ("list_notifications", {}),
+            ("list_video_cases", {"status": 500, "category_id": "601152", "page_size": 100}),
+            ("get_video_case_detail", {"video_case_id": video_case["id"]}),
+            ("list_publish_tasks", {}),
+            ("list_campaign_contents", {"campaign_id": campaign["id"], "platform_id": campaign["platform_id"]}),
+            ("get_crawler_results", {"task_id": crawler_task["id"]}),
+        ]
+        plan, _ = create_plan_via_db(
+            db_connection,
+            test_user_id,
+            conv_id,
+            "Additional Readonly Coverage",
+            [
+                {
+                    "tool_name": tool_name,
+                    "tool_params": json.dumps(tool_params),
+                    "description": f"Execute {tool_name}",
+                }
+                for tool_name, tool_params in tools
+            ],
+        )
+
+        events = self._confirm_and_collect(auth_client, plan["id"])
+        completes, fails = self._assert_steps_completed(events, len(tools))
+        assert len(fails) == 0, f"Readonly coverage should not fail: {[f['data'] for f in fails]}"
+        assert len(completes) == len(tools)
+
+        step_rows = _qall(
+            db_connection,
+            "SELECT tool_name, result FROM gm_ai_plan_steps WHERE plan_id = %s ORDER BY step_order",
+            (plan["id"],),
+        )
+        results = {row["tool_name"]: row["result"] for row in step_rows}
+
+        assert str(template["id"]) in json.dumps(results["get_template_detail"])
+        assert str(material["id"]) in json.dumps(results["get_material_detail"])
+        assert video_task["task_id"] in json.dumps(results["get_video_task_detail"])
+        assert dm_seed["conv_id"] in json.dumps(results["list_dm_conversations"])
+        assert str(notification["id"]) in json.dumps(results["list_notifications"])
+        assert video_case["task_no"] in json.dumps(results["list_video_cases"])
+        assert video_case["task_no"] in json.dumps(results["get_video_case_detail"])
+        assert "AI Chat crawler result" in json.dumps(results["get_crawler_results"])
+
+    def test_template_material_and_video_case_mutation_tool_coverage(
+        self,
+        auth_client,
+        test_user_id,
+        db_connection,
+    ):
+        """Cover remaining template/material/video-case mutation tools."""
+        campaign = self._ensure_campaign(db_connection, test_user_id)
+
+        template_name = f"ai_chat_tool_template_{uuid.uuid4().hex[:8]}"
+        _, _, create_template_result = self._execute_tool_success(
+            auth_client,
+            db_connection,
+            test_user_id,
+            "create_template",
+            {
+                "campaign_id": campaign["id"],
+                "name": template_name,
+                "reply_prompt": f"Reply for {template_name}",
+                "dm_prompt": f"DM for {template_name}",
+                "weight": 5,
+            },
+        )
+        assert create_template_result is not None
+
+        created_template = _q1(
+            db_connection,
+            "SELECT * FROM gm_campaign_templates WHERE campaign_id = %s AND name = %s ORDER BY id DESC LIMIT 1",
+            (campaign["id"], template_name),
+        )
+        assert created_template is not None, "create_template should persist a template"
+
+        _, _, auto_templates = self._execute_tool_success(
+            auth_client,
+            db_connection,
+            test_user_id,
+            "auto_generate_template",
+            {"product_info": "AI Chat test product", "count": 2},
+        )
+        assert isinstance(auto_templates, list) and len(auto_templates) == 2
+
+        _, _, delete_template_result = self._execute_tool_success(
+            auth_client,
+            db_connection,
+            test_user_id,
+            "delete_template",
+            {"template_id": created_template["id"]},
+        )
+        assert delete_template_result["deleted"] is True
+        assert _q1(
+            db_connection,
+            "SELECT id FROM gm_campaign_templates WHERE id = %s",
+            (created_template["id"],),
+        ) is None
+
+        material = self._create_material_via_api(auth_client)
+        _, _, delete_material_result = self._execute_tool_success(
+            auth_client,
+            db_connection,
+            test_user_id,
+            "delete_material",
+            {"material_id": material["id"]},
+        )
+        assert delete_material_result["deleted"] is True
+        deleted_material = _q1(
+            db_connection,
+            "SELECT is_active FROM gm_user_materials WHERE id = %s",
+            (material["id"],),
+        )
+        assert deleted_material is not None
+        assert deleted_material["is_active"] is False
+
+        video_case = self._insert_video_case(db_connection, test_user_id)
+        _, _, favorite_result = self._execute_tool_success(
+            auth_client,
+            db_connection,
+            test_user_id,
+            "favorite_video_case",
+            {"task_no": video_case["task_no"]},
+        )
+        assert favorite_result is not None
+        favorited_material = _q1(
+            db_connection,
+            "SELECT * FROM gm_user_materials WHERE user_id = %s AND video_url = %s ORDER BY id DESC LIMIT 1",
+            (test_user_id, video_case["video_url"]),
+        )
+        assert favorited_material is not None, "favorite_video_case should create a material record"
+
+    def test_publish_plan_and_account_mutation_tool_coverage(
+        self,
+        auth_client,
+        test_user_id,
+        db_connection,
+    ):
+        """Cover publish-plan and social-account mutation tools."""
+        group = self._create_social_group_via_api(auth_client, platform_id=2)
+        account = self._create_social_account_via_api(
+            auth_client,
+            platform_id=2,
+            group_id=group["id"],
+        )
+
+        updated_username = f"updated_{uuid.uuid4().hex[:8]}"
+        updated_device_id = f"device_{uuid.uuid4().hex[:8]}"
+        _, _, update_account_result = self._execute_tool_success(
+            auth_client,
+            db_connection,
+            test_user_id,
+            "update_social_account",
+            {
+                "account_id": account["id"],
+                "username": updated_username,
+                "device_id": updated_device_id,
+                "group_id": group["id"],
+            },
+        )
+        assert update_account_result is not None
+        updated_account = _q1(
+            db_connection,
+            "SELECT username, device_id FROM gm_social_accounts WHERE id = %s",
+            (account["id"],),
+        )
+        assert updated_account["username"] == updated_username
+        assert updated_account["device_id"] == updated_device_id
+
+        _, _, verify_result = self._execute_tool_success(
+            auth_client,
+            db_connection,
+            test_user_id,
+            "verify_social_account",
+            {"account_id": account["id"]},
+        )
+        assert verify_result["verified"] is True
+
+        updatable_plan = self._insert_publish_plan(db_connection, test_user_id, account["id"])
+        updated_plan_name = f"updated_plan_{uuid.uuid4().hex[:8]}"
+        _, _, update_plan_result = self._execute_tool_success(
+            auth_client,
+            db_connection,
+            test_user_id,
+            "update_publish_plan",
+            {"plan_id": updatable_plan["id"], "name": updated_plan_name},
+        )
+        assert update_plan_result is not None
+        updated_plan = _q1(
+            db_connection,
+            "SELECT name FROM gm_aipub_plans WHERE id = %s",
+            (updatable_plan["id"],),
+        )
+        assert updated_plan["name"] == updated_plan_name
+
+        deletable_plan = self._insert_publish_plan(db_connection, test_user_id, account["id"])
+        _, _, delete_plan_result = self._execute_tool_success(
+            auth_client,
+            db_connection,
+            test_user_id,
+            "delete_publish_plan",
+            {"plan_id": deletable_plan["id"]},
+        )
+        assert delete_plan_result["deleted"] is True
+        assert _q1(
+            db_connection,
+            "SELECT id FROM gm_aipub_plans WHERE id = %s",
+            (deletable_plan["id"],),
+        ) is None
+
+        deletable_account = self._create_social_account_via_api(auth_client, platform_id=2)
+        _, _, delete_account_result = self._execute_tool_success(
+            auth_client,
+            db_connection,
+            test_user_id,
+            "delete_social_account",
+            {"account_id": deletable_account["id"]},
+        )
+        assert delete_account_result["deleted"] is True
+        assert _q1(
+            db_connection,
+            "SELECT id FROM gm_social_accounts WHERE id = %s",
+            (deletable_account["id"],),
+        ) is None
+
+        deletable_group = self._create_social_group_via_api(auth_client, platform_id=2)
+        _, _, delete_group_result = self._execute_tool_success(
+            auth_client,
+            db_connection,
+            test_user_id,
+            "delete_social_group",
+            {"group_id": deletable_group["id"]},
+        )
+        assert delete_group_result["deleted"] is True
+        assert _q1(
+            db_connection,
+            "SELECT id FROM gm_social_groups WHERE id = %s",
+            (deletable_group["id"],),
+        ) is None
+
+    def test_dm_and_notification_mutation_tool_coverage(self, auth_client, test_user_id, db_connection):
+        """Cover DM mutation tools and notification read acknowledgement."""
+        dm_seed = self._seed_dm_conversation(auth_client)
+
+        _, _, messages_result = self._execute_tool_success(
+            auth_client,
+            db_connection,
+            test_user_id,
+            "get_dm_messages",
+            {"conv_id": dm_seed["conv_id"], "limit": 10},
+        )
+        assert dm_seed["conv_id"] in json.dumps(messages_result)
+
+        _, _, send_reply_result = self._execute_tool_success(
+            auth_client,
+            db_connection,
+            test_user_id,
+            "send_dm_reply",
+            {"conv_id": dm_seed["conv_id"], "content": "AI chat direct reply"},
+        )
+        assert send_reply_result is not None
+
+        _, _, mark_dm_read_result = self._execute_tool_success(
+            auth_client,
+            db_connection,
+            test_user_id,
+            "mark_dm_read",
+            {"conv_id": dm_seed["conv_id"]},
+        )
+        assert mark_dm_read_result["marked_read"] is True
+
+        notification = self._ensure_notification(db_connection)
+        _, _, notification_result = self._execute_tool_success(
+            auth_client,
+            db_connection,
+            test_user_id,
+            "mark_notification_read",
+            {"notification_id": notification["id"]},
+        )
+        assert notification_result["marked_read"] is True
+        assert _q1(
+            db_connection,
+            """
+            SELECT id
+            FROM gm_user_notification_reads
+            WHERE user_id = %s AND notification_id = %s
+            """,
+            (test_user_id, notification["id"]),
+        ) is not None
 
 
 # ===========================================================================
@@ -1988,10 +2795,13 @@ class TestInteractiveCreateFlows:
     """Test complete interactive creation flows with multi-turn conversations
     and full database verification after plan confirmation."""
 
-    def _send_and_collect(self, auth_client, conv_id, content, timeout=90):
+    def _send_and_collect(self, auth_client, conv_id, content, timeout=90, extra_body=None):
+        body = {"content": content}
+        if extra_body:
+            body.update(extra_body)
         resp = auth_client.post(
             f"{API_PREFIX}/conversations/{conv_id}/messages",
-            json={"content": content},
+            json=body,
             stream=True,
             timeout=timeout,
         )
@@ -2105,6 +2915,106 @@ class TestInteractiveCreateFlows:
             (conv_id,),
         )
         assert len(logs) >= 1
+
+    @pytest.mark.requires_llm
+    def test_generate_video_structured_questionnaire_flow(self, auth_client, db_connection):
+        """Structured clients should receive questionnaire SSE and convert submission into a draft video plan."""
+        models_resp = auth_client.get("/api/v1/config/ai-models?model_type=video")
+        assert models_resp.status_code == 200, models_resp.text
+        models = extract_data(models_resp.json())
+        assert isinstance(models, list) and models, "Expected active video models for chat questionnaire test"
+
+        preferred_model = next((model for model in models if model.get("is_default")), models[0])
+        capabilities = preferred_model.get("capabilities") or {}
+        assert capabilities, "Video models should expose capabilities for questionnaire rendering"
+
+        resp = auth_client.post(
+            f"{API_PREFIX}/conversations",
+            json={"title": "Video Questionnaire Flow"},
+        )
+        conv_id = extract_data(resp.json())["id"]
+
+        events_1 = self._send_and_collect(
+            auth_client,
+            conv_id,
+            "帮我创建一个 AI 视频，但先只收集参数，不要直接执行。",
+            timeout=120,
+            extra_body={"ui_capabilities": {"questionnaire": True}},
+        )
+        questionnaire_events = [e for e in events_1 if e["event"] == "questionnaire"]
+        assert questionnaire_events, f"Expected questionnaire SSE event, got: {events_1}"
+
+        questionnaire = questionnaire_events[-1]["data"]
+        assert questionnaire["intent"] == "generate_video"
+        field_keys = [field["key"] for field in questionnaire["fields"]]
+        assert field_keys == ["orientation", "seconds", "prompt_mode", "prompt_input"]
+        assert questionnaire["auto_filled"], "Questionnaire should include auto-filled model metadata"
+        assert questionnaire["auto_filled"][0]["key"] == "ai_model_id"
+        assert questionnaire["auto_filled"][0]["value"] == preferred_model["id"]
+
+        answers = {
+            "orientation": capabilities["default_orientation"],
+            "seconds": capabilities["default_seconds"],
+            "prompt_mode": "topic_outline",
+            "prompt_input": "高端香水新品，冷色玻璃质感，微距镜头，水滴与高光细节",
+        }
+        display_message = (
+            f"{questionnaire['title']}：画面方向={answers['orientation']}；"
+            f"时长={answers['seconds']}；提示词模式={answers['prompt_mode']}；"
+            f"主题要点={answers['prompt_input']}"
+        )
+        submission = {
+            "questionnaire_id": questionnaire["questionnaire_id"],
+            "intent": questionnaire["intent"],
+            "answers": answers,
+            "auto_filled": {"ai_model_id": preferred_model["id"]},
+            "display_message": display_message,
+        }
+
+        events_2 = self._send_and_collect(
+            auth_client,
+            conv_id,
+            display_message,
+            timeout=120,
+            extra_body={
+                "ui_capabilities": {"questionnaire": True},
+                "questionnaire_submission": submission,
+            },
+        )
+        plan_id = self._extract_plan_id(events_2)
+        if plan_id is None:
+            follow_up_events = self._send_and_collect(
+                auth_client,
+                conv_id,
+                "请直接根据我刚才提交的视频参数生成待确认计划。",
+                timeout=120,
+                extra_body={"ui_capabilities": {"questionnaire": True}},
+            )
+            plan_id = self._extract_plan_id(follow_up_events)
+
+        assert plan_id is not None, "Structured questionnaire submission should produce a draft plan"
+
+        plan_row = _q1(db_connection, "SELECT * FROM gm_ai_plans WHERE id = %s", (plan_id,))
+        assert plan_row is not None
+        assert plan_row["status"] == "draft"
+
+        step_row = _q1(
+            db_connection,
+            """
+            SELECT tool_name, tool_params
+            FROM gm_ai_plan_steps
+            WHERE plan_id = %s
+            ORDER BY step_order
+            LIMIT 1
+            """,
+            (plan_id,),
+        )
+        assert step_row is not None
+        assert step_row["tool_name"] == "generate_video"
+        assert step_row["tool_params"]["ai_model_id"] == preferred_model["id"]
+        assert step_row["tool_params"]["orientation"] == answers["orientation"]
+        assert str(step_row["tool_params"]["seconds"]) == answers["seconds"]
+        assert step_row["tool_params"]["prompt"], "Plan step should contain executable prompt text"
 
     def test_create_social_group_interactive(self, auth_client, test_user_id, db_connection):
         """Multi-turn: create social group via AI chat -> confirm -> verify DB."""
