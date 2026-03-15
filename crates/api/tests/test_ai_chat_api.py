@@ -1782,6 +1782,40 @@ class TestToolDirectExecution:
         assert result["fields"]
         assert result["auto_filled"]
 
+    def test_tool_create_publish_plan_questionnaire(self, auth_client, test_user_id, db_connection):
+        """Test create_questionnaire_proposal with intent=create_publish_plan."""
+        _, _, result = self._execute_tool_success(
+            auth_client,
+            db_connection,
+            test_user_id,
+            "create_questionnaire_proposal",
+            {"intent": "create_publish_plan"},
+        )
+        assert result["intent"] == "create_publish_plan"
+        assert result["questionnaire_id"].startswith("create_publish_plan:")
+        assert result["fields"]
+        field_keys = [f["key"] for f in result["fields"]]
+        assert "platform_id" in field_keys, f"Expected platform_id field, got {field_keys}"
+        assert "content_prompt" in field_keys, f"Expected content_prompt field, got {field_keys}"
+
+    def test_tool_create_publish_plan_questionnaire_with_platform(self, auth_client, test_user_id, db_connection):
+        """Test create_publish_plan questionnaire with pre-filled platform_id."""
+        _, _, result = self._execute_tool_success(
+            auth_client,
+            db_connection,
+            test_user_id,
+            "create_questionnaire_proposal",
+            {"intent": "create_publish_plan", "platform_id": 2, "content_type": "video"},
+        )
+        assert result["intent"] == "create_publish_plan"
+        field_keys = [f["key"] for f in result["fields"]]
+        assert "platform_id" not in field_keys, "platform_id should be auto-filled, not a field"
+        assert "content_type" not in field_keys, "content_type should be auto-filled, not a field"
+        auto_keys = [a["key"] for a in result["auto_filled"]]
+        assert "platform_id" in auto_keys, f"Expected platform_id in auto_filled, got {auto_keys}"
+        assert "content_type" in auto_keys, f"Expected content_type in auto_filled, got {auto_keys}"
+        assert "content_prompt" in field_keys, "content_prompt should be a field"
+
     def test_tool_generate_video(self, auth_client, test_user_id, db_connection):
         """Test generate_video tool execution directly with mock providers."""
         models_resp = auth_client.get("/api/v1/config/ai-models?model_type=video")

@@ -13,7 +13,12 @@ impl ToolRegistry {
         state: &UserState,
     ) -> Result<String, ApiError> {
         match submission.intent.as_str() {
-            "generate_video" => Self::normalize_generate_video_questionnaire(submission, state).await,
+            "generate_video" => {
+                Self::normalize_generate_video_questionnaire(submission, state).await
+            }
+            "create_publish_plan" => {
+                Self::normalize_publish_plan_questionnaire(submission).await
+            }
             other => Err(ApiError::BadRequest(format!(
                 "Unsupported questionnaire intent: {}",
                 other
@@ -51,7 +56,7 @@ impl ToolRegistry {
             Self::def("retry_publish_plan", "重试失败的发布计划", SafetyLevel::Modify, json!({ "type": "object", "properties": { "plan_id": { "type": "integer" } }, "required": ["plan_id"] })),
             Self::def("delete_campaign", "删除营销活动", SafetyLevel::Destructive, json!({ "type": "object", "properties": { "campaign_id": { "type": "integer" } }, "required": ["campaign_id"] })),
             Self::def("create_plan_proposal", "为需要确认的操作创建执行计划。当需要执行创建、修改、删除等操作时，先调用此工具生成计划让用户确认", SafetyLevel::ReadOnly, json!({ "type": "object", "properties": { "title": { "type": "string", "description": "计划标题" }, "description": { "type": "string", "description": "计划描述" }, "steps": { "type": "array", "items": { "type": "object", "properties": { "tool_name": { "type": "string", "description": "要执行的工具名称" }, "tool_params": { "type": "object", "description": "工具参数" }, "description": { "type": "string", "description": "步骤描述" } }, "required": ["tool_name", "tool_params", "description"] } } }, "required": ["title", "description", "steps"] })),
-            Self::def("create_questionnaire_proposal", "为支持结构化 UI 的客户端创建问卷。当前主要用于 AI 视频生成的缺参收集，返回前端可直接渲染的字段定义", SafetyLevel::ReadOnly, json!({ "type": "object", "properties": { "intent": { "type": "string", "description": "问卷意图，目前支持 generate_video" }, "title": { "type": "string", "description": "可选问卷标题" }, "submit_label": { "type": "string", "description": "可选提交按钮文案" }, "ai_model_id": { "type": "integer", "description": "可选视频模型ID，不传则自动选择默认视频模型" }, "orientation": { "type": "string", "description": "已识别到的方向: landscape/portrait" }, "seconds": { "type": "string", "description": "已识别到的时长秒数" }, "prompt_mode": { "type": "string", "description": "提示词模式: topic_outline/full_prompt" }, "prompt_input": { "type": "string", "description": "已从用户输入提取的主题要点或完整 prompt" } }, "required": ["intent"] })),
+            Self::def("create_questionnaire_proposal", "为支持结构化 UI 的客户端创建问卷。用于 AI 视频生成和 AI 发布计划的缺参收集，返回前端可直接渲染的字段定义", SafetyLevel::ReadOnly, json!({ "type": "object", "properties": { "intent": { "type": "string", "description": "问卷意图: generate_video 或 create_publish_plan" }, "title": { "type": "string", "description": "可选问卷标题" }, "submit_label": { "type": "string", "description": "可选提交按钮文案" }, "ai_model_id": { "type": "integer", "description": "可选视频模型ID，不传则自动选择默认视频模型" }, "orientation": { "type": "string", "description": "已识别到的方向: landscape/portrait" }, "seconds": { "type": "string", "description": "已识别到的时长秒数" }, "prompt_mode": { "type": "string", "description": "提示词模式: topic_outline/full_prompt" }, "prompt_input": { "type": "string", "description": "已从用户输入提取的主题要点或完整 prompt" } }, "required": ["intent"] })),
             // ── Phase 1: Template tools ───────────────────────────
             Self::def("get_template_detail", "获取回复模板详情", SafetyLevel::ReadOnly, json!({ "type": "object", "properties": { "template_id": { "type": "integer", "description": "模板ID" } }, "required": ["template_id"] })),
             Self::def("create_template", "为营销活动创建回复模板", SafetyLevel::Create, json!({ "type": "object", "properties": { "campaign_id": { "type": "integer", "description": "所属活动ID" }, "name": { "type": "string", "description": "模板名称" }, "reply_prompt": { "type": "string", "description": "评论回复提示词" }, "dm_prompt": { "type": "string", "description": "私信回复提示词" }, "reply_post_prompt": { "type": "string", "description": "帖子回复提示词" }, "weight": { "type": "integer", "description": "权重，默认1" } }, "required": ["campaign_id"] })),
@@ -892,6 +897,7 @@ impl ToolRegistry {
 
     async fn build_questionnaire_proposal(
         params: &Value,
+        user_id: i32,
         state: &UserState,
     ) -> Result<QuestionnairePayload, ApiError> {
         match params
@@ -900,6 +906,9 @@ impl ToolRegistry {
             .unwrap_or_default()
         {
             "generate_video" => Self::build_generate_video_questionnaire(params, state).await,
+            "create_publish_plan" => {
+                Self::build_publish_plan_questionnaire(params, user_id, state).await
+            }
             other => Err(ApiError::BadRequest(format!(
                 "Unsupported questionnaire intent: {}",
                 other
@@ -1073,6 +1082,434 @@ impl ToolRegistry {
                 display: format!("{} ✓（ai_model_id={}）", selected_model.name, selected_model.id),
             }],
         })
+    }
+
+    fn content_types_for_platform(platform_id: i32) -> Vec<QuestionnaireOption> {
+        let pairs: Vec<(&str, &str)> = match platform_id {
+            1 => vec![
+                ("reddit_text", "文本帖 (reddit_text)"),
+                ("reddit_image", "图片帖 (reddit_image)"),
+                ("reddit_link", "链接帖 (reddit_link)"),
+            ],
+            2 => vec![("video", "视频 (video)")],
+            3 => vec![("post", "帖子 (post)"), ("reel", "Reel")],
+            4 => vec![
+                ("reel", "Reel"),
+                ("post", "帖子 (post)"),
+                ("story", "Story"),
+            ],
+            5 => vec![("post", "帖子 (post)")],
+            _ => vec![],
+        };
+        pairs
+            .into_iter()
+            .map(|(value, label)| QuestionnaireOption {
+                value: value.to_string(),
+                label: label.to_string(),
+                description: None,
+            })
+            .collect()
+    }
+
+    async fn build_publish_plan_questionnaire(
+        params: &Value,
+        user_id: i32,
+        state: &UserState,
+    ) -> Result<QuestionnairePayload, ApiError> {
+        let platforms = state
+            .platform_service
+            .get_all_platforms()
+            .await
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+
+        let groups_page = state
+            .social_group_service
+            .list_groups(
+                user_id,
+                crate::dto::common::PageRequest {
+                    page: 1,
+                    page_size: 100,
+                    group_id: None,
+                },
+            )
+            .await
+            .unwrap_or_else(|_| crate::dto::common::PageResponse::new(vec![], 0, 1, 100));
+
+        let chat_models = state
+            .config_service
+            .get_ai_models_by_type("chat")
+            .await
+            .unwrap_or_default();
+
+        let video_models = state
+            .config_service
+            .get_ai_models_by_type("video")
+            .await
+            .unwrap_or_default();
+
+        let pre_platform_id = params
+            .get("platform_id")
+            .and_then(|v| v.as_i64())
+            .map(|v| v as i32);
+        let pre_content_type = params
+            .get("content_type")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let pre_group_id = params
+            .get("group_id")
+            .and_then(|v| v.as_i64())
+            .map(|v| v as i32);
+        let pre_content_prompt = params
+            .get("content_prompt")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string);
+
+        let mut fields: Vec<QuestionnaireField> = Vec::new();
+        let mut auto_filled: Vec<QuestionnaireAutoFilled> = Vec::new();
+
+        // ── platform_id ──
+        if let Some(pid) = pre_platform_id {
+            let plat_name = platforms
+                .iter()
+                .find(|p| p.id == pid)
+                .map(|p| p.display_name.as_str())
+                .unwrap_or("Unknown");
+            auto_filled.push(QuestionnaireAutoFilled {
+                key: "platform_id".to_string(),
+                label: "平台".to_string(),
+                value: json!(pid),
+                display: format!("{} ✓（platform_id={}）", plat_name, pid),
+            });
+        } else {
+            let platform_options: Vec<QuestionnaireOption> = platforms
+                .iter()
+                .filter(|p| p.is_active)
+                .map(|p| QuestionnaireOption {
+                    value: p.id.to_string(),
+                    label: p.display_name.clone(),
+                    description: None,
+                })
+                .collect();
+            let control = if platform_options.len() <= 4 {
+                QuestionnaireControl::Choice
+            } else {
+                QuestionnaireControl::Combobox
+            };
+            fields.push(QuestionnaireField {
+                key: "platform_id".to_string(),
+                label: "选择平台".to_string(),
+                control,
+                required: true,
+                options: platform_options,
+                placeholder: Some("选择社交媒体平台".to_string()),
+                helper_text: None,
+                default_value: None,
+                max_length: None,
+            });
+        }
+
+        // ── content_type ──
+        if let Some(ref ct) = pre_content_type {
+            auto_filled.push(QuestionnaireAutoFilled {
+                key: "content_type".to_string(),
+                label: "内容类型".to_string(),
+                value: json!(ct),
+                display: format!("{} ✓", ct),
+            });
+        } else if let Some(pid) = pre_platform_id {
+            let ct_options = Self::content_types_for_platform(pid);
+            if ct_options.len() == 1 {
+                auto_filled.push(QuestionnaireAutoFilled {
+                    key: "content_type".to_string(),
+                    label: "内容类型".to_string(),
+                    value: json!(ct_options[0].value),
+                    display: format!("{} ✓（自动选择）", ct_options[0].label),
+                });
+            } else if !ct_options.is_empty() {
+                fields.push(QuestionnaireField {
+                    key: "content_type".to_string(),
+                    label: "内容类型".to_string(),
+                    control: QuestionnaireControl::Choice,
+                    required: true,
+                    options: ct_options,
+                    placeholder: None,
+                    helper_text: None,
+                    default_value: None,
+                    max_length: None,
+                });
+            }
+        } else {
+            fields.push(QuestionnaireField {
+                key: "content_type".to_string(),
+                label: "内容类型".to_string(),
+                control: QuestionnaireControl::Input,
+                required: true,
+                options: vec![],
+                placeholder: Some(
+                    "先选择平台后可选：video / post / reel / story / reddit_text 等".to_string(),
+                ),
+                helper_text: Some("请先选择平台，内容类型取决于平台".to_string()),
+                default_value: None,
+                max_length: None,
+            });
+        }
+
+        // ── group_id ──
+        let filtered_groups: Vec<_> = if let Some(pid) = pre_platform_id {
+            groups_page
+                .list
+                .iter()
+                .filter(|g| g.platform_id == pid)
+                .collect()
+        } else {
+            groups_page.list.iter().collect()
+        };
+
+        if let Some(gid) = pre_group_id {
+            let gname = filtered_groups
+                .iter()
+                .find(|g| g.id == gid)
+                .map(|g| g.group_name.as_str())
+                .unwrap_or("Unknown");
+            auto_filled.push(QuestionnaireAutoFilled {
+                key: "group_id".to_string(),
+                label: "账号分组".to_string(),
+                value: json!(gid),
+                display: format!("{} ✓（group_id={}）", gname, gid),
+            });
+        } else if filtered_groups.len() == 1 {
+            let g = filtered_groups[0];
+            auto_filled.push(QuestionnaireAutoFilled {
+                key: "group_id".to_string(),
+                label: "账号分组".to_string(),
+                value: json!(g.id),
+                display: format!(
+                    "{} ({} 个账号) ✓（自动选择）",
+                    g.group_name, g.account_count
+                ),
+            });
+        } else {
+            let group_options: Vec<QuestionnaireOption> = filtered_groups
+                .iter()
+                .map(|g| QuestionnaireOption {
+                    value: g.id.to_string(),
+                    label: format!("{} ({} 个账号)", g.group_name, g.account_count),
+                    description: None,
+                })
+                .collect();
+            let control = if group_options.len() <= 4 {
+                QuestionnaireControl::Choice
+            } else {
+                QuestionnaireControl::Combobox
+            };
+            fields.push(QuestionnaireField {
+                key: "group_id".to_string(),
+                label: "选择账号分组".to_string(),
+                control,
+                required: true,
+                options: group_options,
+                placeholder: Some("选择要发布的账号分组".to_string()),
+                helper_text: None,
+                default_value: None,
+                max_length: None,
+            });
+        }
+
+        // ── content_prompt ──
+        fields.push(QuestionnaireField {
+            key: "content_prompt".to_string(),
+            label: "内容主题 / 文案提示词".to_string(),
+            control: QuestionnaireControl::Textarea,
+            required: true,
+            options: vec![],
+            placeholder: Some("描述你想发布的内容主题、产品信息、目标受众等".to_string()),
+            helper_text: None,
+            default_value: pre_content_prompt.map(|v| json!(v)),
+            max_length: Some(2000),
+        });
+
+        // ── chat_ai_model_id (optional, combobox) ──
+        if !chat_models.is_empty() {
+            let default_chat = chat_models.first().map(|m| m.id);
+            let chat_options: Vec<QuestionnaireOption> = chat_models
+                .iter()
+                .map(|m| QuestionnaireOption {
+                    value: m.id.to_string(),
+                    label: m.name.clone(),
+                    description: None,
+                })
+                .collect();
+            fields.push(QuestionnaireField {
+                key: "chat_ai_model_id".to_string(),
+                label: "文案 AI 模型".to_string(),
+                control: if chat_options.len() <= 4 {
+                    QuestionnaireControl::Choice
+                } else {
+                    QuestionnaireControl::Combobox
+                },
+                required: false,
+                options: chat_options,
+                placeholder: Some("选择文案生成模型（可选）".to_string()),
+                helper_text: None,
+                default_value: default_chat.map(|id| json!(id.to_string())),
+                max_length: None,
+            });
+        }
+
+        // ── video_ai_model_id (only when content involves video) ──
+        let is_video_content = pre_content_type
+            .as_deref()
+            .map(|ct| ct == "video" || ct == "reel")
+            .unwrap_or(false);
+        if is_video_content && !video_models.is_empty() {
+            let default_video = preferred_video_model(&video_models).map(|m| m.id);
+            let video_options: Vec<QuestionnaireOption> = video_models
+                .iter()
+                .map(|m| QuestionnaireOption {
+                    value: m.id.to_string(),
+                    label: m.name.clone(),
+                    description: None,
+                })
+                .collect();
+            fields.push(QuestionnaireField {
+                key: "video_ai_model_id".to_string(),
+                label: "视频 AI 模型".to_string(),
+                control: if video_options.len() <= 4 {
+                    QuestionnaireControl::Choice
+                } else {
+                    QuestionnaireControl::Combobox
+                },
+                required: false,
+                options: video_options,
+                placeholder: Some("选择视频生成模型（可选）".to_string()),
+                helper_text: None,
+                default_value: default_video.map(|id| json!(id.to_string())),
+                max_length: None,
+            });
+        }
+
+        // ── auto_filled: plan name ──
+        auto_filled.push(QuestionnaireAutoFilled {
+            key: "name".to_string(),
+            label: "计划名称".to_string(),
+            value: json!("AI Chat 创建的计划"),
+            display: "AI Chat 创建的计划 ✓（默认）".to_string(),
+        });
+
+        Ok(QuestionnairePayload {
+            questionnaire_id: format!(
+                "create_publish_plan:{}",
+                pre_platform_id.unwrap_or(0)
+            ),
+            intent: "create_publish_plan".to_string(),
+            title: "创建 AI 发布计划".to_string(),
+            description: Some("选择平台、内容类型和目标账号分组，填写文案提示词后提交。".to_string()),
+            submit_label: "确认后创建计划".to_string(),
+            fields,
+            auto_filled,
+        })
+    }
+
+    async fn normalize_publish_plan_questionnaire(
+        submission: &QuestionnaireSubmission,
+    ) -> Result<String, ApiError> {
+        let merged = submission.merged_values();
+
+        let platform_id = merged
+            .get("platform_id")
+            .and_then(|v| v.as_str().or_else(|| v.as_i64().map(|_| "")))
+            .ok_or_else(|| ApiError::BadRequest("questionnaire platform_id required".into()))?;
+        let platform_id_str = if platform_id.is_empty() {
+            merged
+                .get("platform_id")
+                .and_then(|v| v.as_i64())
+                .map(|v| v.to_string())
+                .unwrap_or_default()
+        } else {
+            platform_id.to_string()
+        };
+
+        let content_type = merged
+            .get("content_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("video");
+        let group_id = merged
+            .get("group_id")
+            .and_then(|v| v.as_str().or_else(|| v.as_i64().map(|_| "")))
+            .map(|v| {
+                if v.is_empty() {
+                    merged
+                        .get("group_id")
+                        .and_then(|v| v.as_i64())
+                        .map(|v| v.to_string())
+                        .unwrap_or_default()
+                } else {
+                    v.to_string()
+                }
+            })
+            .unwrap_or_default();
+        let content_prompt = merged
+            .get("content_prompt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let chat_ai_model_id = merged
+            .get("chat_ai_model_id")
+            .and_then(|v| v.as_str().or_else(|| v.as_i64().map(|_| "")))
+            .map(|v| {
+                if v.is_empty() {
+                    merged
+                        .get("chat_ai_model_id")
+                        .and_then(|v| v.as_i64())
+                        .map(|v| v.to_string())
+                        .unwrap_or_default()
+                } else {
+                    v.to_string()
+                }
+            })
+            .unwrap_or_default();
+        let video_ai_model_id = merged
+            .get("video_ai_model_id")
+            .and_then(|v| v.as_str().or_else(|| v.as_i64().map(|_| "")))
+            .map(|v| {
+                if v.is_empty() {
+                    merged
+                        .get("video_ai_model_id")
+                        .and_then(|v| v.as_i64())
+                        .map(|v| v.to_string())
+                        .unwrap_or_default()
+                } else {
+                    v.to_string()
+                }
+            })
+            .unwrap_or_default();
+
+        let mut parts = vec![
+            format!("结构化发布计划问卷已提交：intent=create_publish_plan"),
+            format!("platform_id={}", platform_id_str),
+            format!("content_type={}", content_type),
+        ];
+        if !group_id.is_empty() {
+            parts.push(format!("group_id={}", group_id));
+        }
+        if !content_prompt.is_empty() {
+            let truncated = if content_prompt.len() > 500 {
+                format!("{}...", &content_prompt[..500])
+            } else {
+                content_prompt.to_string()
+            };
+            parts.push(format!("content_prompt={}", truncated));
+        }
+        if !chat_ai_model_id.is_empty() {
+            parts.push(format!("chat_ai_model_id={}", chat_ai_model_id));
+        }
+        if !video_ai_model_id.is_empty() {
+            parts.push(format!("video_ai_model_id={}", video_ai_model_id));
+        }
+        parts.push("请直接基于这些参数生成待确认的 create_plan_proposal，步骤中调用 create_publish_plan。".to_string());
+
+        Ok(parts.join("，"))
     }
 
     fn choose_allowed_string<'a>(
@@ -1444,7 +1881,8 @@ impl ToolRegistry {
                 json!({ "deleted": true, "campaign_id": id, "final_status": campaign.status })
             }
             "create_questionnaire_proposal" => {
-                let questionnaire = Self::build_questionnaire_proposal(&params, state).await?;
+                let questionnaire =
+                    Self::build_questionnaire_proposal(&params, user_id, state).await?;
                 serde_json::to_value(questionnaire).unwrap_or_default()
             }
             "create_plan_proposal" => {
