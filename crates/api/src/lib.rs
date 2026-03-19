@@ -6,6 +6,7 @@ pub mod dto;
 pub mod error;
 pub mod handler;
 pub mod middleware;
+pub mod platform_routing;
 pub mod protocol_gen;
 pub mod repository;
 pub mod response;
@@ -108,13 +109,13 @@ async fn init_nats_dm() -> Result<NatsDmService, String> {
 /// Reads REDIS_URL from env; falls back to host.docker.internal:6379
 /// (same Redis instance used by glance_mind_scheduler).
 fn init_redis() -> Result<RedisService, String> {
-    let redis_url = std::env::var("REDIS_URL")
-        .unwrap_or_else(|_| "redis://host.docker.internal:6379".into());
+    let redis_url =
+        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://host.docker.internal:6379".into());
 
     tracing::info!("Connecting to Redis at {redis_url}");
 
-    let client = redis::Client::open(redis_url.as_str())
-        .map_err(|e| format!("Redis client create: {e}"))?;
+    let client =
+        redis::Client::open(redis_url.as_str()).map_err(|e| format!("Redis client create: {e}"))?;
 
     let mut conn = client
         .get_connection()

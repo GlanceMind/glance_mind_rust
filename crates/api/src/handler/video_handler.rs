@@ -153,7 +153,11 @@ pub async fn create_video(
     // (start-end, jimeng) that use the "start_frame"/"end_frame" field names directly.
 
     // Validate required fields: need at least a prompt or any image
-    if prompt.is_none() && image_data.is_none() && start_frame_data.is_none() && reference_images.is_empty() {
+    if prompt.is_none()
+        && image_data.is_none()
+        && start_frame_data.is_none()
+        && reference_images.is_empty()
+    {
         return Err(ApiError::BusinessError(
             BusinessError::PromptOrImageRequired,
         ));
@@ -188,7 +192,12 @@ pub async fn create_video(
     // always matches the actual model selected by the request body.
     let charging_context = state
         .charging_manager
-        .prepare_charging(user.id, ActionType::VideoGenerate, request.ai_model_id, None)
+        .prepare_charging(
+            user.id,
+            ActionType::VideoGenerate,
+            request.ai_model_id,
+            None,
+        )
         .await?;
 
     // Call service to process

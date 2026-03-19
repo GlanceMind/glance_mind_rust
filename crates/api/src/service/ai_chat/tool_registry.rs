@@ -1,7 +1,7 @@
 use super::types::*;
 use crate::error::api_error::ApiError;
-use crate::state::user_state::UserState;
 use crate::service::video_capabilities::{build_video_model_capabilities, preferred_video_model};
+use crate::state::user_state::UserState;
 use glance_mind_db::entity::{platform::Platform, region::Region};
 use serde_json::{json, Value};
 
@@ -16,9 +16,7 @@ impl ToolRegistry {
             "generate_video" => {
                 Self::normalize_generate_video_questionnaire(submission, state).await
             }
-            "create_publish_plan" => {
-                Self::normalize_publish_plan_questionnaire(submission).await
-            }
+            "create_publish_plan" => Self::normalize_publish_plan_questionnaire(submission).await,
             other => Err(ApiError::BadRequest(format!(
                 "Unsupported questionnaire intent: {}",
                 other
@@ -130,7 +128,9 @@ impl ToolRegistry {
             .get_ai_model_by_id(ai_model_id)
             .await
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?
-            .ok_or_else(|| ApiError::BadRequest(format!("AI model id={} not found", ai_model_id)))?;
+            .ok_or_else(|| {
+                ApiError::BadRequest(format!("AI model id={} not found", ai_model_id))
+            })?;
 
         let capabilities = build_video_model_capabilities(&model);
         let orientation = merged
@@ -648,7 +648,12 @@ impl ToolRegistry {
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
         let selected_model = Self::extract_number_after_labels(context, &["ai_model_id="])
             .map(|value| value as i32)
-            .and_then(|model_id| video_models.iter().find(|model| model.id == model_id).cloned())
+            .and_then(|model_id| {
+                video_models
+                    .iter()
+                    .find(|model| model.id == model_id)
+                    .cloned()
+            })
             .or_else(|| preferred_video_model(&video_models).cloned())
             .ok_or_else(|| ApiError::BadRequest("No active video models available".into()))?;
 
@@ -684,7 +689,11 @@ impl ToolRegistry {
                 "prompt_input=",
             ],
         )
-        .ok_or_else(|| ApiError::BadRequest("create_plan_proposal could not infer generate_video.prompt".into()))?;
+        .ok_or_else(|| {
+            ApiError::BadRequest(
+                "create_plan_proposal could not infer generate_video.prompt".into(),
+            )
+        })?;
 
         Ok(json!({
             "prompt": prompt,
@@ -988,7 +997,10 @@ impl ToolRegistry {
                 .and_then(|value| value.as_str())
                 .unwrap_or("确认视频生成参数")
                 .to_string(),
-            description: Some("选择画面方向、时长和提示词模式后提交，我会先生成待确认计划，再开始创建任务。".to_string()),
+            description: Some(
+                "选择画面方向、时长和提示词模式后提交，我会先生成待确认计划，再开始创建任务。"
+                    .to_string(),
+            ),
             submit_label: params
                 .get("submit_label")
                 .and_then(|value| value.as_str())
@@ -1069,7 +1081,8 @@ impl ToolRegistry {
                         "请填写完整 prompt，或填写主题/产品 + 风格 + 关键画面/镜头".to_string(),
                     ),
                     helper_text: Some(
-                        "如果选择“你给我主题要点”，请至少提供主题/产品、风格和关键镜头。".to_string(),
+                        "如果选择“你给我主题要点”，请至少提供主题/产品、风格和关键镜头。"
+                            .to_string(),
                     ),
                     default_value: prompt_input.map(|value| json!(value)),
                     max_length: Some(2000),
@@ -1079,7 +1092,10 @@ impl ToolRegistry {
                 key: "ai_model_id".to_string(),
                 label: "视频模型".to_string(),
                 value: json!(selected_model.id),
-                display: format!("{} ✓（ai_model_id={}）", selected_model.name, selected_model.id),
+                display: format!(
+                    "{} ✓（ai_model_id={}）",
+                    selected_model.name, selected_model.id
+                ),
             }],
         })
     }
@@ -1399,13 +1415,12 @@ impl ToolRegistry {
         });
 
         Ok(QuestionnairePayload {
-            questionnaire_id: format!(
-                "create_publish_plan:{}",
-                pre_platform_id.unwrap_or(0)
-            ),
+            questionnaire_id: format!("create_publish_plan:{}", pre_platform_id.unwrap_or(0)),
             intent: "create_publish_plan".to_string(),
             title: "创建 AI 发布计划".to_string(),
-            description: Some("选择平台、内容类型和目标账号分组，填写文案提示词后提交。".to_string()),
+            description: Some(
+                "选择平台、内容类型和目标账号分组，填写文案提示词后提交。".to_string(),
+            ),
             submit_label: "确认后创建计划".to_string(),
             fields,
             auto_filled,
@@ -1507,7 +1522,10 @@ impl ToolRegistry {
         if !video_ai_model_id.is_empty() {
             parts.push(format!("video_ai_model_id={}", video_ai_model_id));
         }
-        parts.push("请直接基于这些参数生成待确认的 create_plan_proposal，步骤中调用 create_publish_plan。".to_string());
+        parts.push(
+            "请直接基于这些参数生成待确认的 create_plan_proposal，步骤中调用 create_publish_plan。"
+                .to_string(),
+        );
 
         Ok(parts.join("，"))
     }
@@ -2707,8 +2725,8 @@ mod tests {
     #[test]
     fn tool_count_matches_expected() {
         let defs = ToolRegistry::definitions();
-        // 27 original + 16 Phase 1 + 11 Phase 2 = 54
-        assert_eq!(defs.len(), 54, "Expected 54 tools (27 + 16 + 11)");
+        // 27 original + 16 Phase 1 + 12 Phase 2 = 55
+        assert_eq!(defs.len(), 55, "Expected 55 tools (27 + 16 + 12)");
     }
 
     #[test]

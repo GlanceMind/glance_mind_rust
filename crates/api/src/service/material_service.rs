@@ -43,8 +43,12 @@ impl MaterialService {
 
     fn is_retryable_error(err: &ApiError) -> bool {
         let msg = format!("{:?}", err);
-        msg.contains("429") || msg.contains("Too Many Requests") || msg.contains("rate")
-            || msg.contains("负载已饱和") || msg.contains("503") || msg.contains("Service Unavailable")
+        msg.contains("429")
+            || msg.contains("Too Many Requests")
+            || msg.contains("rate")
+            || msg.contains("负载已饱和")
+            || msg.contains("503")
+            || msg.contains("Service Unavailable")
     }
 
     /// Spawn background AI analysis task with retry and concurrency limiting
@@ -101,10 +105,15 @@ impl MaterialService {
                         }
                         return;
                     }
-                    Ok(Err(ref e)) if Self::is_retryable_error(e) && attempt < AI_ANALYSIS_MAX_RETRIES => {
+                    Ok(Err(ref e))
+                        if Self::is_retryable_error(e) && attempt < AI_ANALYSIS_MAX_RETRIES =>
+                    {
                         warn!(
                             "Retryable AI analysis error: material_id={}, attempt={}/{}, error={}",
-                            material_id, attempt + 1, AI_ANALYSIS_MAX_RETRIES, e
+                            material_id,
+                            attempt + 1,
+                            AI_ANALYSIS_MAX_RETRIES,
+                            e
                         );
                         continue;
                     }
@@ -118,7 +127,9 @@ impl MaterialService {
                     Err(_) if attempt < AI_ANALYSIS_MAX_RETRIES => {
                         warn!(
                             "AI analysis timed out, will retry: material_id={}, attempt={}/{}",
-                            material_id, attempt + 1, AI_ANALYSIS_MAX_RETRIES
+                            material_id,
+                            attempt + 1,
+                            AI_ANALYSIS_MAX_RETRIES
                         );
                         continue;
                     }
@@ -146,14 +157,18 @@ impl MaterialService {
             .await
             .map_err(|e| match e {
                 DieselError::NotFound => ApiError::BusinessError(
-                    crate::error::business_error::BusinessError::ResourceNotFound("Material".to_string()),
+                    crate::error::business_error::BusinessError::ResourceNotFound(
+                        "Material".to_string(),
+                    ),
                 ),
                 _ => ApiError::from(DbError::SomethingWentWrong(e.to_string())),
             })?;
 
         info!(
             "Manual re-analysis triggered: material_id={}, user_id={}, has_prompt={}",
-            id, user_id, material.prompt.is_some()
+            id,
+            user_id,
+            material.prompt.is_some()
         );
 
         self.spawn_background_analysis(id, material.video_url.clone());
@@ -212,11 +227,18 @@ impl MaterialService {
 
         let (materials, total) = self
             .material_repo
-            .list_by_user(user_id, page as i64, page_size as i64, query.tag.clone(), query.search.clone())
+            .list_by_user(
+                user_id,
+                page as i64,
+                page_size as i64,
+                query.tag.clone(),
+                query.search.clone(),
+            )
             .await
             .map_err(|e| ApiError::from(DbError::SomethingWentWrong(e.to_string())))?;
 
-        let list: Vec<MaterialListItem> = materials.into_iter().map(MaterialListItem::from).collect();
+        let list: Vec<MaterialListItem> =
+            materials.into_iter().map(MaterialListItem::from).collect();
 
         Ok(MaterialListResponse {
             list,
@@ -227,18 +249,16 @@ impl MaterialService {
     }
 
     /// Get material by ID
-    pub async fn get_material(
-        &self,
-        id: i32,
-        user_id: i32,
-    ) -> Result<MaterialDetail, ApiError> {
+    pub async fn get_material(&self, id: i32, user_id: i32) -> Result<MaterialDetail, ApiError> {
         let material = self
             .material_repo
             .find_by_id_and_user(id, user_id)
             .await
             .map_err(|e| match e {
                 DieselError::NotFound => ApiError::BusinessError(
-                    crate::error::business_error::BusinessError::ResourceNotFound("Material".to_string()),
+                    crate::error::business_error::BusinessError::ResourceNotFound(
+                        "Material".to_string(),
+                    ),
                 ),
                 _ => ApiError::from(DbError::SomethingWentWrong(e.to_string())),
             })?;
@@ -294,7 +314,9 @@ impl MaterialService {
             .await
             .map_err(|e| match e {
                 DieselError::NotFound => ApiError::BusinessError(
-                    crate::error::business_error::BusinessError::ResourceNotFound("Material".to_string()),
+                    crate::error::business_error::BusinessError::ResourceNotFound(
+                        "Material".to_string(),
+                    ),
                 ),
                 _ => ApiError::from(DbError::SomethingWentWrong(e.to_string())),
             })?;
@@ -331,10 +353,7 @@ impl MaterialService {
         task_no: &str,
     ) -> Result<MaterialDetail, ApiError> {
         // Get video_case by task_no using video_case_service
-        let video_case_detail = self
-            .video_case_service
-            .get_by_task_no(task_no)
-            .await?;
+        let video_case_detail = self.video_case_service.get_by_task_no(task_no).await?;
 
         // Extract data from video_case_detail
         // Find the first video with video_url

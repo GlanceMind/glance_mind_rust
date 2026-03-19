@@ -536,7 +536,7 @@ class TestFinalizePlan:
 
         wallet = get_wallet(db_cursor, user_id)
         assert wallet['frozen_points'] == Decimal('0')
-        assert wallet['balance_points'] == Decimal('469.00')
+        assert wallet['balance_points'] == Decimal('499.00')
 
         cleanup_plan(db_cursor, plan_id)
         print("  OK: finalize_partial → refund=30.00")

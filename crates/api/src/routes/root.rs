@@ -37,7 +37,9 @@ pub fn routes(
         }
 
         // Background self-healing for lost payment callbacks.
-        user_state.wallet_service.spawn_recharge_reconciliation_loop();
+        user_state
+            .wallet_service
+            .spawn_recharge_reconciliation_loop();
 
         // /api/v1
         Router::new()
@@ -69,9 +71,7 @@ pub fn routes(
                                 user_state.clone(),
                                 auth_middleware::auth,
                             ))
-                            .layer(middleware::from_fn(
-                                permission::permission_middleware,
-                            ))
+                            .layer(middleware::from_fn(permission::permission_middleware))
                             .layer(axum::Extension(user_state.campaign_service.clone()))
                             .layer(axum::Extension(user_state.agent_service.clone()))
                             .layer(axum::Extension(user_state.clone())),
@@ -172,9 +172,7 @@ pub fn routes(
                                 user_state.clone(),
                                 auth_middleware::auth,
                             ))
-                            .layer(middleware::from_fn(
-                                permission::permission_middleware,
-                            ))
+                            .layer(middleware::from_fn(permission::permission_middleware))
                             .layer(middleware::from_fn_with_state(
                                 user_state.clone(),
                                 charging::charging_middleware,
@@ -192,9 +190,7 @@ pub fn routes(
                                 user_state.clone(),
                                 auth_middleware::auth,
                             ))
-                            .layer(middleware::from_fn(
-                                permission::permission_middleware,
-                            ))
+                            .layer(middleware::from_fn(permission::permission_middleware))
                             .layer(middleware::from_fn_with_state(
                                 user_state.clone(),
                                 charging::charging_middleware,
@@ -240,9 +236,7 @@ pub fn routes(
                                 user_state.clone(),
                                 auth_middleware::auth,
                             ))
-                            .layer(middleware::from_fn(
-                                permission::permission_middleware,
-                            ))
+                            .layer(middleware::from_fn(permission::permission_middleware))
                             .layer(middleware::from_fn_with_state(
                                 user_state.clone(),
                                 charging::charging_middleware,
@@ -285,9 +279,7 @@ pub fn routes(
                                 user_state.clone(),
                                 auth_middleware::auth,
                             ))
-                            .layer(middleware::from_fn(
-                                permission::permission_middleware,
-                            ))
+                            .layer(middleware::from_fn(permission::permission_middleware))
                             .layer(middleware::from_fn_with_state(
                                 user_state.clone(),
                                 charging::charging_middleware,
@@ -309,24 +301,21 @@ pub fn routes(
                                 user_state.clone(),
                                 auth_middleware::auth,
                             ))
-                            .layer(middleware::from_fn(
-                                permission::permission_middleware,
-                            ))
+                            .layer(middleware::from_fn(permission::permission_middleware))
                             .layer(axum::Extension(user_state.clone())),
                     )
                     .with_state(user_state.clone()),
             )
             .nest(
                 "/notifications",
-                crate::routes::notification::notification_routes(db_conn.clone())
-                    .layer(
-                        ServiceBuilder::new()
-                            .layer(middleware::from_fn_with_state(
-                                user_state.clone(),
-                                auth_middleware::auth,
-                            ))
-                            .layer(axum::Extension(user_state.clone())),
-                    ),
+                crate::routes::notification::notification_routes(db_conn.clone()).layer(
+                    ServiceBuilder::new()
+                        .layer(middleware::from_fn_with_state(
+                            user_state.clone(),
+                            auth_middleware::auth,
+                        ))
+                        .layer(axum::Extension(user_state.clone())),
+                ),
             )
             // AI Publish User Routes (requires auth + permission)
             .merge(
@@ -337,23 +326,15 @@ pub fn routes(
                                 user_state.clone(),
                                 auth_middleware::auth,
                             ))
-                            .layer(middleware::from_fn(
-                                permission::permission_middleware,
-                            ))
+                            .layer(middleware::from_fn(permission::permission_middleware))
                             .layer(axum::Extension(user_state.clone())),
                     )
                     .with_state(user_state.clone()),
             )
             // AI Publish Internal Routes (for Scheduler - no auth for now)
-            .merge(
-                crate::routes::aipub::aipub_internal_routes()
-                    .with_state(user_state.clone()),
-            )
+            .merge(crate::routes::aipub::aipub_internal_routes().with_state(user_state.clone()))
             // AI Publish Public Routes (for Executor - no auth for now)
-            .merge(
-                crate::routes::aipub::aipub_public_routes()
-                    .with_state(user_state.clone()),
-            )
+            .merge(crate::routes::aipub::aipub_public_routes().with_state(user_state.clone()))
             // DM Group Control Routes (requires auth + permission)
             .nest(
                 "/dm",
@@ -364,9 +345,7 @@ pub fn routes(
                                 user_state.clone(),
                                 auth_middleware::auth,
                             ))
-                            .layer(middleware::from_fn(
-                                permission::permission_middleware,
-                            ))
+                            .layer(middleware::from_fn(permission::permission_middleware))
                             .layer(axum::Extension(user_state.clone())),
                     )
                     .with_state(user_state.clone()),

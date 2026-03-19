@@ -1,7 +1,9 @@
 use crate::config::database::DBPool;
 use diesel::prelude::*;
 use diesel::result::Error as DieselError;
-use glance_mind_db::entity::notification::{NewUserNotificationRead, Notification, UserNotificationRead};
+use glance_mind_db::entity::notification::{
+    NewUserNotificationRead, Notification, UserNotificationRead,
+};
 use glance_mind_db::schema::{gm_notifications, gm_user_notification_reads};
 
 #[derive(Clone)]

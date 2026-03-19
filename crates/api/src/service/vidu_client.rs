@@ -40,27 +40,36 @@ impl ViduClient {
     pub async fn upload_image(&self, data: &[u8]) -> Result<String, ApiError> {
         // Step 1: Init
         let init_url = format!("{}/tools/v2/files/uploads", self.base_url);
-        let init_resp = self.client.post(&init_url)
+        let init_resp = self
+            .client
+            .post(&init_url)
             .header("Authorization", format!("Token {}", self.api_key))
             .json(&serde_json::json!({"scene": "vidu"}))
-            .send().await
+            .send()
+            .await
             .map_err(|e| self.ext_err(format!("upload init: {}", e)))?;
         if !init_resp.status().is_success() {
             let body = init_resp.text().await.unwrap_or_default();
             return Err(self.ext_err(format!("upload init HTTP error: {}", body)));
         }
-        let init: ViduUploadInit = init_resp.json().await
+        let init: ViduUploadInit = init_resp
+            .json()
+            .await
             .map_err(|e| self.ext_err(format!("parse upload init: {}", e)))?;
 
         // Step 2: PUT binary
-        let put_resp = self.client.put(&init.put_url)
+        let put_resp = self
+            .client
+            .put(&init.put_url)
             .body(data.to_vec())
-            .send().await
+            .send()
+            .await
             .map_err(|e| self.ext_err(format!("upload PUT: {}", e)))?;
         if !put_resp.status().is_success() {
             return Err(self.ext_err("upload PUT failed".into()));
         }
-        let etag = put_resp.headers()
+        let etag = put_resp
+            .headers()
             .get("etag")
             .and_then(|v| v.to_str().ok())
             .map(|s| s.trim_matches('"').to_string())
@@ -71,23 +80,31 @@ impl ViduClient {
             "{}/tools/v2/files/uploads/{}/finish",
             self.base_url, init.resource_id
         );
-        let finish_resp = self.client.put(&finish_url)
+        let finish_resp = self
+            .client
+            .put(&finish_url)
             .header("Authorization", format!("Token {}", self.api_key))
             .json(&serde_json::json!({"etag": etag}))
-            .send().await
+            .send()
+            .await
             .map_err(|e| self.ext_err(format!("upload finish: {}", e)))?;
         if !finish_resp.status().is_success() {
             let body = finish_resp.text().await.unwrap_or_default();
             return Err(self.ext_err(format!("upload finish error: {}", body)));
         }
-        let finish: ViduUploadFinish = finish_resp.json().await
+        let finish: ViduUploadFinish = finish_resp
+            .json()
+            .await
             .map_err(|e| self.ext_err(format!("parse upload finish: {}", e)))?;
 
         Ok(finish.uri)
     }
 
     /// Submit text-to-video generation
-    pub async fn text_to_video(&self, params: ViduGenerateParams) -> Result<ViduTaskHandle, ApiError> {
+    pub async fn text_to_video(
+        &self,
+        params: ViduGenerateParams,
+    ) -> Result<ViduTaskHandle, ApiError> {
         self.post_generation("/ent/v2/text2video", &serde_json::json!({
             "model": params.model,
             "style": params.style.unwrap_or_else(|| "general".to_string()),
@@ -100,7 +117,11 @@ impl ViduClient {
     }
 
     /// Submit image-to-video generation (image must be uploaded first via upload_image)
-    pub async fn image_to_video(&self, params: ViduGenerateParams, image_uri: String) -> Result<ViduTaskHandle, ApiError> {
+    pub async fn image_to_video(
+        &self,
+        params: ViduGenerateParams,
+        image_uri: String,
+    ) -> Result<ViduTaskHandle, ApiError> {
         self.post_generation("/ent/v2/img2video", &serde_json::json!({
             "model": params.model,
             "images": [image_uri],
@@ -112,7 +133,11 @@ impl ViduClient {
     }
 
     /// Start-end-to-video generation (two frames: start + end)
-    pub async fn start_end_to_video(&self, params: ViduGenerateParams, images: Vec<String>) -> Result<ViduTaskHandle, ApiError> {
+    pub async fn start_end_to_video(
+        &self,
+        params: ViduGenerateParams,
+        images: Vec<String>,
+    ) -> Result<ViduTaskHandle, ApiError> {
         self.post_generation("/ent/v2/start-end2video", &serde_json::json!({
             "model": params.model,
             "images": images,
@@ -124,7 +149,11 @@ impl ViduClient {
     }
 
     /// Reference-to-video generation (1-3 reference images)
-    pub async fn reference_to_video(&self, params: ViduGenerateParams, images: Vec<String>) -> Result<ViduTaskHandle, ApiError> {
+    pub async fn reference_to_video(
+        &self,
+        params: ViduGenerateParams,
+        images: Vec<String>,
+    ) -> Result<ViduTaskHandle, ApiError> {
         self.post_generation("/ent/v2/reference2video", &serde_json::json!({
             "model": params.model,
             "images": images,
@@ -164,10 +193,12 @@ impl ViduClient {
         let per_frame_duration =
             (params.duration as usize / keyframe_images.len()).clamp(2, 7) as i32;
         let prompts = keyframe_prompts.unwrap_or_default();
-        let image_settings: Vec<serde_json::Value> = keyframe_images.iter()
+        let image_settings: Vec<serde_json::Value> = keyframe_images
+            .iter()
             .enumerate()
             .map(|(i, uri)| {
-                let kf_prompt = prompts.get(i)
+                let kf_prompt = prompts
+                    .get(i)
                     .filter(|s| !s.is_empty())
                     .cloned()
                     .unwrap_or_else(|| params.prompt.clone());
@@ -178,85 +209,128 @@ impl ViduClient {
                 })
             })
             .collect();
-        self.post_generation("/ent/v2/multiframe", &serde_json::json!({
-            "model": params.model,
-            "start_image": start_image,
-            "image_settings": image_settings,
-            "resolution": params.resolution.unwrap_or_else(|| "720p".to_string()),
-        })).await
+        self.post_generation(
+            "/ent/v2/multiframe",
+            &serde_json::json!({
+                "model": params.model,
+                "start_image": start_image,
+                "image_settings": image_settings,
+                "resolution": params.resolution.unwrap_or_else(|| "720p".to_string()),
+            }),
+        )
+        .await
     }
 
     /// Template-to-video generation
     pub async fn template_to_video(
-        &self, template: String, images: Vec<String>,
-        prompt: Option<String>, aspect_ratio: Option<String>,
+        &self,
+        template: String,
+        images: Vec<String>,
+        prompt: Option<String>,
+        aspect_ratio: Option<String>,
     ) -> Result<ViduTaskHandle, ApiError> {
         let mut body = serde_json::json!({
             "template": template,
             "images": images,
         });
-        if let Some(p) = prompt { body["prompt"] = serde_json::json!(p); }
-        if let Some(ar) = aspect_ratio { body["aspect_ratio"] = serde_json::json!(ar); }
+        if let Some(p) = prompt {
+            body["prompt"] = serde_json::json!(p);
+        }
+        if let Some(ar) = aspect_ratio {
+            body["aspect_ratio"] = serde_json::json!(ar);
+        }
         self.post_generation("/ent/v2/template2video", &body).await
     }
 
     /// One-click general film generation (通用成片).
     /// Uses `/ent/v2/template2video` with `template: "general"`.
     pub async fn general_film(
-        &self, images: Vec<String>, prompt: Option<String>,
-        aspect_ratio: Option<String>, bgm: Option<bool>,
+        &self,
+        images: Vec<String>,
+        prompt: Option<String>,
+        aspect_ratio: Option<String>,
+        bgm: Option<bool>,
     ) -> Result<ViduTaskHandle, ApiError> {
         let mut body = serde_json::json!({
             "template": "general",
             "images": images,
         });
-        if let Some(p) = prompt { body["prompt"] = serde_json::json!(p); }
-        if let Some(ar) = aspect_ratio { body["aspect_ratio"] = serde_json::json!(ar); }
-        if let Some(b) = bgm { body["bgm"] = serde_json::json!(b); }
+        if let Some(p) = prompt {
+            body["prompt"] = serde_json::json!(p);
+        }
+        if let Some(ar) = aspect_ratio {
+            body["aspect_ratio"] = serde_json::json!(ar);
+        }
+        if let Some(b) = bgm {
+            body["bgm"] = serde_json::json!(b);
+        }
         self.post_generation("/ent/v2/template2video", &body).await
     }
 
     /// One-click ad/e-commerce film generation (电商成片).
     /// Uses `/ent/v2/template2video` with `template: "ad_film"`.
     pub async fn ad_film(
-        &self, images: Vec<String>, prompt: Option<String>,
-        aspect_ratio: Option<String>, bgm: Option<bool>,
+        &self,
+        images: Vec<String>,
+        prompt: Option<String>,
+        aspect_ratio: Option<String>,
+        bgm: Option<bool>,
     ) -> Result<ViduTaskHandle, ApiError> {
         let mut body = serde_json::json!({
             "template": "ad_film",
             "images": images,
         });
-        if let Some(p) = prompt { body["prompt"] = serde_json::json!(p); }
-        if let Some(ar) = aspect_ratio { body["aspect_ratio"] = serde_json::json!(ar); }
-        if let Some(b) = bgm { body["bgm"] = serde_json::json!(b); }
+        if let Some(p) = prompt {
+            body["prompt"] = serde_json::json!(p);
+        }
+        if let Some(ar) = aspect_ratio {
+            body["aspect_ratio"] = serde_json::json!(ar);
+        }
+        if let Some(b) = bgm {
+            body["bgm"] = serde_json::json!(b);
+        }
         self.post_generation("/ent/v2/template2video", &body).await
     }
 
     /// Get task status
     pub async fn get_task_status(&self, task_id: &str) -> Result<ViduTaskStatus, ApiError> {
         let url = format!("{}/ent/v2/tasks/{}/creations", self.base_url, task_id);
-        let resp = self.client.get(&url)
+        let resp = self
+            .client
+            .get(&url)
             .header("Authorization", format!("Token {}", self.api_key))
-            .send().await
+            .send()
+            .await
             .map_err(|e| self.ext_err(format!("get task status: {}", e)))?;
         if !resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
             return Err(self.ext_err(format!("get task status HTTP error: {}", body)));
         }
-        resp.json().await
+        resp.json()
+            .await
             .map_err(|e| self.ext_err(format!("parse task status: {}", e)))
     }
 
-    async fn post_generation(&self, path: &str, body: &serde_json::Value) -> Result<ViduTaskHandle, ApiError> {
+    async fn post_generation(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<ViduTaskHandle, ApiError> {
         let url = format!("{}{}", self.base_url, path);
         info!("Vidu API: POST {}", path);
-        let resp = self.client.post(&url)
+        let resp = self
+            .client
+            .post(&url)
             .header("Authorization", format!("Token {}", self.api_key))
             .json(body)
-            .send().await
+            .send()
+            .await
             .map_err(|e| self.ext_err(format!("API call: {}", e)))?;
         let status = resp.status();
-        let text = resp.text().await.map_err(|e| self.ext_err(format!("read response: {}", e)))?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| self.ext_err(format!("read response: {}", e)))?;
         if !status.is_success() {
             return Err(self.ext_err(format!("HTTP {}: {}", status, &text[..text.len().min(300)])));
         }
@@ -269,9 +343,10 @@ impl ViduClient {
     }
 
     fn ext_err(&self, msg: String) -> ApiError {
-        ApiError::InfrastructureError(InfrastructureError::ExternalApiRequestFailed(
-            format!("Vidu: {}", msg)
-        ))
+        ApiError::InfrastructureError(InfrastructureError::ExternalApiRequestFailed(format!(
+            "Vidu: {}",
+            msg
+        )))
     }
 }
 
@@ -294,9 +369,22 @@ pub struct ViduTaskHandle {
     pub state: String,
 }
 
-#[derive(Debug, Deserialize)] struct ViduUploadInit { resource_id: String, put_url: String, #[allow(dead_code)] id: String }
-#[derive(Debug, Deserialize)] struct ViduUploadFinish { uri: String }
-#[derive(Debug, Deserialize)] struct ViduTaskResponse { task_id: String, state: String }
+#[derive(Debug, Deserialize)]
+struct ViduUploadInit {
+    resource_id: String,
+    put_url: String,
+    #[allow(dead_code)]
+    id: String,
+}
+#[derive(Debug, Deserialize)]
+struct ViduUploadFinish {
+    uri: String,
+}
+#[derive(Debug, Deserialize)]
+struct ViduTaskResponse {
+    task_id: String,
+    state: String,
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ViduTaskStatus {
@@ -317,10 +405,17 @@ pub struct ViduCreation {
 }
 
 impl ViduTaskStatus {
-    pub fn is_success(&self) -> bool { self.state == "success" }
-    pub fn is_failed(&self) -> bool { self.state == "failed" }
+    pub fn is_success(&self) -> bool {
+        self.state == "success"
+    }
+    pub fn is_failed(&self) -> bool {
+        self.state == "failed"
+    }
     pub fn is_processing(&self) -> bool {
-        matches!(self.state.as_str(), "created" | "queueing" | "scheduling" | "processing")
+        matches!(
+            self.state.as_str(),
+            "created" | "queueing" | "scheduling" | "processing"
+        )
     }
     pub fn get_video_url(&self) -> Option<String> {
         self.creations.first().and_then(|c| c.url.clone())
@@ -335,14 +430,14 @@ impl ViduTaskStatus {
 ///   template: no model field
 pub fn detect_model_version(model_key: &str) -> &str {
     match model_key {
-        "vidu-fast"         => "viduq1",
-        "vidu-t2v"          => "viduq2",
-        "vidu-ref2v"        => "viduq2",
-        "vidu-i2v"          => "viduq3-turbo",
-        "vidu-startend"     => "viduq3-turbo",
-        "vidu-multiframe"   => "viduq2-turbo",
+        "vidu-fast" => "viduq1",
+        "vidu-t2v" => "viduq2",
+        "vidu-ref2v" => "viduq2",
+        "vidu-i2v" => "viduq3-turbo",
+        "vidu-startend" => "viduq3-turbo",
+        "vidu-multiframe" => "viduq2-turbo",
         "vidu-general-film" => "viduq2",
-        "vidu-ad-film"      => "viduq2",
+        "vidu-ad-film" => "viduq2",
         _ => "viduq2",
     }
 }
@@ -350,27 +445,35 @@ pub fn detect_model_version(model_key: &str) -> &str {
 /// Detect default Vidu resolution.
 /// viduq1 (fast) always outputs 1080p, others default to 720p.
 pub fn detect_resolution(model_key: &str) -> &str {
-    if model_key == "vidu-fast" { "1080p" } else { "720p" }
+    if model_key == "vidu-fast" {
+        "1080p"
+    } else {
+        "720p"
+    }
 }
 
 /// Detect default duration for model.
 /// viduq1 = 5s fixed, others default 4s.
 pub fn detect_default_duration(model_key: &str) -> i32 {
-    if model_key == "vidu-fast" { 5 } else { 4 }
+    if model_key == "vidu-fast" {
+        5
+    } else {
+        4
+    }
 }
 
 /// Detect generation mode from model_key.
 pub fn detect_generation_mode(model_key: &str) -> &str {
     match model_key {
-        "vidu-ref2v"        => "reference_to_video",
-        "vidu-startend"     => "start_end_to_video",
-        "vidu-multiframe"   => "multi_frame",
-        "vidu-template"     => "template",
-        "vidu-i2v"          => "image_to_video",
-        "vidu-fast"         => "fast",
-        "vidu-t2v"          => "text_to_video",
+        "vidu-ref2v" => "reference_to_video",
+        "vidu-startend" => "start_end_to_video",
+        "vidu-multiframe" => "multi_frame",
+        "vidu-template" => "template",
+        "vidu-i2v" => "image_to_video",
+        "vidu-fast" => "fast",
+        "vidu-t2v" => "text_to_video",
         "vidu-general-film" => "general_film",
-        "vidu-ad-film"      => "ad_film",
+        "vidu-ad-film" => "ad_film",
         _ => "text_to_video",
     }
 }
@@ -422,7 +525,10 @@ mod tests {
         assert_eq!(detect_generation_mode("vidu-t2v"), "text_to_video");
         assert_eq!(detect_generation_mode("vidu-i2v"), "image_to_video");
         assert_eq!(detect_generation_mode("vidu-ref2v"), "reference_to_video");
-        assert_eq!(detect_generation_mode("vidu-startend"), "start_end_to_video");
+        assert_eq!(
+            detect_generation_mode("vidu-startend"),
+            "start_end_to_video"
+        );
         assert_eq!(detect_generation_mode("vidu-multiframe"), "multi_frame");
         assert_eq!(detect_generation_mode("vidu-fast"), "fast");
         assert_eq!(detect_generation_mode("vidu-template"), "template");
@@ -480,7 +586,13 @@ mod tests {
             ("vidu-t2v", "viduq2", "720p", 4, "text_to_video"),
             ("vidu-i2v", "viduq3-turbo", "720p", 4, "image_to_video"),
             ("vidu-ref2v", "viduq2", "720p", 4, "reference_to_video"),
-            ("vidu-startend", "viduq3-turbo", "720p", 4, "start_end_to_video"),
+            (
+                "vidu-startend",
+                "viduq3-turbo",
+                "720p",
+                4,
+                "start_end_to_video",
+            ),
             ("vidu-multiframe", "viduq2-turbo", "720p", 4, "multi_frame"),
             ("vidu-fast", "viduq1", "1080p", 5, "fast"),
             ("vidu-template", "viduq2", "720p", 4, "template"),
@@ -531,7 +643,10 @@ mod tests {
         let obj = body.as_object().unwrap();
         assert!(obj.contains_key("template"));
         assert!(obj.contains_key("images"));
-        assert!(!obj.contains_key("model"), "template endpoint must not include 'model' field");
+        assert!(
+            !obj.contains_key("model"),
+            "template endpoint must not include 'model' field"
+        );
     }
 
     #[test]
@@ -549,7 +664,10 @@ mod tests {
         assert_eq!(obj["prompt"], "Create an engaging video");
         assert_eq!(obj["aspect_ratio"], "16:9");
         assert_eq!(obj["bgm"], true);
-        assert!(!obj.contains_key("model"), "general_film must not include 'model'");
+        assert!(
+            !obj.contains_key("model"),
+            "general_film must not include 'model'"
+        );
     }
 
     #[test]
@@ -566,7 +684,10 @@ mod tests {
         assert_eq!(obj["images"].as_array().unwrap().len(), 1);
         assert_eq!(obj["aspect_ratio"], "9:16");
         assert_eq!(obj["bgm"], true);
-        assert!(!obj.contains_key("model"), "ad_film must not include 'model'");
+        assert!(
+            !obj.contains_key("model"),
+            "ad_film must not include 'model'"
+        );
     }
 
     #[test]

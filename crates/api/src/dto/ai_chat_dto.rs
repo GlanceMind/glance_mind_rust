@@ -1,6 +1,6 @@
+use crate::service::ai_chat::QuestionnaireSubmission;
 use chrono::{DateTime, Utc};
 use glance_mind_db::entity::ai_chat::*;
-use crate::service::ai_chat::QuestionnaireSubmission;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

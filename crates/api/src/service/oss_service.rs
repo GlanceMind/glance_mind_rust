@@ -132,10 +132,7 @@ impl OssService {
         // Build authorization header
         let authorization = format!("OSS {}:{}", self.config.access_key_id, signature);
 
-        info!(
-            "Uploading to OSS: {} ({} bytes)",
-            object_path, data_len
-        );
+        info!("Uploading to OSS: {} ({} bytes)", object_path, data_len);
 
         // Send the request
         let response = self
@@ -269,7 +266,10 @@ impl OssService {
         let status = response.status();
         if !status.is_success() {
             let error_body = response.text().await.unwrap_or_default();
-            error!("OSS video upload failed with status {}: {}", status, error_body);
+            error!(
+                "OSS video upload failed with status {}: {}",
+                status, error_body
+            );
             return Err(ApiError::InternalServerError(format!(
                 "OSS video upload failed with status {}: {}",
                 status, error_body

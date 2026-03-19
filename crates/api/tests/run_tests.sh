@@ -29,6 +29,8 @@ echo_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 # 环境变量
 export DATABASE_URL="${DATABASE_URL:-postgres://glancemind:testpassword@localhost:5434/glancemind_test}"
 export API_BASE_URL="${API_BASE_URL:-http://localhost:8080}"
+export E2E_NATS_URL="${E2E_NATS_URL:-nats://localhost:4223}"
+export E2E_NATS_TOKEN="${E2E_NATS_TOKEN:-glancemind-dev-token}"
 
 # 检查依赖
 check_dependencies() {

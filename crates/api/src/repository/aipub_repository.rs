@@ -431,7 +431,13 @@ impl AipubRepository {
         platform_filter: Option<i32>,
         page: i64,
         page_size: i64,
-    ) -> Result<(Vec<(AipubTask, AipubPlan, String, Option<String>, i32)>, i64), DieselError> {
+    ) -> Result<
+        (
+            Vec<(AipubTask, AipubPlan, String, Option<String>, i32)>,
+            i64,
+        ),
+        DieselError,
+    > {
         use glance_mind_db::schema::{
             gm_aipub_plans, gm_aipub_tasks, gm_platforms, gm_social_accounts,
         };
@@ -600,7 +606,7 @@ impl AipubRepository {
             .map_err(|_| DieselError::BrokenTransactionManager)?;
 
         let result: bigdecimal::BigDecimal = diesel::sql_query(
-            "SELECT fn_freeze_budget($1, $2, $3, $4, $5, $6, $7, $8, $9) as frozen_amount"
+            "SELECT fn_freeze_budget($1, $2, $3, $4, $5, $6, $7, $8, $9) as frozen_amount",
         )
         .bind::<diesel::sql_types::Integer, _>(user_id)
         .bind::<diesel::sql_types::Integer, _>(chat_count)
@@ -619,11 +625,7 @@ impl AipubRepository {
 
     /// Finalize a plan: update status + refund remaining frozen.
     /// Stored procedure handles: idempotency, row locking, refund calculation.
-    pub async fn finalize_plan(
-        &self,
-        plan_id: i32,
-        new_status: &str,
-    ) -> Result<(), DieselError> {
+    pub async fn finalize_plan(&self, plan_id: i32, new_status: &str) -> Result<(), DieselError> {
         let mut conn = self
             .pool
             .get()

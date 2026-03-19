@@ -37,7 +37,7 @@ const ALLOWED_VIDEO_CONTENT_TYPES: &[&str] = &[
     "video/x-matroska", // mkv
     "video/x-flv",
     "video/x-ms-wmv", // wmv
-    "video/x-m4v", // m4v
+    "video/x-m4v",    // m4v
 ];
 
 /// Upload image to OSS

@@ -6,7 +6,10 @@ pub fn build_video_model_capabilities(model: &AiModel) -> VideoModelCapabilities
     let provider = model.provider.as_str();
 
     let (default_orientation, orientation_options) = if key == "sora-2-pro" {
-        ("portrait".to_string(), vec![orientation_option("portrait", "portrait (9:16)")])
+        (
+            "portrait".to_string(),
+            vec![orientation_option("portrait", "portrait (9:16)")],
+        )
     } else {
         (
             "landscape".to_string(),
@@ -71,7 +74,11 @@ pub fn preferred_video_model<'a>(models: &'a [AiModel]) -> Option<&'a AiModel> {
     models
         .iter()
         .find(|model| matches!(model.model_key.as_str(), "sora-2" | "sora2"))
-        .or_else(|| models.iter().find(|model| model.model_key.starts_with("sora")))
+        .or_else(|| {
+            models
+                .iter()
+                .find(|model| model.model_key.starts_with("sora"))
+        })
         .or_else(|| models.first())
 }
 
@@ -108,9 +115,7 @@ mod tests {
             model_key: model_key.to_string(),
             cost_multiplier: 1.into(),
             is_active: true,
-            created_at: chrono::DateTime::from_timestamp(0, 0)
-                .unwrap()
-                .naive_utc(),
+            created_at: chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc(),
             updated_at: None,
             model_type: "video".to_string(),
         }
@@ -130,7 +135,8 @@ mod tests {
 
     #[test]
     fn sora_two_capabilities_match_chat_questionnaire_defaults() {
-        let capabilities = build_video_model_capabilities(&test_model(7, "Sora 2", "openai", "sora-2"));
+        let capabilities =
+            build_video_model_capabilities(&test_model(7, "Sora 2", "openai", "sora-2"));
 
         assert_eq!(capabilities.default_orientation, "landscape");
         assert_eq!(capabilities.default_seconds, "4");

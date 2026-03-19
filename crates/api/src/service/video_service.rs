@@ -46,7 +46,8 @@ impl VideoService {
             tracing::warn!("VideoService: OSS not configured, temporary CDN URLs may expire");
         }
 
-        let vidu_client = std::env::var("VIDU_API_KEY").ok()
+        let vidu_client = std::env::var("VIDU_API_KEY")
+            .ok()
             .filter(|k| !k.is_empty())
             .map(|key| {
                 let base_url = std::env::var("VIDU_BASE_URL").ok();
@@ -85,8 +86,10 @@ impl VideoService {
         keyframe_prompts: Option<Vec<String>>,
     ) -> Result<CreateVideoResponse, ApiError> {
         let is_multi_frame = reference_images.len() >= 3;
-        let is_dual_image = !is_multi_frame && start_frame_data.is_some() && end_frame_data.is_some();
-        let has_any_image = image_data.is_some() || start_frame_data.is_some() || !reference_images.is_empty();
+        let is_dual_image =
+            !is_multi_frame && start_frame_data.is_some() && end_frame_data.is_some();
+        let has_any_image =
+            image_data.is_some() || start_frame_data.is_some() || !reference_images.is_empty();
 
         // Validate parameters: must have prompt or image
         if request.prompt.is_none() && !has_any_image {
@@ -140,8 +143,10 @@ impl VideoService {
 
         // Validate model supports dual image (FL models, Jimeng models, Vidu startend, and Vidu fast)
         if is_dual_image {
-            let model_supports_dual = model_key.contains("-fl") || is_jimeng_model(&model_key)
-                || (is_vidu_model(&model_key) && (model_key == "vidu-startend" || model_key == "vidu-fast"));
+            let model_supports_dual = model_key.contains("-fl")
+                || is_jimeng_model(&model_key)
+                || (is_vidu_model(&model_key)
+                    && (model_key == "vidu-startend" || model_key == "vidu-fast"));
             if !model_supports_dual {
                 return Err(ApiError::BusinessError(
                     BusinessError::ModelNotSupportDualImage,
@@ -349,7 +354,9 @@ impl VideoService {
         let mut task_responses = Vec::with_capacity(tasks.len());
         for task in tasks {
             let final_task = if Self::is_jimeng_pending(&task) {
-                self.poll_jimeng_task(&mut conn, &task).await.unwrap_or(task)
+                self.poll_jimeng_task(&mut conn, &task)
+                    .await
+                    .unwrap_or(task)
             } else if Self::is_vidu_pending(&task) {
                 self.poll_vidu_task(&mut conn, &task).await.unwrap_or(task)
             } else {
@@ -421,10 +428,15 @@ impl VideoService {
         let gen_mode = vidu_client::detect_generation_mode(model_key);
         let model_version = vidu_client::detect_model_version(model_key).to_string();
         let resolution = vidu_client::detect_resolution(model_key).to_string();
-        let duration: i32 = request.seconds.parse()
+        let duration: i32 = request
+            .seconds
+            .parse()
             .unwrap_or_else(|_| vidu_client::detect_default_duration(model_key));
 
-        let clean_prompt = request.prompt.as_ref().map(|p| Self::strip_mention_tokens(p));
+        let clean_prompt = request
+            .prompt
+            .as_ref()
+            .map(|p| Self::strip_mention_tokens(p));
 
         // For "fast" mode, auto-detect from input
         let effective_mode = if gen_mode == "fast" {
@@ -439,7 +451,11 @@ impl VideoService {
 
         tracing::info!(
             "Vidu video: model={}, version={}, resolution={}, duration={}s, mode={}",
-            model_key, model_version, resolution, duration, effective_mode
+            model_key,
+            model_version,
+            resolution,
+            duration,
+            effective_mode
         );
 
         let ar = match request.orientation {
@@ -452,24 +468,34 @@ impl VideoService {
                 let image_uri = vidu.upload_image(&image_data.unwrap()).await?;
                 vidu.image_to_video(
                     vidu_client::ViduGenerateParams {
-                        model: model_version, prompt: clean_prompt.clone().unwrap_or_default(),
-                        duration, style: None, aspect_ratio: None,
-                        resolution: Some(resolution), movement_amplitude: None,
+                        model: model_version,
+                        prompt: clean_prompt.clone().unwrap_or_default(),
+                        duration,
+                        style: None,
+                        aspect_ratio: None,
+                        resolution: Some(resolution),
+                        movement_amplitude: None,
                     },
                     image_uri,
-                ).await?
+                )
+                .await?
             }
             "start_end_to_video" if image_data.is_some() && end_frame_data.is_some() => {
                 let start_uri = vidu.upload_image(&image_data.unwrap()).await?;
                 let end_uri = vidu.upload_image(&end_frame_data.unwrap()).await?;
                 vidu.start_end_to_video(
                     vidu_client::ViduGenerateParams {
-                        model: model_version, prompt: clean_prompt.clone().unwrap_or_default(),
-                        duration, style: None, aspect_ratio: None,
-                        resolution: Some(resolution), movement_amplitude: None,
+                        model: model_version,
+                        prompt: clean_prompt.clone().unwrap_or_default(),
+                        duration,
+                        style: None,
+                        aspect_ratio: None,
+                        resolution: Some(resolution),
+                        movement_amplitude: None,
                     },
                     vec![start_uri, end_uri],
-                ).await?
+                )
+                .await?
             }
             "reference_to_video" if !reference_images.is_empty() || image_data.is_some() => {
                 let mut images = Vec::new();
@@ -485,13 +511,17 @@ impl VideoService {
                 }
                 vidu.reference_to_video(
                     vidu_client::ViduGenerateParams {
-                        model: model_version, prompt: clean_prompt.clone().unwrap_or_default(),
-                        duration, style: None,
+                        model: model_version,
+                        prompt: clean_prompt.clone().unwrap_or_default(),
+                        duration,
+                        style: None,
                         aspect_ratio: Some(ar.to_string()),
-                        resolution: Some(resolution), movement_amplitude: None,
+                        resolution: Some(resolution),
+                        movement_amplitude: None,
                     },
                     images,
-                ).await?
+                )
+                .await?
             }
             "multi_frame" if !reference_images.is_empty() || image_data.is_some() => {
                 let mut images = Vec::new();
@@ -507,13 +537,18 @@ impl VideoService {
                 }
                 vidu.multi_frame(
                     vidu_client::ViduGenerateParams {
-                        model: model_version, prompt: clean_prompt.clone().unwrap_or_default(),
-                        duration, style: None, aspect_ratio: None,
-                        resolution: Some(resolution), movement_amplitude: None,
+                        model: model_version,
+                        prompt: clean_prompt.clone().unwrap_or_default(),
+                        duration,
+                        style: None,
+                        aspect_ratio: None,
+                        resolution: Some(resolution),
+                        movement_amplitude: None,
                     },
                     images,
                     keyframe_prompts.clone(),
-                ).await?
+                )
+                .await?
             }
             "template" if !reference_images.is_empty() || image_data.is_some() => {
                 let mut images = Vec::new();
@@ -529,7 +564,8 @@ impl VideoService {
                     images,
                     clean_prompt.clone(),
                     Some(ar.to_string()),
-                ).await?
+                )
+                .await?
             }
             "general_film" if !reference_images.is_empty() || image_data.is_some() => {
                 let mut images = Vec::new();
@@ -541,9 +577,12 @@ impl VideoService {
                     images.push(vidu.upload_image(&image_data.unwrap()).await?);
                 }
                 vidu.general_film(
-                    images, clean_prompt.clone(),
-                    Some(ar.to_string()), Some(true),
-                ).await?
+                    images,
+                    clean_prompt.clone(),
+                    Some(ar.to_string()),
+                    Some(true),
+                )
+                .await?
             }
             "ad_film" if !reference_images.is_empty() || image_data.is_some() => {
                 let mut images = Vec::new();
@@ -555,9 +594,12 @@ impl VideoService {
                     images.push(vidu.upload_image(&image_data.unwrap()).await?);
                 }
                 vidu.ad_film(
-                    images, clean_prompt.clone(),
-                    Some(ar.to_string()), Some(true),
-                ).await?
+                    images,
+                    clean_prompt.clone(),
+                    Some(ar.to_string()),
+                    Some(true),
+                )
+                .await?
             }
             _ => {
                 vidu.text_to_video(vidu_client::ViduGenerateParams {
@@ -565,18 +607,21 @@ impl VideoService {
                     prompt: clean_prompt.clone().ok_or(ApiError::BusinessError(
                         BusinessError::TextToVideoRequiresPrompt,
                     ))?,
-                    duration, style: None,
+                    duration,
+                    style: None,
                     aspect_ratio: Some(ar.to_string()),
                     resolution: Some(resolution),
                     movement_amplitude: None,
-                }).await?
+                })
+                .await?
             }
         };
 
         // Save task to database
-        let mut conn = self.db_pool.get().map_err(|_| {
-            ApiError::InternalServerError("Database connection failed".to_string())
-        })?;
+        let mut conn = self
+            .db_pool
+            .get()
+            .map_err(|_| ApiError::InternalServerError("Database connection failed".to_string()))?;
 
         use crate::middleware::charging::ActionType;
         use diesel::prelude::*;
@@ -587,7 +632,9 @@ impl VideoService {
             .filter(platform_id.is_null())
             .select(cost_points)
             .first::<BigDecimal>(&mut conn)
-            .map_err(|_| ApiError::InternalServerError("Failed to query pricing rule".to_string()))?;
+            .map_err(|_| {
+                ApiError::InternalServerError("Failed to query pricing rule".to_string())
+            })?;
 
         let actual_cost = if let Some(ref model) = ai_model_info {
             &base_cost * &model.cost_multiplier
@@ -650,7 +697,11 @@ impl VideoService {
             prompt: request.prompt.clone().unwrap_or_default(),
             resolution,
             seconds,
-            aspect_ratio: if !has_image { Some(self.detect_aspect_ratio(request)) } else { None },
+            aspect_ratio: if !has_image {
+                Some(self.detect_aspect_ratio(request))
+            } else {
+                None
+            },
             image_base64: image_data.map(|d| JimengClient::encode_image(&d)),
             end_image_base64: end_frame_data.map(|d| JimengClient::encode_image(&d)),
         };
@@ -662,7 +713,10 @@ impl VideoService {
         };
         tracing::info!(
             "Jimeng video: model={}, resolution={}, seconds={}, mode={}",
-            model_key, resolution.label(), seconds, mode_label
+            model_key,
+            resolution.label(),
+            seconds,
+            mode_label
         );
 
         let handle = jimeng.create_video(params).await?;
@@ -746,12 +800,18 @@ impl VideoService {
 
     fn is_jimeng_pending(task: &VideoGenerationTask) -> bool {
         matches!(task.status.as_str(), "pending" | "queued" | "processing")
-            && task.generation_id.as_deref().map_or(false, |g| g.starts_with("jimeng_"))
+            && task
+                .generation_id
+                .as_deref()
+                .map_or(false, |g| g.starts_with("jimeng_"))
     }
 
     fn is_vidu_pending(task: &VideoGenerationTask) -> bool {
         matches!(task.status.as_str(), "pending" | "queued" | "processing")
-            && task.generation_id.as_deref().map_or(false, |g| g.starts_with("vidu_"))
+            && task
+                .generation_id
+                .as_deref()
+                .map_or(false, |g| g.starts_with("vidu_"))
     }
 
     /// Poll Volcengine for a single Jimeng task, update DB if done/failed.
@@ -787,7 +847,9 @@ impl VideoService {
 
             let video_url = match temp_url {
                 Some(ref url) => {
-                    let oss_url = self.persist_video_to_oss(url, task.user_id, &task.task_id).await;
+                    let oss_url = self
+                        .persist_video_to_oss(url, task.user_id, &task.task_id)
+                        .await;
                     Some(oss_url.unwrap_or_else(|| url.clone()))
                 }
                 None => None,
@@ -806,20 +868,22 @@ impl VideoService {
             )
             .ok()
         } else if result.is_failed() {
-            tracing::warn!("Jimeng task {} failed: {:?}", task.task_id, result.resp_data);
+            tracing::warn!(
+                "Jimeng task {} failed: {:?}",
+                task.task_id,
+                result.resp_data
+            );
             VideoRepository::mark_as_failed(
                 conn,
                 task.id,
-                format!("Jimeng generation failed: {}", result.resp_data.unwrap_or_default()),
+                format!(
+                    "Jimeng generation failed: {}",
+                    result.resp_data.unwrap_or_default()
+                ),
             )
             .ok()
         } else {
-            let _ = VideoRepository::update_status(
-                conn,
-                task.id,
-                "processing".to_string(),
-                None,
-            );
+            let _ = VideoRepository::update_status(conn, task.id, "processing".to_string(), None);
             None
         }
     }
@@ -846,18 +910,31 @@ impl VideoService {
 
             let video_url = match temp_url {
                 Some(ref url) => {
-                    let oss_url = self.persist_video_to_oss(url, task.user_id, &task.task_id).await;
+                    let oss_url = self
+                        .persist_video_to_oss(url, task.user_id, &task.task_id)
+                        .await;
                     Some(oss_url.unwrap_or_else(|| url.clone()))
                 }
                 None => None,
             };
 
             VideoRepository::mark_as_succeeded(
-                conn, task.id, Some(task.task_id.clone()),
-                video_url, None, None, None, None, None,
-            ).ok()
+                conn,
+                task.id,
+                Some(task.task_id.clone()),
+                video_url,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .ok()
         } else if status.is_failed() {
-            let err = format!("Vidu generation failed: {}", status.err_code.unwrap_or_default());
+            let err = format!(
+                "Vidu generation failed: {}",
+                status.err_code.unwrap_or_default()
+            );
             tracing::warn!("Vidu task {} failed: {}", task.task_id, err);
             VideoRepository::mark_as_failed(conn, task.id, err).ok()
         } else {
@@ -867,8 +944,11 @@ impl VideoService {
     }
 
     fn is_temporary_cdn_url(url: &str) -> bool {
-        url.contains("vvecloud") || url.contains("byted.org") || url.contains("volcvod.com")
-            || url.contains("vidu.com") || url.contains("vidu.cn")
+        url.contains("vvecloud")
+            || url.contains("byted.org")
+            || url.contains("volcvod.com")
+            || url.contains("vidu.com")
+            || url.contains("vidu.cn")
     }
 
     /// Download video from temporary CDN URL and re-upload to Aliyun OSS.
@@ -889,7 +969,8 @@ impl VideoService {
                 tracing::error!(
                     "⚠ TEMPORARY CDN URL will expire in ~1h but OSS is NOT configured! \
                      Set OSS_ACCESS_KEY_ID/OSS_ACCESS_KEY_SECRET/OSS_ENDPOINT/OSS_BUCKET. \
-                     task={}", task_id
+                     task={}",
+                    task_id
                 );
                 return None;
             }
@@ -906,7 +987,11 @@ impl VideoService {
         let resp = match client.get(temp_url).send().await {
             Ok(r) if r.status().is_success() => r,
             Ok(r) => {
-                tracing::error!("Jimeng video download HTTP {}: task={}", r.status(), task_id);
+                tracing::error!(
+                    "Jimeng video download HTTP {}: task={}",
+                    r.status(),
+                    task_id
+                );
                 return None;
             }
             Err(e) => {
@@ -955,7 +1040,9 @@ impl VideoService {
         while let Some(ch) = chars.next() {
             if ch == '@' {
                 while let Some(&next) = chars.peek() {
-                    if next.is_whitespace() || next == '@' { break; }
+                    if next.is_whitespace() || next == '@' {
+                        break;
+                    }
                     chars.next();
                 }
             } else {

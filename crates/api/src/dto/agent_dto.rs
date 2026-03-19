@@ -1,3 +1,4 @@
+use crate::error::api_error::ApiError;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use validator::Validate;
@@ -102,8 +103,9 @@ pub struct CommentWithVideoDto {
 #[derive(Debug, Deserialize, Validate)]
 pub struct UpdateCommentStatusDto {
     pub comment_id: String,
-    #[validate(range(min = 0, max = 2))]
+    #[validate(range(min = 0, max = 3))]
     pub status: i16,
+    pub platform: Option<String>,
 }
 
 // Update response
@@ -193,7 +195,7 @@ impl UnifiedCommentWithConfigDto {
         total: i64,
         page: i32,
         per_page: i32,
-    ) -> DeviceCommentsResponse {
+    ) -> Result<DeviceCommentsResponse, ApiError> {
         // Extract campaign config from first comment (or use defaults)
         let campaign = comments
             .first()
@@ -211,32 +213,47 @@ impl UnifiedCommentWithConfigDto {
         // Convert comments to protocol format
         let protocol_comments: Vec<CommentData> = comments
             .into_iter()
-            .map(|c| CommentData {
-                id: c.id,
-                comment_id: c.comment_id,
-                content_id: c.content_id,
-                platform: Platform::from_json_str(&c.platform).unwrap_or(Platform::Tiktok),
-                content: c.content,
-                status: CommentStatus::from_str_status(&c.status),
-                user_nickname: c.user_nickname,
-                user_unique_id: c.user_unique_id,
-                suggested_reply: c.suggested_reply,
-                suggested_dm: c.suggested_dm,
-                suggested_reply_post: c.suggested_reply_post,
-                reason: c.reason,
-                create_time: c.create_time.map(|t| t.and_utc().to_rfc3339()),
-                created_at: c.created_at.to_rfc3339(),
-                // Platform-specific fields for URL construction
-                content_url: c.content_url,
-                content_type: c.content_type,
-                author_unique_id: c.author_unique_id,
-                comment_url: c.comment_url,
-                // Profile name for task execution (randomly selected from campaign's group)
-                profile_name: c.profile_name,
-            })
-            .collect();
+            .map(|c| {
+                let platform = Platform::from_json_str(&c.platform).ok_or_else(|| {
+                    ApiError::InternalServerError(format!(
+                        "Unsupported internal platform for protocol response: {}",
+                        c.platform
+                    ))
+                })?;
 
-        DeviceCommentsResponse::new(campaign, protocol_comments, total, page, per_page)
+                Ok(CommentData {
+                    id: c.id,
+                    comment_id: c.comment_id,
+                    content_id: c.content_id,
+                    platform,
+                    content: c.content,
+                    status: CommentStatus::from_str_status(&c.status),
+                    user_nickname: c.user_nickname,
+                    user_unique_id: c.user_unique_id,
+                    suggested_reply: c.suggested_reply,
+                    suggested_dm: c.suggested_dm,
+                    suggested_reply_post: c.suggested_reply_post,
+                    reason: c.reason,
+                    create_time: c.create_time.map(|t| t.and_utc().to_rfc3339()),
+                    created_at: c.created_at.to_rfc3339(),
+                    // Platform-specific fields for URL construction
+                    content_url: c.content_url,
+                    content_type: c.content_type,
+                    author_unique_id: c.author_unique_id,
+                    comment_url: c.comment_url,
+                    // Profile name for task execution (randomly selected from campaign's group)
+                    profile_name: c.profile_name,
+                })
+            })
+            .collect::<Result<Vec<_>, ApiError>>()?;
+
+        Ok(DeviceCommentsResponse::new(
+            campaign,
+            protocol_comments,
+            total,
+            page,
+            per_page,
+        ))
     }
 }
 
@@ -349,7 +366,7 @@ mod tests {
 
     #[test]
     fn test_to_protocol_response_empty() {
-        let response = UnifiedCommentWithConfigDto::to_protocol_response(vec![], 0, 1, 20);
+        let response = UnifiedCommentWithConfigDto::to_protocol_response(vec![], 0, 1, 20).unwrap();
 
         assert!(response.comments.is_empty());
         assert_eq!(response.pagination.total, 0);
@@ -363,7 +380,8 @@ mod tests {
     fn test_to_protocol_response_single_comment() {
         let comments = vec![create_mock_comment(1, "tiktok", "pending", Some(100))];
 
-        let response = UnifiedCommentWithConfigDto::to_protocol_response(comments, 1, 1, 20);
+        let response =
+            UnifiedCommentWithConfigDto::to_protocol_response(comments, 1, 1, 20).unwrap();
 
         assert_eq!(response.comments.len(), 1);
         assert_eq!(response.pagination.total, 1);
@@ -401,7 +419,8 @@ mod tests {
 
         for (platform_str, expected_platform) in platforms {
             let comments = vec![create_mock_comment(1, platform_str, "pending", Some(1))];
-            let response = UnifiedCommentWithConfigDto::to_protocol_response(comments, 1, 1, 20);
+            let response =
+                UnifiedCommentWithConfigDto::to_protocol_response(comments, 1, 1, 20).unwrap();
 
             let comment = &response.comments[0];
             assert!(
@@ -423,7 +442,8 @@ mod tests {
 
         for (status_str, expected_status) in statuses {
             let comments = vec![create_mock_comment(1, "tiktok", status_str, Some(1))];
-            let response = UnifiedCommentWithConfigDto::to_protocol_response(comments, 1, 1, 20);
+            let response =
+                UnifiedCommentWithConfigDto::to_protocol_response(comments, 1, 1, 20).unwrap();
 
             let comment = &response.comments[0];
             assert!(
@@ -441,7 +461,8 @@ mod tests {
             .map(|i| create_mock_comment(i, "tiktok", "pending", Some(1)))
             .collect();
 
-        let response = UnifiedCommentWithConfigDto::to_protocol_response(comments, 100, 3, 10);
+        let response =
+            UnifiedCommentWithConfigDto::to_protocol_response(comments, 100, 3, 10).unwrap();
 
         assert_eq!(response.comments.len(), 10);
         assert_eq!(response.pagination.total, 100);
@@ -458,7 +479,8 @@ mod tests {
             create_mock_comment(3, "tiktok", "completed", Some(100)),
         ];
 
-        let response = UnifiedCommentWithConfigDto::to_protocol_response(comments, 3, 1, 20);
+        let response =
+            UnifiedCommentWithConfigDto::to_protocol_response(comments, 3, 1, 20).unwrap();
 
         assert_eq!(response.comments.len(), 3);
 
@@ -474,7 +496,8 @@ mod tests {
     #[test]
     fn test_to_protocol_response_serialization() {
         let comments = vec![create_mock_comment(1, "facebook", "pending", Some(50))];
-        let response = UnifiedCommentWithConfigDto::to_protocol_response(comments, 1, 1, 20);
+        let response =
+            UnifiedCommentWithConfigDto::to_protocol_response(comments, 1, 1, 20).unwrap();
 
         // Ensure response can be serialized to JSON
         let json = serde_json::to_string(&response).expect("Should serialize to JSON");
@@ -494,7 +517,8 @@ mod tests {
     #[test]
     fn test_tiktok_comment_fields() {
         let comment = create_mock_comment(1, "tiktok", "pending", Some(2));
-        let response = UnifiedCommentWithConfigDto::to_protocol_response(vec![comment], 1, 1, 20);
+        let response =
+            UnifiedCommentWithConfigDto::to_protocol_response(vec![comment], 1, 1, 20).unwrap();
 
         let c = &response.comments[0];
         assert_eq!(c.content_id, "tiktok_content_1"); // video_id for TikTok
@@ -504,7 +528,8 @@ mod tests {
     #[test]
     fn test_facebook_comment_fields() {
         let comment = create_mock_comment(1, "facebook", "pending", Some(3));
-        let response = UnifiedCommentWithConfigDto::to_protocol_response(vec![comment], 1, 1, 20);
+        let response =
+            UnifiedCommentWithConfigDto::to_protocol_response(vec![comment], 1, 1, 20).unwrap();
 
         let c = &response.comments[0];
         assert_eq!(c.content_id, "facebook_content_1"); // post_id for Facebook
@@ -514,7 +539,8 @@ mod tests {
     #[test]
     fn test_instagram_comment_fields() {
         let comment = create_mock_comment(1, "instagram", "processing", Some(4));
-        let response = UnifiedCommentWithConfigDto::to_protocol_response(vec![comment], 1, 1, 20);
+        let response =
+            UnifiedCommentWithConfigDto::to_protocol_response(vec![comment], 1, 1, 20).unwrap();
 
         let c = &response.comments[0];
         assert_eq!(c.content_id, "instagram_content_1"); // code for Instagram
@@ -525,7 +551,8 @@ mod tests {
     #[test]
     fn test_reddit_comment_fields() {
         let comment = create_mock_comment(1, "reddit", "completed", Some(1));
-        let response = UnifiedCommentWithConfigDto::to_protocol_response(vec![comment], 1, 1, 20);
+        let response =
+            UnifiedCommentWithConfigDto::to_protocol_response(vec![comment], 1, 1, 20).unwrap();
 
         let c = &response.comments[0];
         assert_eq!(c.content_id, "reddit_content_1"); // post_id for Reddit
@@ -536,7 +563,8 @@ mod tests {
     #[test]
     fn test_twitter_comment_fields() {
         let comment = create_mock_comment(1, "twitter", "pending", Some(5));
-        let response = UnifiedCommentWithConfigDto::to_protocol_response(vec![comment], 1, 1, 20);
+        let response =
+            UnifiedCommentWithConfigDto::to_protocol_response(vec![comment], 1, 1, 20).unwrap();
 
         let c = &response.comments[0];
         assert_eq!(c.content_id, "twitter_content_1"); // tweet_id for Twitter
@@ -548,21 +576,19 @@ mod tests {
     // ============================================================================
 
     #[test]
-    fn test_unknown_platform_defaults_to_tiktok() {
+    fn test_unknown_platform_returns_error() {
         let mut comment = create_mock_comment(1, "unknown_platform", "pending", Some(1));
         comment.platform = "invalid".to_string();
 
         let response = UnifiedCommentWithConfigDto::to_protocol_response(vec![comment], 1, 1, 20);
-
-        let c = &response.comments[0];
-        // Unknown platforms should default to TikTok
-        assert!(matches!(c.platform, Platform::Tiktok));
+        assert!(response.is_err());
     }
 
     #[test]
     fn test_nil_campaign_id() {
         let comment = create_mock_comment(1, "tiktok", "pending", None);
-        let response = UnifiedCommentWithConfigDto::to_protocol_response(vec![comment], 1, 1, 20);
+        let response =
+            UnifiedCommentWithConfigDto::to_protocol_response(vec![comment], 1, 1, 20).unwrap();
 
         // Campaign config should use 0 for None campaign_id
         assert_eq!(response.campaign.campaign_id, 0);
@@ -580,7 +606,8 @@ mod tests {
         comment.create_time = None;
         comment.profile_name = None;
 
-        let response = UnifiedCommentWithConfigDto::to_protocol_response(vec![comment], 1, 1, 20);
+        let response =
+            UnifiedCommentWithConfigDto::to_protocol_response(vec![comment], 1, 1, 20).unwrap();
 
         let c = &response.comments[0];
         assert!(c.content.is_none());
@@ -607,7 +634,8 @@ mod tests {
 
         for (total, page, per_page, expected_pages) in test_cases {
             let response =
-                UnifiedCommentWithConfigDto::to_protocol_response(vec![], total, page, per_page);
+                UnifiedCommentWithConfigDto::to_protocol_response(vec![], total, page, per_page)
+                    .unwrap();
             assert_eq!(
                 response.pagination.total_pages, expected_pages,
                 "total={}, per_page={} should give {} pages",

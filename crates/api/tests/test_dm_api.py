@@ -13,6 +13,7 @@ then verified through the REST API.
 
 import asyncio
 import json
+import os
 import threading
 import time
 import uuid
@@ -34,8 +35,8 @@ from conftest import (
 # NATS helper (lightweight, for seeding test data)
 # ---------------------------------------------------------------------------
 
-NATS_URL = "nats://localhost:4222"
-NATS_TOKEN = "glancemind-dev-token"
+NATS_URL = os.getenv("E2E_NATS_URL", "nats://localhost:4223")
+NATS_TOKEN = os.getenv("E2E_NATS_TOKEN", "glancemind-dev-token")
 
 RUN_ID = uuid.uuid4().hex[:8]
 DEVICE_DM = f"dm-api-dev-{RUN_ID}"

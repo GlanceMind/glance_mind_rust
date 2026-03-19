@@ -7,17 +7,15 @@ use std::collections::HashMap;
 #[repr(i64)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Permission {
-    DmControl    = 1 << 0,  // 1
-    AiPublish    = 1 << 1,  // 2
-    AiContentGen = 1 << 2,  // 4
-    AiLeadGen    = 1 << 3,  // 8
+    DmControl = 1 << 0,    // 1
+    AiPublish = 1 << 1,    // 2
+    AiContentGen = 1 << 2, // 4
+    AiLeadGen = 1 << 3,    // 8
 }
 
 /// Default bitmask for new users: everything ON except DmControl.
 pub const DEFAULT_PERMISSIONS: i64 =
-    Permission::AiPublish as i64
-    | Permission::AiContentGen as i64
-    | Permission::AiLeadGen as i64; // 14
+    Permission::AiPublish as i64 | Permission::AiContentGen as i64 | Permission::AiLeadGen as i64; // 14
 
 impl Permission {
     /// Check whether `perm_bits` has this permission enabled.
@@ -107,21 +105,42 @@ mod tests {
 
     #[test]
     fn test_find_dm_routes() {
-        assert_eq!(find_required_permission("/api/v1/dm/conversations"), Some(Permission::DmControl));
-        assert_eq!(find_required_permission("/api/v1/dm/send"), Some(Permission::DmControl));
+        assert_eq!(
+            find_required_permission("/api/v1/dm/conversations"),
+            Some(Permission::DmControl)
+        );
+        assert_eq!(
+            find_required_permission("/api/v1/dm/send"),
+            Some(Permission::DmControl)
+        );
     }
 
     #[test]
     fn test_find_campaign_routes() {
-        assert_eq!(find_required_permission("/api/v1/campaigns"), Some(Permission::AiLeadGen));
-        assert_eq!(find_required_permission("/api/v1/campaigns/123"), Some(Permission::AiLeadGen));
+        assert_eq!(
+            find_required_permission("/api/v1/campaigns"),
+            Some(Permission::AiLeadGen)
+        );
+        assert_eq!(
+            find_required_permission("/api/v1/campaigns/123"),
+            Some(Permission::AiLeadGen)
+        );
     }
 
     #[test]
     fn test_find_content_gen_routes() {
-        assert_eq!(find_required_permission("/api/v1/ai/generate"), Some(Permission::AiContentGen));
-        assert_eq!(find_required_permission("/api/v1/ai/models"), Some(Permission::AiContentGen));
-        assert_eq!(find_required_permission("/api/v1/video/generate"), Some(Permission::AiContentGen));
+        assert_eq!(
+            find_required_permission("/api/v1/ai/generate"),
+            Some(Permission::AiContentGen)
+        );
+        assert_eq!(
+            find_required_permission("/api/v1/ai/models"),
+            Some(Permission::AiContentGen)
+        );
+        assert_eq!(
+            find_required_permission("/api/v1/video/generate"),
+            Some(Permission::AiContentGen)
+        );
     }
 
     #[test]
@@ -135,8 +154,14 @@ mod tests {
 
     #[test]
     fn test_find_publish_routes() {
-        assert_eq!(find_required_permission("/api/v1/publish_plans"), Some(Permission::AiPublish));
-        assert_eq!(find_required_permission("/api/v1/upload-tasks"), Some(Permission::AiPublish));
+        assert_eq!(
+            find_required_permission("/api/v1/publish_plans"),
+            Some(Permission::AiPublish)
+        );
+        assert_eq!(
+            find_required_permission("/api/v1/upload-tasks"),
+            Some(Permission::AiPublish)
+        );
     }
 
     #[test]
@@ -156,14 +181,26 @@ mod tests {
 
     #[test]
     fn test_find_agent_routes() {
-        assert_eq!(find_required_permission("/api/v1/agent/analyze"), Some(Permission::AiLeadGen));
-        assert_eq!(find_required_permission("/api/v1/agent"), Some(Permission::AiLeadGen));
+        assert_eq!(
+            find_required_permission("/api/v1/agent/analyze"),
+            Some(Permission::AiLeadGen)
+        );
+        assert_eq!(
+            find_required_permission("/api/v1/agent"),
+            Some(Permission::AiLeadGen)
+        );
     }
 
     #[test]
     fn test_find_scan_routes() {
-        assert_eq!(find_required_permission("/api/v1/scan/videos"), Some(Permission::AiLeadGen));
-        assert_eq!(find_required_permission("/api/v1/scan"), Some(Permission::AiLeadGen));
+        assert_eq!(
+            find_required_permission("/api/v1/scan/videos"),
+            Some(Permission::AiLeadGen)
+        );
+        assert_eq!(
+            find_required_permission("/api/v1/scan"),
+            Some(Permission::AiLeadGen)
+        );
     }
 
     #[test]

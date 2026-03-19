@@ -8,7 +8,10 @@ use axum::{
 pub fn material_routes() -> Router<UserState> {
     Router::new()
         // User materials management
-        .route("/materials", get(material_handler::list_materials).post(material_handler::create_material))
+        .route(
+            "/materials",
+            get(material_handler::list_materials).post(material_handler::create_material),
+        )
         .route(
             "/materials/:id",
             get(material_handler::get_material)
@@ -16,9 +19,15 @@ pub fn material_routes() -> Router<UserState> {
                 .delete(material_handler::delete_material),
         )
         // Re-analyze material prompt
-        .route("/materials/:id/analyze", post(material_handler::re_analyze_material))
+        .route(
+            "/materials/:id/analyze",
+            post(material_handler::re_analyze_material),
+        )
         // Collect tags from video_cases
         .route("/material-tags", get(material_handler::list_tags))
         // Favorite from video_case
-        .route("/video-cases/:task_no/favorite", post(material_handler::favorite_from_video_case))
+        .route(
+            "/video-cases/:task_no/favorite",
+            post(material_handler::favorite_from_video_case),
+        )
 }

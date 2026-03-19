@@ -35,8 +35,9 @@ WITH desired_platform_rules(platform_id, action_type, cost_points) AS (
         (5, 'POST_REPLY',     0.00::numeric)
 )
 INSERT INTO gm_pricing_rules (platform_id, action_type, cost_points)
-SELECT platform_id, action_type, cost_points
-FROM desired_platform_rules
+SELECT d.platform_id, d.action_type, d.cost_points
+FROM desired_platform_rules d
+WHERE EXISTS (SELECT 1 FROM gm_platforms p WHERE p.id = d.platform_id)
 ON CONFLICT (action_type, platform_id) DO UPDATE
 SET cost_points = EXCLUDED.cost_points;
 

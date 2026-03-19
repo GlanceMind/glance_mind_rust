@@ -15,13 +15,25 @@ impl AiChatRepository {
         Self { db }
     }
 
-    fn conn(&self) -> Result<diesel::r2d2::PooledConnection<diesel::r2d2::ConnectionManager<PgConnection>>, ApiError> {
-        self.db.pool.get().map_err(|e| ApiError::DatabaseError(e.to_string()))
+    fn conn(
+        &self,
+    ) -> Result<
+        diesel::r2d2::PooledConnection<diesel::r2d2::ConnectionManager<PgConnection>>,
+        ApiError,
+    > {
+        self.db
+            .pool
+            .get()
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))
     }
 
     // ── Conversations ───────────────────────────────────────
 
-    pub fn create_conversation(&self, user_id: i32, title: &str) -> Result<AiConversation, ApiError> {
+    pub fn create_conversation(
+        &self,
+        user_id: i32,
+        title: &str,
+    ) -> Result<AiConversation, ApiError> {
         let new = NewAiConversation {
             user_id,
             title: title.to_string(),
@@ -33,7 +45,12 @@ impl AiChatRepository {
             .map_err(|e| ApiError::DatabaseError(e.to_string()))
     }
 
-    pub fn list_conversations(&self, user_id: i32, page: i32, page_size: i32) -> Result<(Vec<AiConversation>, i64), ApiError> {
+    pub fn list_conversations(
+        &self,
+        user_id: i32,
+        page: i32,
+        page_size: i32,
+    ) -> Result<(Vec<AiConversation>, i64), ApiError> {
         let mut conn = self.conn()?;
         let offset = ((page - 1) * page_size) as i64;
 
@@ -57,7 +74,11 @@ impl AiChatRepository {
         Ok((items, total))
     }
 
-    pub fn get_conversation(&self, id: i32, user_id: i32) -> Result<Option<AiConversation>, ApiError> {
+    pub fn get_conversation(
+        &self,
+        id: i32,
+        user_id: i32,
+    ) -> Result<Option<AiConversation>, ApiError> {
         gm_ai_conversations::table
             .filter(gm_ai_conversations::id.eq(id))
             .filter(gm_ai_conversations::user_id.eq(user_id))
@@ -66,7 +87,12 @@ impl AiChatRepository {
             .map_err(|e| ApiError::DatabaseError(e.to_string()))
     }
 
-    pub fn update_conversation(&self, id: i32, user_id: i32, update: &UpdateAiConversation) -> Result<AiConversation, ApiError> {
+    pub fn update_conversation(
+        &self,
+        id: i32,
+        user_id: i32,
+        update: &UpdateAiConversation,
+    ) -> Result<AiConversation, ApiError> {
         diesel::update(
             gm_ai_conversations::table
                 .filter(gm_ai_conversations::id.eq(id))
@@ -96,7 +122,11 @@ impl AiChatRepository {
             .map_err(|e| ApiError::DatabaseError(e.to_string()))
     }
 
-    pub fn list_messages(&self, conversation_id: i32, limit: i64) -> Result<Vec<AiMessage>, ApiError> {
+    pub fn list_messages(
+        &self,
+        conversation_id: i32,
+        limit: i64,
+    ) -> Result<Vec<AiMessage>, ApiError> {
         gm_ai_messages::table
             .filter(gm_ai_messages::conversation_id.eq(conversation_id))
             .order(gm_ai_messages::created_at.asc())
@@ -123,7 +153,12 @@ impl AiChatRepository {
             .map_err(|e| ApiError::DatabaseError(e.to_string()))
     }
 
-    pub fn update_plan(&self, id: i32, user_id: i32, update: &UpdateAiPlan) -> Result<AiPlan, ApiError> {
+    pub fn update_plan(
+        &self,
+        id: i32,
+        user_id: i32,
+        update: &UpdateAiPlan,
+    ) -> Result<AiPlan, ApiError> {
         diesel::update(
             gm_ai_plans::table
                 .filter(gm_ai_plans::id.eq(id))
@@ -151,7 +186,11 @@ impl AiChatRepository {
             .map_err(|e| ApiError::DatabaseError(e.to_string()))
     }
 
-    pub fn update_plan_step(&self, id: i32, update: &UpdateAiPlanStep) -> Result<AiPlanStep, ApiError> {
+    pub fn update_plan_step(
+        &self,
+        id: i32,
+        update: &UpdateAiPlanStep,
+    ) -> Result<AiPlanStep, ApiError> {
         diesel::update(gm_ai_plan_steps::table.filter(gm_ai_plan_steps::id.eq(id)))
             .set(update)
             .get_result::<AiPlanStep>(&mut *self.conn()?)

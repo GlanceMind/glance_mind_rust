@@ -1,5 +1,7 @@
 use crate::config::database::DBPool;
 use crate::dto::crawler_dto::UnifiedContentDto;
+use crate::platform_routing::SupportedPlatform;
+use diesel::pg::PgConnection;
 use diesel::prelude::*;
 use diesel::SelectableHelper;
 use glance_mind_db::entity::agent::{
@@ -8,18 +10,13 @@ use glance_mind_db::entity::agent::{
 use glance_mind_db::entity::crawler::{CrawlerResult, CrawlerTask};
 use glance_mind_db::entity::platform::Platform;
 use glance_mind_db::schema::{
-    gm_agent_facebook_posts, gm_agent_instagram_posts, gm_agent_reddit_posts,
-    gm_agent_twitter_tweets, gm_agent_videos, gm_crawler_results as crawler_results,
+    gm_agent_comments, gm_agent_facebook_comments, gm_agent_facebook_posts,
+    gm_agent_instagram_comments, gm_agent_instagram_posts, gm_agent_reddit_comments,
+    gm_agent_reddit_posts, gm_agent_twitter_comments, gm_agent_twitter_tweets,
+    gm_agent_videos, gm_campaigns, gm_crawler_results as crawler_results,
     gm_crawler_tasks as crawler_tasks, gm_platforms,
 };
-
-/// Platform names (hardcoded mapping: platform_name -> data_table)
-/// These names must match the `name` column in gm_platforms table
-pub const PLATFORM_NAME_REDDIT: &str = "REDDIT";
-pub const PLATFORM_NAME_TIKTOK: &str = "TIKTOK";
-pub const PLATFORM_NAME_FACEBOOK: &str = "FACEBOOK";
-pub const PLATFORM_NAME_INSTAGRAM: &str = "INSTAGRAM";
-pub const PLATFORM_NAME_TWITTER: &str = "TWITTER";
+use std::collections::HashMap;
 
 #[derive(Clone)]
 pub struct CrawlerRepository {
@@ -127,14 +124,38 @@ impl CrawlerRepository {
         Ok((items, total))
     }
 
-    /// Get platform name by platform_id from database
-    fn get_platform_name(&self, platform_id: i32) -> Result<String, diesel::result::Error> {
+    /// Resolve a supported platform from gm_platforms.name.
+    fn get_supported_platform(
+        &self,
+        platform_id: i32,
+    ) -> Result<SupportedPlatform, diesel::result::Error> {
         let mut conn = self.pool.get().unwrap();
         let platform: Platform = gm_platforms::table
             .find(platform_id)
             .select(Platform::as_select())
             .first(&mut conn)?;
-        Ok(platform.name.to_uppercase())
+        SupportedPlatform::from_name(&platform.name).ok_or(diesel::result::Error::NotFound)
+    }
+
+    fn get_task_supported_platform(
+        &self,
+        task_id: i32,
+    ) -> Result<SupportedPlatform, diesel::result::Error> {
+        let mut conn = self.pool.get().unwrap();
+        let platform_id = crawler_tasks::table
+            .inner_join(gm_campaigns::table)
+            .filter(crawler_tasks::id.eq(task_id))
+            .select(gm_campaigns::platform_id)
+            .first::<i32>(&mut conn)?;
+
+        self.get_supported_platform(platform_id)
+    }
+
+    fn valid_comment_count_for(
+        content_db_id: i32,
+        valid_comment_counts: &HashMap<i32, i64>,
+    ) -> i64 {
+        *valid_comment_counts.get(&content_db_id).unwrap_or(&0)
     }
 
     /// Unified method to query content by campaign and platform
@@ -147,56 +168,104 @@ impl CrawlerRepository {
         page_size: i64,
     ) -> Result<(Vec<UnifiedContentDto>, i64), diesel::result::Error> {
         // Get platform name from database (no hardcoded platform_id mapping)
-        let platform_name = self.get_platform_name(platform_id)?;
+        let platform = self.get_supported_platform(platform_id)?;
 
         tracing::info!(
             "find_unified_contents_by_campaign: campaign_id={}, platform_id={}, platform_name={}, page={}, page_size={}",
             campaign_id,
             platform_id,
-            platform_name,
+            platform.as_db_name(),
             page,
             page_size
         );
 
         // Route to correct table based on platform name (hardcoded: platform_name -> data_table)
-        let result = match platform_name.as_str() {
-            PLATFORM_NAME_TIKTOK => {
+        let result = match platform {
+            SupportedPlatform::Tiktok => {
                 tracing::info!("Querying TikTok (gm_agent_videos)");
                 self.find_tiktok_contents(campaign_id, page, page_size)
                     .await
             }
-            PLATFORM_NAME_FACEBOOK => {
+            SupportedPlatform::Facebook => {
                 tracing::info!("Querying Facebook (gm_agent_facebook_posts)");
                 self.find_facebook_contents(campaign_id, page, page_size)
                     .await
             }
-            PLATFORM_NAME_INSTAGRAM => {
+            SupportedPlatform::Instagram => {
                 tracing::info!("Querying Instagram (gm_agent_instagram_posts)");
                 self.find_instagram_contents(campaign_id, page, page_size)
                     .await
             }
-            PLATFORM_NAME_REDDIT => {
+            SupportedPlatform::Reddit => {
                 tracing::info!("Querying Reddit (gm_agent_reddit_posts)");
                 self.find_reddit_contents(campaign_id, page, page_size)
                     .await
             }
-            PLATFORM_NAME_TWITTER => {
+            SupportedPlatform::Twitter => {
                 tracing::info!("Querying Twitter (gm_agent_twitter_tweets)");
                 self.find_twitter_contents(campaign_id, page, page_size)
-                    .await
-            }
-            _ => {
-                tracing::warn!(
-                    "Unknown platform_name={}, defaulting to TikTok",
-                    platform_name
-                );
-                self.find_tiktok_contents(campaign_id, page, page_size)
                     .await
             }
         };
 
         if let Ok((ref contents, total)) = result {
             tracing::info!("Query result: {} contents, total={}", contents.len(), total);
+        }
+
+        result
+    }
+
+    pub async fn find_unified_contents_by_task(
+        &self,
+        task_id: i32,
+        page: i64,
+        page_size: i64,
+    ) -> Result<(Vec<UnifiedContentDto>, i64), diesel::result::Error> {
+        let platform = self.get_task_supported_platform(task_id)?;
+
+        tracing::info!(
+            "find_unified_contents_by_task: task_id={}, platform_name={}, page={}, page_size={}",
+            task_id,
+            platform.as_db_name(),
+            page,
+            page_size
+        );
+
+        let result = match platform {
+            SupportedPlatform::Tiktok => {
+                tracing::info!("Querying TikTok task results (gm_agent_videos)");
+                self.find_tiktok_contents_by_task(task_id, page, page_size)
+                    .await
+            }
+            SupportedPlatform::Facebook => {
+                tracing::info!("Querying Facebook task results (gm_agent_facebook_posts)");
+                self.find_facebook_contents_by_task(task_id, page, page_size)
+                    .await
+            }
+            SupportedPlatform::Instagram => {
+                tracing::info!("Querying Instagram task results (gm_agent_instagram_posts)");
+                self.find_instagram_contents_by_task(task_id, page, page_size)
+                    .await
+            }
+            SupportedPlatform::Reddit => {
+                tracing::info!("Querying Reddit task results (gm_agent_reddit_posts)");
+                self.find_reddit_contents_by_task(task_id, page, page_size)
+                    .await
+            }
+            SupportedPlatform::Twitter => {
+                tracing::info!("Querying Twitter task results (gm_agent_twitter_tweets)");
+                self.find_twitter_contents_by_task(task_id, page, page_size)
+                    .await
+            }
+        };
+
+        if let Ok((ref contents, total)) = result {
+            tracing::info!(
+                "Task query result: task_id={}, contents={}, total={}",
+                task_id,
+                contents.len(),
+                total
+            );
         }
 
         result
@@ -229,7 +298,68 @@ impl CrawlerRepository {
             .select(AgentVideo::as_select())
             .load(&mut conn)?;
 
-        let dtos = items
+        let content_db_ids: Vec<i32> = items.iter().map(|video| video.id).collect();
+        let valid_comment_counts =
+            Self::load_tiktok_valid_comment_counts(&mut conn, &content_db_ids)?;
+        let dtos = Self::map_tiktok_contents(items, &valid_comment_counts);
+
+        Ok((dtos, total))
+    }
+
+    async fn find_tiktok_contents_by_task(
+        &self,
+        task_id: i32,
+        page: i64,
+        page_size: i64,
+    ) -> Result<(Vec<UnifiedContentDto>, i64), diesel::result::Error> {
+        let mut conn = self.pool.get().unwrap();
+
+        let total: i64 = gm_agent_videos::table
+            .filter(gm_agent_videos::task_id.eq(task_id))
+            .count()
+            .get_result(&mut conn)?;
+
+        let items: Vec<AgentVideo> = gm_agent_videos::table
+            .filter(gm_agent_videos::task_id.eq(task_id))
+            .order(gm_agent_videos::created_at.desc())
+            .limit(page_size)
+            .offset((page - 1) * page_size)
+            .select(AgentVideo::as_select())
+            .load(&mut conn)?;
+
+        let content_db_ids: Vec<i32> = items.iter().map(|video| video.id).collect();
+        let valid_comment_counts =
+            Self::load_tiktok_valid_comment_counts(&mut conn, &content_db_ids)?;
+        let dtos = Self::map_tiktok_contents(items, &valid_comment_counts);
+
+        Ok((dtos, total))
+    }
+
+    fn load_tiktok_valid_comment_counts(
+        conn: &mut PgConnection,
+        video_db_ids: &[i32],
+    ) -> Result<HashMap<i32, i64>, diesel::result::Error> {
+        if video_db_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let counts: Vec<(i32, i64)> = gm_agent_comments::table
+            .filter(gm_agent_comments::video_db_id.eq_any(video_db_ids))
+            .group_by(gm_agent_comments::video_db_id)
+            .select((
+                gm_agent_comments::video_db_id,
+                diesel::dsl::count_star(),
+            ))
+            .load(conn)?;
+
+        Ok(counts.into_iter().collect())
+    }
+
+    fn map_tiktok_contents(
+        items: Vec<AgentVideo>,
+        valid_comment_counts: &HashMap<i32, i64>,
+    ) -> Vec<UnifiedContentDto> {
+        items
             .into_iter()
             .map(|v| UnifiedContentDto {
                 id: v.id,
@@ -244,6 +374,7 @@ impl CrawlerRepository {
                 thumbnail_url: None,
                 like_count: v.like_count,
                 comment_count: v.comment_count,
+                valid_comment_count: Self::valid_comment_count_for(v.id, valid_comment_counts),
                 share_count: v.share_count,
                 view_count: v.play_count,
                 processed: true,
@@ -256,9 +387,7 @@ impl CrawlerRepository {
                 created_at: v.created_at,
                 campaign_id: v.campaign_id,
             })
-            .collect();
-
-        Ok((dtos, total))
+            .collect()
     }
 
     async fn find_facebook_contents(
@@ -288,7 +417,68 @@ impl CrawlerRepository {
             .select(FacebookPost::as_select())
             .load(&mut conn)?;
 
-        let dtos = items
+        let content_db_ids: Vec<i32> = items.iter().map(|post| post.id).collect();
+        let valid_comment_counts =
+            Self::load_facebook_valid_comment_counts(&mut conn, &content_db_ids)?;
+        let dtos = Self::map_facebook_contents(items, &valid_comment_counts);
+
+        Ok((dtos, total))
+    }
+
+    async fn find_facebook_contents_by_task(
+        &self,
+        task_id: i32,
+        page: i64,
+        page_size: i64,
+    ) -> Result<(Vec<UnifiedContentDto>, i64), diesel::result::Error> {
+        let mut conn = self.pool.get().unwrap();
+
+        let total: i64 = gm_agent_facebook_posts::table
+            .filter(gm_agent_facebook_posts::task_id.eq(task_id))
+            .count()
+            .get_result(&mut conn)?;
+
+        let items: Vec<FacebookPost> = gm_agent_facebook_posts::table
+            .filter(gm_agent_facebook_posts::task_id.eq(task_id))
+            .order(gm_agent_facebook_posts::created_at.desc())
+            .limit(page_size)
+            .offset((page - 1) * page_size)
+            .select(FacebookPost::as_select())
+            .load(&mut conn)?;
+
+        let content_db_ids: Vec<i32> = items.iter().map(|post| post.id).collect();
+        let valid_comment_counts =
+            Self::load_facebook_valid_comment_counts(&mut conn, &content_db_ids)?;
+        let dtos = Self::map_facebook_contents(items, &valid_comment_counts);
+
+        Ok((dtos, total))
+    }
+
+    fn load_facebook_valid_comment_counts(
+        conn: &mut PgConnection,
+        post_db_ids: &[i32],
+    ) -> Result<HashMap<i32, i64>, diesel::result::Error> {
+        if post_db_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let counts: Vec<(i32, i64)> = gm_agent_facebook_comments::table
+            .filter(gm_agent_facebook_comments::post_db_id.eq_any(post_db_ids))
+            .group_by(gm_agent_facebook_comments::post_db_id)
+            .select((
+                gm_agent_facebook_comments::post_db_id,
+                diesel::dsl::count_star(),
+            ))
+            .load(conn)?;
+
+        Ok(counts.into_iter().collect())
+    }
+
+    fn map_facebook_contents(
+        items: Vec<FacebookPost>,
+        valid_comment_counts: &HashMap<i32, i64>,
+    ) -> Vec<UnifiedContentDto> {
+        items
             .into_iter()
             .map(|p| UnifiedContentDto {
                 id: p.id,
@@ -303,6 +493,7 @@ impl CrawlerRepository {
                 thumbnail_url: p.image_url.or(p.video_thumbnail),
                 like_count: p.reactions_count,
                 comment_count: p.comments_count,
+                valid_comment_count: Self::valid_comment_count_for(p.id, valid_comment_counts),
                 share_count: p.reshare_count,
                 view_count: None,
                 processed: true,
@@ -311,9 +502,7 @@ impl CrawlerRepository {
                 created_at: p.created_at,
                 campaign_id: p.campaign_id,
             })
-            .collect();
-
-        Ok((dtos, total))
+            .collect()
     }
 
     async fn find_instagram_contents(
@@ -343,7 +532,68 @@ impl CrawlerRepository {
             .select(InstagramPost::as_select())
             .load(&mut conn)?;
 
-        let dtos = items
+        let content_db_ids: Vec<i32> = items.iter().map(|post| post.id).collect();
+        let valid_comment_counts =
+            Self::load_instagram_valid_comment_counts(&mut conn, &content_db_ids)?;
+        let dtos = Self::map_instagram_contents(items, &valid_comment_counts);
+
+        Ok((dtos, total))
+    }
+
+    async fn find_instagram_contents_by_task(
+        &self,
+        task_id: i32,
+        page: i64,
+        page_size: i64,
+    ) -> Result<(Vec<UnifiedContentDto>, i64), diesel::result::Error> {
+        let mut conn = self.pool.get().unwrap();
+
+        let total: i64 = gm_agent_instagram_posts::table
+            .filter(gm_agent_instagram_posts::task_id.eq(task_id))
+            .count()
+            .get_result(&mut conn)?;
+
+        let items: Vec<InstagramPost> = gm_agent_instagram_posts::table
+            .filter(gm_agent_instagram_posts::task_id.eq(task_id))
+            .order(gm_agent_instagram_posts::created_at.desc())
+            .limit(page_size)
+            .offset((page - 1) * page_size)
+            .select(InstagramPost::as_select())
+            .load(&mut conn)?;
+
+        let content_db_ids: Vec<i32> = items.iter().map(|post| post.id).collect();
+        let valid_comment_counts =
+            Self::load_instagram_valid_comment_counts(&mut conn, &content_db_ids)?;
+        let dtos = Self::map_instagram_contents(items, &valid_comment_counts);
+
+        Ok((dtos, total))
+    }
+
+    fn load_instagram_valid_comment_counts(
+        conn: &mut PgConnection,
+        post_db_ids: &[i32],
+    ) -> Result<HashMap<i32, i64>, diesel::result::Error> {
+        if post_db_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let counts: Vec<(i32, i64)> = gm_agent_instagram_comments::table
+            .filter(gm_agent_instagram_comments::post_db_id.eq_any(post_db_ids))
+            .group_by(gm_agent_instagram_comments::post_db_id)
+            .select((
+                gm_agent_instagram_comments::post_db_id,
+                diesel::dsl::count_star(),
+            ))
+            .load(conn)?;
+
+        Ok(counts.into_iter().collect())
+    }
+
+    fn map_instagram_contents(
+        items: Vec<InstagramPost>,
+        valid_comment_counts: &HashMap<i32, i64>,
+    ) -> Vec<UnifiedContentDto> {
+        items
             .into_iter()
             .map(|p| {
                 let content_type = match p.product_type.as_deref() {
@@ -364,6 +614,7 @@ impl CrawlerRepository {
                     thumbnail_url: p.thumbnail_url,
                     like_count: p.like_count,
                     comment_count: p.comment_count,
+                    valid_comment_count: Self::valid_comment_count_for(p.id, valid_comment_counts),
                     share_count: None,
                     view_count: p.play_count,
                     processed: true,
@@ -373,9 +624,7 @@ impl CrawlerRepository {
                     campaign_id: p.campaign_id,
                 }
             })
-            .collect();
-
-        Ok((dtos, total))
+            .collect()
     }
 
     async fn find_reddit_contents(
@@ -405,7 +654,65 @@ impl CrawlerRepository {
             .select(RedditPost::as_select())
             .load(&mut conn)?;
 
-        let dtos = items
+        let content_db_ids: Vec<i32> = items.iter().map(|post| post.id).collect();
+        let valid_comment_counts =
+            Self::load_reddit_valid_comment_counts(&mut conn, &content_db_ids)?;
+        let dtos = Self::map_reddit_contents(items, &valid_comment_counts);
+
+        Ok((dtos, total))
+    }
+
+    async fn find_reddit_contents_by_task(
+        &self,
+        task_id: i32,
+        page: i64,
+        page_size: i64,
+    ) -> Result<(Vec<UnifiedContentDto>, i64), diesel::result::Error> {
+        let mut conn = self.pool.get().unwrap();
+
+        let total: i64 = gm_agent_reddit_posts::table
+            .filter(gm_agent_reddit_posts::task_id.eq(task_id))
+            .count()
+            .get_result(&mut conn)?;
+
+        let items: Vec<RedditPost> = gm_agent_reddit_posts::table
+            .filter(gm_agent_reddit_posts::task_id.eq(task_id))
+            .order(gm_agent_reddit_posts::created_at.desc())
+            .limit(page_size)
+            .offset((page - 1) * page_size)
+            .select(RedditPost::as_select())
+            .load(&mut conn)?;
+
+        let content_db_ids: Vec<i32> = items.iter().map(|post| post.id).collect();
+        let valid_comment_counts =
+            Self::load_reddit_valid_comment_counts(&mut conn, &content_db_ids)?;
+        let dtos = Self::map_reddit_contents(items, &valid_comment_counts);
+
+        Ok((dtos, total))
+    }
+
+    fn load_reddit_valid_comment_counts(
+        conn: &mut PgConnection,
+        post_db_ids: &[i32],
+    ) -> Result<HashMap<i32, i64>, diesel::result::Error> {
+        if post_db_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let counts: Vec<(i32, i64)> = gm_agent_reddit_comments::table
+            .filter(gm_agent_reddit_comments::post_db_id.eq_any(post_db_ids))
+            .group_by(gm_agent_reddit_comments::post_db_id)
+            .select((gm_agent_reddit_comments::post_db_id, diesel::dsl::count_star()))
+            .load(conn)?;
+
+        Ok(counts.into_iter().collect())
+    }
+
+    fn map_reddit_contents(
+        items: Vec<RedditPost>,
+        valid_comment_counts: &HashMap<i32, i64>,
+    ) -> Vec<UnifiedContentDto> {
+        items
             .into_iter()
             .map(|p| UnifiedContentDto {
                 id: p.id,
@@ -424,6 +731,7 @@ impl CrawlerRepository {
                 thumbnail_url: p.thumbnail,
                 like_count: p.score, // Reddit uses score instead of likes
                 comment_count: p.num_comments,
+                valid_comment_count: Self::valid_comment_count_for(p.id, valid_comment_counts),
                 share_count: None,
                 view_count: None,
                 processed: true,
@@ -432,9 +740,7 @@ impl CrawlerRepository {
                 created_at: p.created_at,
                 campaign_id: p.campaign_id,
             })
-            .collect();
-
-        Ok((dtos, total))
+            .collect()
     }
 
     async fn find_twitter_contents(
@@ -464,7 +770,68 @@ impl CrawlerRepository {
             .select(TwitterTweet::as_select())
             .load(&mut conn)?;
 
-        let dtos = items
+        let content_db_ids: Vec<i32> = items.iter().map(|tweet| tweet.id).collect();
+        let valid_comment_counts =
+            Self::load_twitter_valid_comment_counts(&mut conn, &content_db_ids)?;
+        let dtos = Self::map_twitter_contents(items, &valid_comment_counts);
+
+        Ok((dtos, total))
+    }
+
+    async fn find_twitter_contents_by_task(
+        &self,
+        task_id: i32,
+        page: i64,
+        page_size: i64,
+    ) -> Result<(Vec<UnifiedContentDto>, i64), diesel::result::Error> {
+        let mut conn = self.pool.get().unwrap();
+
+        let total: i64 = gm_agent_twitter_tweets::table
+            .filter(gm_agent_twitter_tweets::task_id.eq(task_id))
+            .count()
+            .get_result(&mut conn)?;
+
+        let items: Vec<TwitterTweet> = gm_agent_twitter_tweets::table
+            .filter(gm_agent_twitter_tweets::task_id.eq(task_id))
+            .order(gm_agent_twitter_tweets::created_at.desc())
+            .limit(page_size)
+            .offset((page - 1) * page_size)
+            .select(TwitterTweet::as_select())
+            .load(&mut conn)?;
+
+        let content_db_ids: Vec<i32> = items.iter().map(|tweet| tweet.id).collect();
+        let valid_comment_counts =
+            Self::load_twitter_valid_comment_counts(&mut conn, &content_db_ids)?;
+        let dtos = Self::map_twitter_contents(items, &valid_comment_counts);
+
+        Ok((dtos, total))
+    }
+
+    fn load_twitter_valid_comment_counts(
+        conn: &mut PgConnection,
+        tweet_db_ids: &[i32],
+    ) -> Result<HashMap<i32, i64>, diesel::result::Error> {
+        if tweet_db_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let counts: Vec<(i32, i64)> = gm_agent_twitter_comments::table
+            .filter(gm_agent_twitter_comments::tweet_db_id.eq_any(tweet_db_ids))
+            .group_by(gm_agent_twitter_comments::tweet_db_id)
+            .select((
+                gm_agent_twitter_comments::tweet_db_id,
+                diesel::dsl::count_star(),
+            ))
+            .load(conn)?;
+
+        Ok(counts.into_iter().collect())
+    }
+
+    fn map_twitter_contents(
+        items: Vec<TwitterTweet>,
+        valid_comment_counts: &HashMap<i32, i64>,
+    ) -> Vec<UnifiedContentDto> {
+        items
             .into_iter()
             .map(|t| UnifiedContentDto {
                 id: t.id,
@@ -479,6 +846,7 @@ impl CrawlerRepository {
                 thumbnail_url: t.user_avatar,
                 like_count: t.favorite_count,
                 comment_count: t.reply_count,
+                valid_comment_count: Self::valid_comment_count_for(t.id, valid_comment_counts),
                 share_count: t.retweet_count,
                 view_count: t.view_count,
                 processed: true,
@@ -487,8 +855,6 @@ impl CrawlerRepository {
                 created_at: t.created_at,
                 campaign_id: t.campaign_id,
             })
-            .collect();
-
-        Ok((dtos, total))
+            .collect()
     }
 }

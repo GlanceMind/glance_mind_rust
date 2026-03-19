@@ -211,10 +211,7 @@ impl MaterialRepository {
             use glance_mind_db::schema::gm_data_video_cases as video_cases;
 
             let results: Vec<(Option<String>, Option<String>)> = video_cases::table
-                .select((
-                    video_cases::category_name_cn,
-                    video_cases::category_name_en,
-                ))
+                .select((video_cases::category_name_cn, video_cases::category_name_en))
                 .filter(
                     video_cases::category_name_cn
                         .is_not_null()
@@ -227,9 +224,7 @@ impl MaterialRepository {
                 std::collections::HashMap::new();
 
             for (cn, en) in results {
-                let tag_name = cn
-                    .clone()
-                    .unwrap_or_else(|| en.clone().unwrap_or_default());
+                let tag_name = cn.clone().unwrap_or_else(|| en.clone().unwrap_or_default());
                 if !tag_name.is_empty() {
                     let entry = tag_map.entry(tag_name.clone()).or_insert((cn.clone(), 0));
                     let count: i64 = video_cases::table

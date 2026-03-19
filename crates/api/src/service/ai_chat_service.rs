@@ -353,8 +353,10 @@ impl AiChatService {
         }
 
         if let Some(submission) = &questionnaire_submission {
-            let normalized = ToolRegistry::normalize_questionnaire_submission(submission, state).await?;
-            if let Some(latest_user_message) = messages.iter_mut().rev().find(|msg| msg.role == "user")
+            let normalized =
+                ToolRegistry::normalize_questionnaire_submission(submission, state).await?;
+            if let Some(latest_user_message) =
+                messages.iter_mut().rev().find(|msg| msg.role == "user")
             {
                 latest_user_message.content = Some(normalized);
             }
@@ -630,10 +632,10 @@ impl AiChatService {
             .await;
 
         if tool_name == "create_questionnaire_proposal" && success {
-            if let Ok(questionnaire) = serde_json::from_value::<QuestionnairePayload>(result_value.clone()) {
-                let _ = tx
-                    .send(SseEvent::Questionnaire { questionnaire })
-                    .await;
+            if let Ok(questionnaire) =
+                serde_json::from_value::<QuestionnairePayload>(result_value.clone())
+            {
+                let _ = tx.send(SseEvent::Questionnaire { questionnaire }).await;
             }
         }
 

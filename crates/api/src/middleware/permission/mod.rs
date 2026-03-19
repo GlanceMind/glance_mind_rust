@@ -1,11 +1,7 @@
 pub mod config;
 
 use axum::{
-    body::Body,
-    extract::OriginalUri,
-    http::Request,
-    middleware::Next,
-    response::Response,
+    body::Body, extract::OriginalUri, http::Request, middleware::Next, response::Response,
     Extension,
 };
 

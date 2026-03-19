@@ -69,8 +69,15 @@ impl CreateVideoRequest {
         }
 
         let valid_sizes = [
-            "1280x720", "720x1280", "720x720", "960x720", "720x960", "1260x540",
-            "1920x1080", "1080x1920", "1080x1080",
+            "1280x720",
+            "720x1280",
+            "720x720",
+            "960x720",
+            "720x960",
+            "1260x540",
+            "1920x1080",
+            "1080x1920",
+            "1080x1080",
         ];
         if !valid_sizes.contains(&self.size.as_str()) {
             return Err(format!("invalid size: {}", self.size));
@@ -208,12 +215,15 @@ mod tests {
     #[test]
     fn test_validate_standard_sizes() {
         let valid = vec![
-            "1280x720", "720x1280", "720x720",
-            "960x720", "720x960", "1260x540",
+            "1280x720", "720x1280", "720x720", "960x720", "720x960", "1260x540",
         ];
         for size in valid {
             let req = make_request("10", size);
-            assert!(req.validate_params().is_ok(), "size '{}' should be valid", size);
+            assert!(
+                req.validate_params().is_ok(),
+                "size '{}' should be valid",
+                size
+            );
         }
     }
 

@@ -14,7 +14,7 @@ use axum::{
 pub fn aipub_user_routes() -> Router<UserState> {
     // Body size limit: 100MB for video uploads
     const MAX_VIDEO_UPLOAD_SIZE: usize = 100 * 1024 * 1024; // 100MB
-    
+
     Router::new()
         // Stats (put before :id routes to avoid conflict)
         .route("/publish_plans/stats", get(aipub_handler::get_plan_stats))
@@ -23,8 +23,7 @@ pub fn aipub_user_routes() -> Router<UserState> {
         // Video upload to OSS - with increased body size limit
         .route(
             "/oss/upload-video",
-            post(oss_handler::upload_video)
-                .layer(DefaultBodyLimit::max(MAX_VIDEO_UPLOAD_SIZE))
+            post(oss_handler::upload_video).layer(DefaultBodyLimit::max(MAX_VIDEO_UPLOAD_SIZE)),
         )
         // Plan CRUD
         .route(

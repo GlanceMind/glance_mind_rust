@@ -78,11 +78,7 @@ impl RedisService {
     /// Release a previously reserved quota slot (e.g. when a reply fails).
     ///
     /// Decrements the counter but will not let it go below zero.
-    pub fn release_quota(
-        &self,
-        account_id: i32,
-        date: &str,
-    ) -> Result<(), String> {
+    pub fn release_quota(&self, account_id: i32, date: &str) -> Result<(), String> {
         let key = format!("reply_quota:{}:{}", account_id, date);
 
         let mut conn = self
@@ -127,21 +123,35 @@ mod tests {
 
     fn get_counter(svc: &RedisService, key: &str) -> i32 {
         let mut conn = svc.client.get_connection().unwrap();
-        redis::cmd("GET").arg(key).query::<Option<i32>>(&mut conn).unwrap().unwrap_or(0)
+        redis::cmd("GET")
+            .arg(key)
+            .query::<Option<i32>>(&mut conn)
+            .unwrap()
+            .unwrap_or(0)
     }
 
     #[test]
     fn test_reserve_under_limit() {
         let svc = match get_test_redis() {
             Some(s) => s,
-            None => { eprintln!("Skipping: Redis not available"); return; }
+            None => {
+                eprintln!("Skipping: Redis not available");
+                return;
+            }
         };
         let date = "test-reserve-under-limit";
         let key = format!("reply_quota:9001:{}", date);
         flush_key(&svc, &key);
 
-        assert!(svc.try_reserve(9001, date, 50).unwrap(), "First reserve should succeed");
-        assert_eq!(get_counter(&svc, &key), 1, "Counter should be 1 after one reserve");
+        assert!(
+            svc.try_reserve(9001, date, 50).unwrap(),
+            "First reserve should succeed"
+        );
+        assert_eq!(
+            get_counter(&svc, &key),
+            1,
+            "Counter should be 1 after one reserve"
+        );
 
         flush_key(&svc, &key);
     }
@@ -150,7 +160,10 @@ mod tests {
     fn test_reserve_reaches_limit() {
         let svc = match get_test_redis() {
             Some(s) => s,
-            None => { eprintln!("Skipping: Redis not available"); return; }
+            None => {
+                eprintln!("Skipping: Redis not available");
+                return;
+            }
         };
         let date = "test-reserve-reaches-limit";
         let key = format!("reply_quota:9002:{}", date);
@@ -158,10 +171,21 @@ mod tests {
 
         let limit = 3;
         for i in 0..limit {
-            assert!(svc.try_reserve(9002, date, limit).unwrap(), "Reserve {} should succeed", i + 1);
+            assert!(
+                svc.try_reserve(9002, date, limit).unwrap(),
+                "Reserve {} should succeed",
+                i + 1
+            );
         }
-        assert!(!svc.try_reserve(9002, date, limit).unwrap(), "Reserve beyond limit should fail");
-        assert_eq!(get_counter(&svc, &key), limit, "Counter should stay at limit after rejection");
+        assert!(
+            !svc.try_reserve(9002, date, limit).unwrap(),
+            "Reserve beyond limit should fail"
+        );
+        assert_eq!(
+            get_counter(&svc, &key),
+            limit,
+            "Counter should stay at limit after rejection"
+        );
 
         flush_key(&svc, &key);
     }
@@ -170,7 +194,10 @@ mod tests {
     fn test_reserve_different_days() {
         let svc = match get_test_redis() {
             Some(s) => s,
-            None => { eprintln!("Skipping: Redis not available"); return; }
+            None => {
+                eprintln!("Skipping: Redis not available");
+                return;
+            }
         };
         let day_a = "test-day-a";
         let day_b = "test-day-b";
@@ -191,7 +218,10 @@ mod tests {
     fn test_reserve_different_accounts() {
         let svc = match get_test_redis() {
             Some(s) => s,
-            None => { eprintln!("Skipping: Redis not available"); return; }
+            None => {
+                eprintln!("Skipping: Redis not available");
+                return;
+            }
         };
         let date = "test-diff-accounts";
         let key_a = format!("reply_quota:9004:{}", date);
@@ -211,7 +241,10 @@ mod tests {
     fn test_key_expiry() {
         let svc = match get_test_redis() {
             Some(s) => s,
-            None => { eprintln!("Skipping: Redis not available"); return; }
+            None => {
+                eprintln!("Skipping: Redis not available");
+                return;
+            }
         };
         let date = "test-key-expiry";
         let key = format!("reply_quota:9006:{}", date);
@@ -223,7 +256,8 @@ mod tests {
         let ttl: i64 = redis::cmd("TTL").arg(&key).query(&mut conn).unwrap();
         assert!(
             (86400..=93600).contains(&ttl),
-            "TTL should be between 86400 and 93600, got {}", ttl
+            "TTL should be between 86400 and 93600, got {}",
+            ttl
         );
 
         flush_key(&svc, &key);
@@ -233,7 +267,10 @@ mod tests {
     fn test_lua_script_counter_stays_at_limit_after_rejection() {
         let svc = match get_test_redis() {
             Some(s) => s,
-            None => { eprintln!("Skipping: Redis not available"); return; }
+            None => {
+                eprintln!("Skipping: Redis not available");
+                return;
+            }
         };
         let date = "test-lua-counter-stable";
         let key = format!("reply_quota:9010:{}", date);
@@ -245,7 +282,11 @@ mod tests {
         assert!(!svc.try_reserve(9010, date, 2).unwrap());
         assert!(!svc.try_reserve(9010, date, 2).unwrap());
         // Counter should stay at exactly 2, not drift upward
-        assert_eq!(get_counter(&svc, &key), 2, "Counter must stay at limit after repeated rejections");
+        assert_eq!(
+            get_counter(&svc, &key),
+            2,
+            "Counter must stay at limit after repeated rejections"
+        );
 
         flush_key(&svc, &key);
     }
@@ -254,7 +295,10 @@ mod tests {
     fn test_ttl_always_set_even_at_limit() {
         let svc = match get_test_redis() {
             Some(s) => s,
-            None => { eprintln!("Skipping: Redis not available"); return; }
+            None => {
+                eprintln!("Skipping: Redis not available");
+                return;
+            }
         };
         let date = "test-ttl-always-set";
         let key = format!("reply_quota:9011:{}", date);
@@ -274,14 +318,24 @@ mod tests {
     fn test_reserve_zero_limit_rejected() {
         let svc = match get_test_redis() {
             Some(s) => s,
-            None => { eprintln!("Skipping: Redis not available"); return; }
+            None => {
+                eprintln!("Skipping: Redis not available");
+                return;
+            }
         };
         let date = "test-zero-limit";
         let key = format!("reply_quota:9012:{}", date);
         flush_key(&svc, &key);
 
-        assert!(!svc.try_reserve(9012, date, 0).unwrap(), "Zero limit should reject immediately");
-        assert_eq!(get_counter(&svc, &key), 0, "Counter should not increment for zero limit");
+        assert!(
+            !svc.try_reserve(9012, date, 0).unwrap(),
+            "Zero limit should reject immediately"
+        );
+        assert_eq!(
+            get_counter(&svc, &key),
+            0,
+            "Counter should not increment for zero limit"
+        );
 
         flush_key(&svc, &key);
     }
@@ -290,7 +344,10 @@ mod tests {
     fn test_reserve_negative_limit_rejected() {
         let svc = match get_test_redis() {
             Some(s) => s,
-            None => { eprintln!("Skipping: Redis not available"); return; }
+            None => {
+                eprintln!("Skipping: Redis not available");
+                return;
+            }
         };
         assert!(!svc.try_reserve(9013, "test-neg-limit", -1).unwrap());
         assert!(!svc.try_reserve(9013, "test-neg-limit", -100).unwrap());
@@ -300,7 +357,10 @@ mod tests {
     fn test_release_quota_basic() {
         let svc = match get_test_redis() {
             Some(s) => s,
-            None => { eprintln!("Skipping: Redis not available"); return; }
+            None => {
+                eprintln!("Skipping: Redis not available");
+                return;
+            }
         };
         let date = "test-release-basic";
         let key = format!("reply_quota:9014:{}", date);
@@ -311,7 +371,11 @@ mod tests {
         assert_eq!(get_counter(&svc, &key), 2);
 
         svc.release_quota(9014, date).unwrap();
-        assert_eq!(get_counter(&svc, &key), 1, "Counter should decrease after release");
+        assert_eq!(
+            get_counter(&svc, &key),
+            1,
+            "Counter should decrease after release"
+        );
 
         // Can now reserve again
         assert!(svc.try_reserve(9014, date, 2).unwrap());
@@ -323,7 +387,10 @@ mod tests {
     fn test_release_quota_wont_go_negative() {
         let svc = match get_test_redis() {
             Some(s) => s,
-            None => { eprintln!("Skipping: Redis not available"); return; }
+            None => {
+                eprintln!("Skipping: Redis not available");
+                return;
+            }
         };
         let date = "test-release-no-negative";
         let key = format!("reply_quota:9015:{}", date);
@@ -337,7 +404,11 @@ mod tests {
         svc.try_reserve(9015, date, 5).unwrap();
         svc.release_quota(9015, date).unwrap();
         svc.release_quota(9015, date).unwrap();
-        assert_eq!(get_counter(&svc, &key), 0, "Counter should not go below 0 after double release");
+        assert_eq!(
+            get_counter(&svc, &key),
+            0,
+            "Counter should not go below 0 after double release"
+        );
 
         flush_key(&svc, &key);
     }

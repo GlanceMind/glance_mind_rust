@@ -377,13 +377,22 @@ class TestPaymentNotifyCallback:
 
         paid_form = build_notify_form(order_no, total_fee="10.00", status="OD")
         api_client.post("/api/v1/public/payment/notify", data=paid_form)
+        gateway_ids = {
+            "transaction_id": paid_form["transaction_id"],
+            "open_order_id": paid_form["open_order_id"],
+        }
 
         balance_after_paid, _ = get_wallet_balance(db_cursor)
         txn = get_txn_by_external_id(db_cursor, order_no)
         assert txn["payment_status"] == "PAID"
         assert count_deposit_txns(db_cursor, txn["id"]) == 1
 
-        refunding_form = build_notify_form(order_no, total_fee="10.00", status="RD")
+        refunding_form = build_notify_form(
+            order_no,
+            total_fee="10.00",
+            status="RD",
+            extra_fields=gateway_ids,
+        )
         api_client.post("/api/v1/public/payment/notify", data=refunding_form)
 
         balance_after_refunding, _ = get_wallet_balance(db_cursor)
@@ -392,7 +401,12 @@ class TestPaymentNotifyCallback:
         txn = get_txn_by_external_id(db_cursor, order_no)
         assert txn["payment_status"] == "REFUNDING"
 
-        refund_failed_form = build_notify_form(order_no, total_fee="10.00", status="UD")
+        refund_failed_form = build_notify_form(
+            order_no,
+            total_fee="10.00",
+            status="UD",
+            extra_fields=gateway_ids,
+        )
         api_client.post("/api/v1/public/payment/notify", data=refund_failed_form)
 
         balance_after_refund_failed, _ = get_wallet_balance(db_cursor)
@@ -413,10 +427,12 @@ class TestPaymentNotifyCallback:
 
         balance_before, _ = get_wallet_balance(db_cursor)
 
-        api_client.post(
-            "/api/v1/public/payment/notify",
-            data=build_notify_form(order_no, total_fee="10.00", status="OD"),
-        )
+        paid_form = build_notify_form(order_no, total_fee="10.00", status="OD")
+        api_client.post("/api/v1/public/payment/notify", data=paid_form)
+        gateway_ids = {
+            "transaction_id": paid_form["transaction_id"],
+            "open_order_id": paid_form["open_order_id"],
+        }
 
         balance_after_paid, _ = get_wallet_balance(db_cursor)
         assert balance_after_paid - balance_before == Decimal("1000") or \
@@ -425,7 +441,12 @@ class TestPaymentNotifyCallback:
 
         api_client.post(
             "/api/v1/public/payment/notify",
-            data=build_notify_form(order_no, total_fee="10.00", status="CD"),
+            data=build_notify_form(
+                order_no,
+                total_fee="10.00",
+                status="CD",
+                extra_fields=gateway_ids,
+            ),
         )
 
         balance_after_refund, _ = get_wallet_balance(db_cursor)
@@ -448,10 +469,12 @@ class TestPaymentNotifyCallback:
         reset_wallet(db_cursor, balance=0.0)
         txn_id = insert_pending_order(db_cursor, order_no, amount="10.00")
 
-        api_client.post(
-            "/api/v1/public/payment/notify",
-            data=build_notify_form(order_no, total_fee="10.00", status="OD"),
-        )
+        paid_form = build_notify_form(order_no, total_fee="10.00", status="OD")
+        api_client.post("/api/v1/public/payment/notify", data=paid_form)
+        gateway_ids = {
+            "transaction_id": paid_form["transaction_id"],
+            "open_order_id": paid_form["open_order_id"],
+        }
 
         txn = get_txn_by_external_id(db_cursor, order_no)
         assert txn["payment_status"] == "PAID"
@@ -470,7 +493,12 @@ class TestPaymentNotifyCallback:
 
         resp = api_client.post(
             "/api/v1/public/payment/notify",
-            data=build_notify_form(order_no, total_fee="10.00", status="CD"),
+            data=build_notify_form(
+                order_no,
+                total_fee="10.00",
+                status="CD",
+                extra_fields=gateway_ids,
+            ),
         )
         assert resp.text.strip() == "success", \
             "Blocked refund callback should still return success to stop retries"
@@ -532,9 +560,19 @@ class TestRechargeStatusQuery:
             "/api/v1/public/payment/notify",
             data=build_notify_form(order_no, total_fee="1.00", status="OD"),
         )
+        txn = get_txn_by_external_id(db_cursor, order_no)
+        gateway_ids = {
+            "transaction_id": txn["platform_txn_id"],
+            "open_order_id": txn["open_order_id"],
+        }
         api_client.post(
             "/api/v1/public/payment/notify",
-            data=build_notify_form(order_no, total_fee="1.00", status="RD"),
+            data=build_notify_form(
+                order_no,
+                total_fee="1.00",
+                status="RD",
+                extra_fields=gateway_ids,
+            ),
         )
 
         resp = auth_client.get(f"/api/v1/wallet/recharge/{order_no}")

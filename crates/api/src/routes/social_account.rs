@@ -9,7 +9,10 @@ pub fn routes() -> Router<UserState> {
     Router::new()
         .route("/", get(social_account_handler::list_accounts))
         .route("/", post(social_account_handler::create_account))
-        .route("/batch", post(social_account_handler::batch_create_accounts))
+        .route(
+            "/batch",
+            post(social_account_handler::batch_create_accounts),
+        )
         .route(
             "/statistics",
             get(social_account_handler::get_account_statistics),

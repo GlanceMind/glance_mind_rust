@@ -85,7 +85,11 @@ impl NatsDmService {
         // KV buckets (ignore AlreadyExists, log other errors)
         for (bucket, storage, max_age) in [
             ("dm_conversations", stream::StorageType::File, None),
-            ("dm_device_heartbeat", stream::StorageType::Memory, Some(std::time::Duration::from_secs(120))),
+            (
+                "dm_device_heartbeat",
+                stream::StorageType::Memory,
+                Some(std::time::Duration::from_secs(120)),
+            ),
             ("dm_monitor_config", stream::StorageType::File, None),
         ] {
             let cfg = kv::Config {
@@ -115,18 +119,20 @@ impl NatsDmService {
         user_id: i32,
         query: DmConversationsQuery,
     ) -> Result<DmConversationsResponse, ApiError> {
-        let kv = self.js.get_key_value("dm_conversations").await
+        let kv = self
+            .js
+            .get_key_value("dm_conversations")
+            .await
             .map_err(|e| ApiError::InternalServerError(format!("KV open: {e}")))?;
 
         let prefix = format!("{user_id}.");
 
         // Collect all keys (Keys implements futures::Stream)
-        let keys_stream = kv.keys().await
+        let keys_stream = kv
+            .keys()
+            .await
             .map_err(|e| ApiError::InternalServerError(format!("KV keys: {e}")))?;
-        let all_keys: Vec<String> = keys_stream
-            .filter_map(|r| async { r.ok() })
-            .collect()
-            .await;
+        let all_keys: Vec<String> = keys_stream.filter_map(|r| async { r.ok() }).collect().await;
 
         tracing::debug!(
             "DM list_conversations: user_id={user_id}, prefix={prefix}, all_keys_count={}",
@@ -180,7 +186,10 @@ impl NatsDmService {
 
         let device_status = self.get_device_status_map(&conversations).await;
 
-        Ok(DmConversationsResponse { conversations, device_status })
+        Ok(DmConversationsResponse {
+            conversations,
+            device_status,
+        })
     }
 
     /// Fetch messages for a conversation, returning the **latest** `limit` messages.
@@ -193,7 +202,10 @@ impl NatsDmService {
         conv_id: &str,
         query: DmMessagesQuery,
     ) -> Result<DmMessagesResponse, ApiError> {
-        let stream = self.js.get_stream("DM_MESSAGES").await
+        let stream = self
+            .js
+            .get_stream("DM_MESSAGES")
+            .await
             .map_err(|e| ApiError::InternalServerError(format!("Stream open: {e}")))?;
 
         let limit = query.limit.unwrap_or(50).min(100);
@@ -235,25 +247,23 @@ impl NatsDmService {
             let mut batch_count: usize = 0;
             while let Some(result) = messages_batch.next().await {
                 match result {
-                    Ok(msg) => {
-                        match serde_json::from_slice::<DmMessageDto>(&msg.payload) {
-                            Ok(mut dm_msg) => {
-                                if let Ok(info) = msg.info() {
-                                    dm_msg.nats_seq = Some(info.stream_sequence);
-                                }
-                                all_messages.push(dm_msg);
-                                batch_count += 1;
+                    Ok(msg) => match serde_json::from_slice::<DmMessageDto>(&msg.payload) {
+                        Ok(mut dm_msg) => {
+                            if let Ok(info) = msg.info() {
+                                dm_msg.nats_seq = Some(info.stream_sequence);
                             }
-                            Err(e) => {
-                                deser_errors += 1;
-                                if deser_errors <= 3 {
-                                    tracing::warn!(
-                                        "DM get_messages: deserialize error for subject={subject}: {e}"
-                                    );
-                                }
+                            all_messages.push(dm_msg);
+                            batch_count += 1;
+                        }
+                        Err(e) => {
+                            deser_errors += 1;
+                            if deser_errors <= 3 {
+                                tracing::warn!(
+                                    "DM get_messages: deserialize error for subject={subject}: {e}"
+                                );
                             }
                         }
-                    }
+                    },
                     Err(e) => {
                         tracing::warn!("DM get_messages: stream error: {e}");
                         continue;
@@ -280,11 +290,9 @@ impl NatsDmService {
         );
 
         // Sort by nats_seq (most reliable) then timestamp
-        all_messages.sort_by(|a, b| {
-            match (a.nats_seq, b.nats_seq) {
-                (Some(sa), Some(sb)) => sa.cmp(&sb),
-                _ => a.timestamp.cmp(&b.timestamp),
-            }
+        all_messages.sort_by(|a, b| match (a.nats_seq, b.nats_seq) {
+            (Some(sa), Some(sb)) => sa.cmp(&sb),
+            _ => a.timestamp.cmp(&b.timestamp),
         });
 
         // Apply `before_seq` filter: keep only messages whose nats_seq < before_seq
@@ -338,11 +346,17 @@ impl NatsDmService {
             .await
             .map_err(|e| ApiError::InternalServerError(format!("Publish ack: {e}")))?;
 
-        Ok(DmReplyResponse { cmd_id, status: "queued".to_string() })
+        Ok(DmReplyResponse {
+            cmd_id,
+            status: "queued".to_string(),
+        })
     }
 
     pub async fn mark_read(&self, user_id: i32, conv_id: &str) -> Result<(), ApiError> {
-        let kv = self.js.get_key_value("dm_conversations").await
+        let kv = self
+            .js
+            .get_key_value("dm_conversations")
+            .await
             .map_err(|e| ApiError::InternalServerError(format!("KV open: {e}")))?;
 
         let key = format!("{user_id}.{conv_id}");
@@ -352,7 +366,8 @@ impl NatsDmService {
                 conv.updated_at = Utc::now().to_rfc3339();
                 let data = serde_json::to_vec(&conv)
                     .map_err(|e| ApiError::InternalServerError(format!("Serialize: {e}")))?;
-                kv.put(&key, data.into()).await
+                kv.put(&key, data.into())
+                    .await
                     .map_err(|e| ApiError::InternalServerError(format!("KV put: {e}")))?;
             }
         }
@@ -365,7 +380,10 @@ impl NatsDmService {
         conv_id: &str,
         settings: DmSettingsRequest,
     ) -> Result<(), ApiError> {
-        let kv = self.js.get_key_value("dm_conversations").await
+        let kv = self
+            .js
+            .get_key_value("dm_conversations")
+            .await
             .map_err(|e| ApiError::InternalServerError(format!("KV open: {e}")))?;
 
         let key = format!("{user_id}.{conv_id}");
@@ -380,7 +398,8 @@ impl NatsDmService {
                 conv.updated_at = Utc::now().to_rfc3339();
                 let data = serde_json::to_vec(&conv)
                     .map_err(|e| ApiError::InternalServerError(format!("Serialize: {e}")))?;
-                kv.put(&key, data.into()).await
+                kv.put(&key, data.into())
+                    .await
                     .map_err(|e| ApiError::InternalServerError(format!("KV put: {e}")))?;
             }
         }
@@ -388,22 +407,26 @@ impl NatsDmService {
     }
 
     pub async fn get_stats(&self, user_id: i32) -> Result<DmStatsResponse, ApiError> {
-        let kv = self.js.get_key_value("dm_conversations").await
+        let kv = self
+            .js
+            .get_key_value("dm_conversations")
+            .await
             .map_err(|e| ApiError::InternalServerError(format!("KV open: {e}")))?;
 
         let prefix = format!("{user_id}.");
-        let keys_stream = kv.keys().await
+        let keys_stream = kv
+            .keys()
+            .await
             .map_err(|e| ApiError::InternalServerError(format!("KV keys: {e}")))?;
-        let all_keys: Vec<String> = keys_stream
-            .filter_map(|r| async { r.ok() })
-            .collect()
-            .await;
+        let all_keys: Vec<String> = keys_stream.filter_map(|r| async { r.ok() }).collect().await;
 
         let mut total_unread = 0i32;
         let mut platform_map: HashMap<(i32, String), (usize, i32)> = HashMap::new();
 
         for key in &all_keys {
-            if !key.starts_with(&prefix) { continue; }
+            if !key.starts_with(&prefix) {
+                continue;
+            }
             if let Ok(Some(bytes)) = kv.get(key).await {
                 match serde_json::from_slice::<ConversationMetaDto>(&bytes) {
                     Ok(conv) => {
@@ -425,12 +448,18 @@ impl NatsDmService {
         let per_platform = platform_map
             .into_iter()
             .map(|((pid, pname), (count, unread))| DmPlatformStats {
-                platform_id: pid, platform_name: pname,
-                conversations: count, unread,
+                platform_id: pid,
+                platform_name: pname,
+                conversations: count,
+                unread,
             })
             .collect();
 
-        Ok(DmStatsResponse { total_conversations, total_unread, per_platform })
+        Ok(DmStatsResponse {
+            total_conversations,
+            total_unread,
+            per_platform,
+        })
     }
 
     pub async fn generate_nats_token(
@@ -439,9 +468,8 @@ impl NatsDmService {
     ) -> Result<DmNatsTokenResponse, ApiError> {
         // TODO: implement per-user NATS JWT for fine-grained access control.
         // Currently returns the shared server token. Each user gets identical access.
-        let token = std::env::var("NATS_TOKEN").map_err(|_| {
-            ApiError::InternalServerError("NATS_TOKEN not configured".into())
-        })?;
+        let token = std::env::var("NATS_TOKEN")
+            .map_err(|_| ApiError::InternalServerError("NATS_TOKEN not configured".into()))?;
         let expires_at = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
         Ok(DmNatsTokenResponse { token, expires_at })
     }
@@ -454,7 +482,10 @@ impl NatsDmService {
         &self,
         device_id: &str,
     ) -> Result<Option<DmMonitorConfigDto>, ApiError> {
-        let kv = self.js.get_key_value("dm_monitor_config").await
+        let kv = self
+            .js
+            .get_key_value("dm_monitor_config")
+            .await
             .map_err(|e| ApiError::InternalServerError(format!("KV open: {e}")))?;
         match kv.get(device_id).await {
             Ok(Some(bytes)) => {
@@ -475,31 +506,46 @@ impl NatsDmService {
         device_id: &str,
         req: DmMonitorConfigUpdateRequest,
     ) -> Result<DmMonitorConfigDto, ApiError> {
-        let kv = self.js.get_key_value("dm_monitor_config").await
+        let kv = self
+            .js
+            .get_key_value("dm_monitor_config")
+            .await
             .map_err(|e| ApiError::InternalServerError(format!("KV open: {e}")))?;
 
-        let mut cfg = match kv.get(device_id).await {
-            Ok(Some(bytes)) => serde_json::from_slice::<DmMonitorConfigDto>(&bytes)
-                .unwrap_or_else(|_| DmMonitorConfigDto {
+        let mut cfg =
+            match kv.get(device_id).await {
+                Ok(Some(bytes)) => serde_json::from_slice::<DmMonitorConfigDto>(&bytes)
+                    .unwrap_or_else(|_| DmMonitorConfigDto {
+                        device_id: device_id.to_string(),
+                        ..Default::default()
+                    }),
+                _ => DmMonitorConfigDto {
                     device_id: device_id.to_string(),
                     ..Default::default()
-                }),
-            _ => DmMonitorConfigDto {
-                device_id: device_id.to_string(),
-                ..Default::default()
-            },
-        };
+                },
+            };
 
-        if let Some(v) = req.enabled { cfg.enabled = v; }
-        if let Some(v) = req.poll_interval_seconds { cfg.poll_interval_seconds = v; }
-        if let Some(v) = req.max_concurrent_monitors { cfg.max_concurrent_monitors = v; }
-        if let Some(v) = req.inbox_linger_seconds { cfg.inbox_linger_seconds = v; }
-        if let Some(v) = req.platforms { cfg.platforms = v; }
+        if let Some(v) = req.enabled {
+            cfg.enabled = v;
+        }
+        if let Some(v) = req.poll_interval_seconds {
+            cfg.poll_interval_seconds = v;
+        }
+        if let Some(v) = req.max_concurrent_monitors {
+            cfg.max_concurrent_monitors = v;
+        }
+        if let Some(v) = req.inbox_linger_seconds {
+            cfg.inbox_linger_seconds = v;
+        }
+        if let Some(v) = req.platforms {
+            cfg.platforms = v;
+        }
         cfg.updated_at = Utc::now().to_rfc3339();
 
         let data = serde_json::to_vec(&cfg)
             .map_err(|e| ApiError::InternalServerError(format!("Serialize: {e}")))?;
-        kv.put(device_id, data.into()).await
+        kv.put(device_id, data.into())
+            .await
             .map_err(|e| ApiError::InternalServerError(format!("KV put: {e}")))?;
 
         Ok(cfg)
@@ -509,13 +555,18 @@ impl NatsDmService {
     /// Used for auto-generated accounts (negative social_account_id) that don't
     /// exist in the database.
     pub async fn verify_conv_exists(&self, user_id: i32, conv_id: &str) -> Result<(), ApiError> {
-        let kv = self.js.get_key_value("dm_conversations").await
+        let kv = self
+            .js
+            .get_key_value("dm_conversations")
+            .await
             .map_err(|e| ApiError::InternalServerError(format!("KV open: {e}")))?;
 
         let key = format!("{user_id}.{conv_id}");
         match kv.get(&key).await {
             Ok(Some(_)) => Ok(()),
-            Ok(None) => Err(ApiError::NotFound(format!("Conversation {conv_id} not found"))),
+            Ok(None) => Err(ApiError::NotFound(format!(
+                "Conversation {conv_id} not found"
+            ))),
             Err(e) => Err(ApiError::InternalServerError(format!("KV get: {e}"))),
         }
     }
@@ -527,14 +578,19 @@ impl NatsDmService {
         user_id: i32,
         conv_id: &str,
     ) -> Result<ConversationMetaDto, ApiError> {
-        let kv = self.js.get_key_value("dm_conversations").await
+        let kv = self
+            .js
+            .get_key_value("dm_conversations")
+            .await
             .map_err(|e| ApiError::InternalServerError(format!("KV open: {e}")))?;
 
         let key = format!("{user_id}.{conv_id}");
         match kv.get(&key).await {
             Ok(Some(bytes)) => serde_json::from_slice::<ConversationMetaDto>(&bytes)
                 .map_err(|e| ApiError::InternalServerError(format!("Deserialize: {e}"))),
-            Ok(None) => Err(ApiError::NotFound(format!("Conversation {conv_id} not found"))),
+            Ok(None) => Err(ApiError::NotFound(format!(
+                "Conversation {conv_id} not found"
+            ))),
             Err(e) => Err(ApiError::InternalServerError(format!("KV get: {e}"))),
         }
     }
@@ -561,14 +617,27 @@ impl NatsDmService {
                 match kv.get(&device_id).await {
                     Ok(Some(bytes)) => {
                         if let Ok(hb) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                            let last_seen = hb.get("last_seen")
+                            let last_seen = hb
+                                .get("last_seen")
                                 .and_then(|v| v.as_str())
                                 .map(|s| s.to_string());
-                            result.insert(device_id, DeviceStatusDto { online: true, last_seen });
+                            result.insert(
+                                device_id,
+                                DeviceStatusDto {
+                                    online: true,
+                                    last_seen,
+                                },
+                            );
                         }
                     }
                     _ => {
-                        result.insert(device_id, DeviceStatusDto { online: false, last_seen: None });
+                        result.insert(
+                            device_id,
+                            DeviceStatusDto {
+                                online: false,
+                                last_seen: None,
+                            },
+                        );
                     }
                 }
             }

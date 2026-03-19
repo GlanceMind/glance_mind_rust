@@ -38,24 +38,33 @@ impl JimengResolution {
 
 /// Build the Volcengine `req_key` from mode + resolution.
 ///
-/// Per Volcengine docs: T2V uses `_1080p` suffix, I2V uses `_1080` (no 'p')
+/// Per Volcengine docs (CVSync2AsyncSubmitTask + Version=2022-08-31):
+///   - Pro uses unified `jimeng_ti2v_v30_pro` for both T2V and I2V
+///     (mode is determined by whether `image_urls` is present in the body)
+///   - 720P/1080P: T2V uses `_1080p` suffix, I2V uses `_1080` (no 'p')
 ///
 /// | Product     | T2V                     | I2V First Frame              | I2V First-Last Frame              |
 /// |-------------|-------------------------|------------------------------|-----------------------------------|
 /// | 3.0 720P    | jimeng_t2v_v30          | jimeng_i2v_first_v30         | jimeng_i2v_first_tail_v30         |
 /// | 3.0 1080P   | jimeng_t2v_v30_1080p    | jimeng_i2v_first_v30_1080    | jimeng_i2v_first_tail_v30_1080    |
-/// | 3.0 Pro     | jimeng_vgfm_t2v_l20     | jimeng_vgfm_i2v_l20          | N/A (not supported)               |
+/// | 3.0 Pro     | jimeng_ti2v_v30_pro     | jimeng_ti2v_v30_pro          | N/A (not supported)               |
 pub fn build_req_key(mode: JimengVideoMode, resolution: JimengResolution) -> Option<String> {
     let key = match (mode, resolution) {
-        (JimengVideoMode::TextToVideo, JimengResolution::V30Pro) => "jimeng_vgfm_t2v_l20",
-        (JimengVideoMode::ImageFirstFrame, JimengResolution::V30Pro) => "jimeng_vgfm_i2v_l20",
+        (JimengVideoMode::TextToVideo, JimengResolution::V30Pro) => "jimeng_ti2v_v30_pro",
+        (JimengVideoMode::ImageFirstFrame, JimengResolution::V30Pro) => "jimeng_ti2v_v30_pro",
         (JimengVideoMode::ImageFirstLastFrame, JimengResolution::V30Pro) => return None,
         (JimengVideoMode::TextToVideo, JimengResolution::V30_720p) => "jimeng_t2v_v30",
         (JimengVideoMode::TextToVideo, JimengResolution::V30_1080p) => "jimeng_t2v_v30_1080p",
         (JimengVideoMode::ImageFirstFrame, JimengResolution::V30_720p) => "jimeng_i2v_first_v30",
-        (JimengVideoMode::ImageFirstFrame, JimengResolution::V30_1080p) => "jimeng_i2v_first_v30_1080",
-        (JimengVideoMode::ImageFirstLastFrame, JimengResolution::V30_720p) => "jimeng_i2v_first_tail_v30",
-        (JimengVideoMode::ImageFirstLastFrame, JimengResolution::V30_1080p) => "jimeng_i2v_first_tail_v30_1080",
+        (JimengVideoMode::ImageFirstFrame, JimengResolution::V30_1080p) => {
+            "jimeng_i2v_first_v30_1080"
+        }
+        (JimengVideoMode::ImageFirstLastFrame, JimengResolution::V30_720p) => {
+            "jimeng_i2v_first_tail_v30"
+        }
+        (JimengVideoMode::ImageFirstLastFrame, JimengResolution::V30_1080p) => {
+            "jimeng_i2v_first_tail_v30_1080"
+        }
     };
     Some(key.into())
 }
@@ -85,9 +94,8 @@ pub struct JimengVideoParams {
 
 /// Volcengine API submit request body
 ///
-/// Images MUST be provided via `binary_data_base64` (base64-encoded image data).
-/// Note: `image_urls` is NOT supported by the direct Volcengine API — it is silently
-/// ignored, causing I2V requests to degrade to T2V. Only use `binary_data_base64`.
+/// For 720P/1080P: images via `binary_data_base64` (base64-encoded image data).
+/// For Pro (jimeng_ti2v_v30_pro): images via `image_urls` (direct URL array).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JimengSubmitRequest {
     pub req_key: String,
@@ -97,6 +105,8 @@ pub struct JimengSubmitRequest {
     pub aspect_ratio: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub binary_data_base64: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_urls: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seed: Option<i64>,
 }
@@ -168,21 +178,37 @@ pub struct JimengResultData {
 }
 
 impl JimengResultData {
-    pub fn is_done(&self) -> bool { self.status == "done" }
-    pub fn is_running(&self) -> bool { matches!(self.status.as_str(), "running" | "submitted" | "in_queue") }
-    pub fn is_failed(&self) -> bool { matches!(self.status.as_str(), "failed" | "error") }
+    pub fn is_done(&self) -> bool {
+        self.status == "done"
+    }
+    pub fn is_running(&self) -> bool {
+        matches!(self.status.as_str(), "running" | "submitted" | "in_queue")
+    }
+    pub fn is_failed(&self) -> bool {
+        matches!(self.status.as_str(), "failed" | "error")
+    }
 
     /// Extract video URL from resp_data (may be plain URL or JSON with `urls` array)
     pub fn get_video_url(&self) -> Option<String> {
         if let Some(url) = &self.video_url {
-            if !url.is_empty() { return Some(url.clone()); }
+            if !url.is_empty() {
+                return Some(url.clone());
+            }
         }
         if let Some(data) = &self.resp_data {
-            if data.is_empty() { return None; }
-            if data.starts_with("http") { return Some(data.clone()); }
+            if data.is_empty() {
+                return None;
+            }
+            if data.starts_with("http") {
+                return Some(data.clone());
+            }
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
-                if let Some(url) = json.get("urls").and_then(|a| a.as_array())
-                    .and_then(|a| a.first()).and_then(|u| u.as_str()) {
+                if let Some(url) = json
+                    .get("urls")
+                    .and_then(|a| a.as_array())
+                    .and_then(|a| a.first())
+                    .and_then(|u| u.as_str())
+                {
                     return Some(url.to_string());
                 }
             }
@@ -215,23 +241,66 @@ mod tests {
 
     #[test]
     fn test_build_req_key_t2v() {
-        assert_eq!(build_req_key(JimengVideoMode::TextToVideo, JimengResolution::V30_720p).unwrap(), "jimeng_t2v_v30");
-        assert_eq!(build_req_key(JimengVideoMode::TextToVideo, JimengResolution::V30_1080p).unwrap(), "jimeng_t2v_v30_1080p");
-        assert_eq!(build_req_key(JimengVideoMode::TextToVideo, JimengResolution::V30Pro).unwrap(), "jimeng_vgfm_t2v_l20");
+        assert_eq!(
+            build_req_key(JimengVideoMode::TextToVideo, JimengResolution::V30_720p).unwrap(),
+            "jimeng_t2v_v30"
+        );
+        assert_eq!(
+            build_req_key(JimengVideoMode::TextToVideo, JimengResolution::V30_1080p).unwrap(),
+            "jimeng_t2v_v30_1080p"
+        );
+        assert_eq!(
+            build_req_key(JimengVideoMode::TextToVideo, JimengResolution::V30Pro).unwrap(),
+            "jimeng_ti2v_v30_pro"
+        );
     }
 
     #[test]
     fn test_build_req_key_i2v() {
-        assert_eq!(build_req_key(JimengVideoMode::ImageFirstFrame, JimengResolution::V30_720p).unwrap(), "jimeng_i2v_first_v30");
-        assert_eq!(build_req_key(JimengVideoMode::ImageFirstFrame, JimengResolution::V30_1080p).unwrap(), "jimeng_i2v_first_v30_1080");
-        assert_eq!(build_req_key(JimengVideoMode::ImageFirstFrame, JimengResolution::V30Pro).unwrap(), "jimeng_vgfm_i2v_l20");
+        assert_eq!(
+            build_req_key(JimengVideoMode::ImageFirstFrame, JimengResolution::V30_720p).unwrap(),
+            "jimeng_i2v_first_v30"
+        );
+        assert_eq!(
+            build_req_key(
+                JimengVideoMode::ImageFirstFrame,
+                JimengResolution::V30_1080p
+            )
+            .unwrap(),
+            "jimeng_i2v_first_v30_1080"
+        );
+        assert_eq!(
+            build_req_key(JimengVideoMode::ImageFirstFrame, JimengResolution::V30Pro).unwrap(),
+            "jimeng_ti2v_v30_pro"
+        );
     }
 
     #[test]
     fn test_build_req_key_i2v_first_last() {
-        assert_eq!(build_req_key(JimengVideoMode::ImageFirstLastFrame, JimengResolution::V30_720p).unwrap(), "jimeng_i2v_first_tail_v30");
-        assert_eq!(build_req_key(JimengVideoMode::ImageFirstLastFrame, JimengResolution::V30_1080p).unwrap(), "jimeng_i2v_first_tail_v30_1080");
-        assert!(build_req_key(JimengVideoMode::ImageFirstLastFrame, JimengResolution::V30Pro).is_none(), "Pro does not support first-last frame");
+        assert_eq!(
+            build_req_key(
+                JimengVideoMode::ImageFirstLastFrame,
+                JimengResolution::V30_720p
+            )
+            .unwrap(),
+            "jimeng_i2v_first_tail_v30"
+        );
+        assert_eq!(
+            build_req_key(
+                JimengVideoMode::ImageFirstLastFrame,
+                JimengResolution::V30_1080p
+            )
+            .unwrap(),
+            "jimeng_i2v_first_tail_v30_1080"
+        );
+        assert!(
+            build_req_key(
+                JimengVideoMode::ImageFirstLastFrame,
+                JimengResolution::V30Pro
+            )
+            .is_none(),
+            "Pro does not support first-last frame"
+        );
     }
 
     #[test]
@@ -249,16 +318,29 @@ mod tests {
 
     #[test]
     fn test_result_status() {
-        let done = JimengResultData { task_id: "".into(), status: "done".into(), resp_data: None, video_url: None };
-        assert!(done.is_done()); assert!(!done.is_running());
-        let running = JimengResultData { task_id: "".into(), status: "in_queue".into(), resp_data: None, video_url: None };
-        assert!(running.is_running()); assert!(!running.is_done());
+        let done = JimengResultData {
+            task_id: "".into(),
+            status: "done".into(),
+            resp_data: None,
+            video_url: None,
+        };
+        assert!(done.is_done());
+        assert!(!done.is_running());
+        let running = JimengResultData {
+            task_id: "".into(),
+            status: "in_queue".into(),
+            resp_data: None,
+            video_url: None,
+        };
+        assert!(running.is_running());
+        assert!(!running.is_done());
     }
 
     #[test]
     fn test_get_video_url_from_json() {
         let r = JimengResultData {
-            task_id: "".into(), status: "done".into(),
+            task_id: "".into(),
+            status: "done".into(),
             resp_data: Some(r#"{"urls":["https://cdn.example.com/v.mp4"]}"#.into()),
             video_url: None,
         };

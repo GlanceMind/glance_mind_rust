@@ -189,7 +189,6 @@ impl PlanType {
     }
 }
 
-
 impl std::fmt::Display for PlanType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_str())

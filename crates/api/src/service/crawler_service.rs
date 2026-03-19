@@ -3,6 +3,7 @@ use crate::dto::crawler_dto::{CrawlerResultDto, CrawlerTaskDto, UnifiedContentDt
 use crate::error::api_error::ApiError;
 use crate::repository::campaign_repository::CampaignRepository;
 use crate::repository::crawler_repository::CrawlerRepository;
+use diesel::result::Error as DieselError;
 use glance_mind_db::entity::crawler::{CrawlerResult, CrawlerTask};
 use std::sync::Arc;
 
@@ -46,18 +47,23 @@ impl CrawlerService {
         &self,
         task_id: i32,
         req: crate::dto::common::PageRequest,
-    ) -> Result<crate::dto::common::PageResponse<CrawlerResultDto>, ApiError> {
-        let (results, total) = self
+    ) -> Result<crate::dto::common::PageResponse<UnifiedContentDto>, ApiError> {
+        let (contents, total) = self
             .repo
-            .find_results_by_task_id(task_id, req.page, req.page_size)
+            .find_unified_contents_by_task(task_id, req.page, req.page_size)
             .await
-            .map_err(|e| {
-                ApiError::InternalServerError(format!("Failed to fetch crawler results: {}", e))
+            .map_err(|e| match e {
+                DieselError::NotFound => {
+                    ApiError::NotFound(format!("Crawler task {} not found", task_id))
+                }
+                _ => ApiError::InternalServerError(format!(
+                    "Failed to fetch crawler results: {}",
+                    e
+                )),
             })?;
 
-        let dtos = results.into_iter().map(Self::result_to_dto).collect();
         Ok(crate::dto::common::PageResponse::new(
-            dtos,
+            contents,
             total,
             req.page,
             req.page_size,
@@ -103,8 +109,11 @@ impl CrawlerService {
             .campaign_repo
             .find_by_id(campaign_id)
             .await
-            .map_err(|e| {
-                ApiError::InternalServerError(format!("Failed to fetch campaign: {}", e))
+            .map_err(|e| match e {
+                DieselError::NotFound => {
+                    ApiError::NotFound(format!("Campaign {} not found", campaign_id))
+                }
+                _ => ApiError::InternalServerError(format!("Failed to fetch campaign: {}", e)),
             })?;
 
         tracing::info!(
@@ -122,8 +131,15 @@ impl CrawlerService {
                 req.page_size,
             )
             .await
-            .map_err(|e| {
-                ApiError::InternalServerError(format!("Failed to fetch campaign contents: {}", e))
+            .map_err(|e| match e {
+                DieselError::NotFound => ApiError::InternalServerError(format!(
+                    "Unsupported campaign platform_id: {}",
+                    campaign.platform_id
+                )),
+                _ => ApiError::InternalServerError(format!(
+                    "Failed to fetch campaign contents: {}",
+                    e
+                )),
             })?;
 
         tracing::info!(
@@ -148,12 +164,41 @@ impl CrawlerService {
         platform_id: i32,
         req: crate::dto::common::PageRequest,
     ) -> Result<crate::dto::common::PageResponse<UnifiedContentDto>, ApiError> {
+        let campaign = self
+            .campaign_repo
+            .find_by_id(campaign_id)
+            .await
+            .map_err(|e| match e {
+                DieselError::NotFound => {
+                    ApiError::NotFound(format!("Campaign {} not found", campaign_id))
+                }
+                _ => ApiError::InternalServerError(format!("Failed to fetch campaign: {}", e)),
+            })?;
+
+        if campaign.platform_id != platform_id {
+            return Err(ApiError::BadRequest(format!(
+                "platform_id {} does not match campaign {} platform_id {}",
+                platform_id, campaign_id, campaign.platform_id
+            )));
+        }
+
         let (contents, total) = self
             .repo
-            .find_unified_contents_by_campaign(campaign_id, platform_id, req.page, req.page_size)
+            .find_unified_contents_by_campaign(
+                campaign_id,
+                campaign.platform_id,
+                req.page,
+                req.page_size,
+            )
             .await
-            .map_err(|e| {
-                ApiError::InternalServerError(format!("Failed to fetch campaign contents: {}", e))
+            .map_err(|e| match e {
+                DieselError::NotFound => {
+                    ApiError::BadRequest(format!("Invalid platform_id: {}", campaign.platform_id))
+                }
+                _ => ApiError::InternalServerError(format!(
+                    "Failed to fetch campaign contents: {}",
+                    e
+                )),
             })?;
 
         Ok(crate::dto::common::PageResponse::new(
@@ -162,6 +207,44 @@ impl CrawlerService {
             req.page,
             req.page_size,
         ))
+    }
+
+    pub async fn get_all_campaign_contents_unified(
+        &self,
+        campaign_id: i32,
+        platform_id: i32,
+    ) -> Result<Vec<UnifiedContentDto>, ApiError> {
+        let campaign = self
+            .campaign_repo
+            .find_by_id(campaign_id)
+            .await
+            .map_err(|e| match e {
+                DieselError::NotFound => {
+                    ApiError::NotFound(format!("Campaign {} not found", campaign_id))
+                }
+                _ => ApiError::InternalServerError(format!("Failed to fetch campaign: {}", e)),
+            })?;
+
+        if campaign.platform_id != platform_id {
+            return Err(ApiError::BadRequest(format!(
+                "platform_id {} does not match campaign {} platform_id {}",
+                platform_id, campaign_id, campaign.platform_id
+            )));
+        }
+
+        self.repo
+            .find_unified_contents_by_campaign(campaign_id, campaign.platform_id, 1, i64::MAX)
+            .await
+            .map(|(contents, _)| contents)
+            .map_err(|e| match e {
+                DieselError::NotFound => {
+                    ApiError::BadRequest(format!("Invalid platform_id: {}", campaign.platform_id))
+                }
+                _ => ApiError::InternalServerError(format!(
+                    "Failed to fetch campaign contents: {}",
+                    e
+                )),
+            })
     }
 
     fn task_to_dto(task: CrawlerTask) -> CrawlerTaskDto {

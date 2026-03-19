@@ -34,10 +34,7 @@ pub async fn create_recharge(
     Extension(state): Extension<UserState>,
     axum::Json(dto): axum::Json<RechargeRequestDto>,
 ) -> Result<ApiResult<impl serde::Serialize>, ApiError> {
-    let resp = state
-        .wallet_service
-        .create_recharge(user.id, dto)
-        .await?;
+    let resp = state.wallet_service.create_recharge(user.id, dto).await?;
     Ok(api_result!(resp))
 }
 

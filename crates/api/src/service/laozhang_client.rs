@@ -888,7 +888,8 @@ impl LaoZhangClient {
         if !status.is_success() {
             tracing::error!(
                 "Video analysis failed: status={}, body={}",
-                status, body_text
+                status,
+                body_text
             );
 
             if let Ok(error_response) = serde_json::from_str::<LaoZhangErrorResponse>(&body_text) {
@@ -914,20 +915,19 @@ impl LaoZhangClient {
             serde_json::from_str(&body_text).map_err(|e| {
                 tracing::error!(
                     "Failed to parse video analysis response: {:?}, body: {}",
-                    e, body_text
+                    e,
+                    body_text
                 );
-                ApiError::InfrastructureError(InfrastructureError::ExternalApiResponseParsingFailed(
-                    e.to_string(),
-                ))
+                ApiError::InfrastructureError(
+                    InfrastructureError::ExternalApiResponseParsingFailed(e.to_string()),
+                )
             })?;
 
-        let content = analysis_response
-            .get_content()
-            .ok_or_else(|| {
-                ApiError::InfrastructureError(InfrastructureError::ExternalApiResponseParsingFailed(
-                    "No content in video analysis response".to_string(),
-                ))
-            })?;
+        let content = analysis_response.get_content().ok_or_else(|| {
+            ApiError::InfrastructureError(InfrastructureError::ExternalApiResponseParsingFailed(
+                "No content in video analysis response".to_string(),
+            ))
+        })?;
 
         tracing::info!(
             "Video analysis completed: id={}, model={}, content_len={}",
@@ -1570,17 +1570,18 @@ mod tests {
                         println!("  URL: {}...", &url[..url.len().min(80)]);
                     }
                     if let Some(b64) = response.get_first_b64() {
-                        println!("  B64: ({}... {} bytes)", &b64[..b64.len().min(30)], b64.len());
+                        println!(
+                            "  B64: ({}... {} bytes)",
+                            &b64[..b64.len().min(30)],
+                            b64.len()
+                        );
                     }
                     if let Some(revised) = response
                         .data
                         .first()
                         .and_then(|d| d.revised_prompt.as_deref())
                     {
-                        println!(
-                            "  Revised prompt: {}...",
-                            &revised[..revised.len().min(60)]
-                        );
+                        println!("  Revised prompt: {}...", &revised[..revised.len().min(60)]);
                     }
                 }
                 Err(e) => {

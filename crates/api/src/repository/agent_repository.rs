@@ -1,9 +1,6 @@
 use crate::dto::agent_dto::{AgentCommentDto, UnifiedCommentDto, UnifiedCommentWithConfigDto};
 use crate::dto::common::PageResponse;
-use crate::repository::crawler_repository::{
-    PLATFORM_NAME_FACEBOOK, PLATFORM_NAME_INSTAGRAM, PLATFORM_NAME_REDDIT, PLATFORM_NAME_TIKTOK,
-    PLATFORM_NAME_TWITTER,
-};
+use crate::platform_routing::SupportedPlatform;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 use glance_mind_db::entity::agent::{
@@ -62,8 +59,11 @@ impl AgentRepository {
         Ok(PageResponse::new(list, total, page, per_page))
     }
 
-    /// Get platform name by platform_id from database
-    fn get_platform_name(&self, platform_id: i32) -> Result<String, diesel::result::Error> {
+    /// Resolve a supported platform from gm_platforms.name.
+    fn get_supported_platform(
+        &self,
+        platform_id: i32,
+    ) -> Result<SupportedPlatform, diesel::result::Error> {
         let mut conn = self
             .pool
             .get()
@@ -72,7 +72,7 @@ impl AgentRepository {
             .find(platform_id)
             .select(Platform::as_select())
             .first(&mut conn)?;
-        Ok(platform.name.to_uppercase())
+        SupportedPlatform::from_name(&platform.name).ok_or(diesel::result::Error::NotFound)
     }
 
     /// Unified method to query comments by content_db_id and platform
@@ -85,16 +85,19 @@ impl AgentRepository {
         per_page: i64,
     ) -> Result<PageResponse<UnifiedCommentDto>, diesel::result::Error> {
         // Get platform name from database (no hardcoded platform_id mapping)
-        let platform_name = self.get_platform_name(platform_id)?;
+        let platform = self.get_supported_platform(platform_id)?;
 
         // Route to correct table based on platform name
-        match platform_name.as_str() {
-            PLATFORM_NAME_TIKTOK => self.get_tiktok_comments(content_db_id, page, per_page),
-            PLATFORM_NAME_FACEBOOK => self.get_facebook_comments(content_db_id, page, per_page),
-            PLATFORM_NAME_INSTAGRAM => self.get_instagram_comments(content_db_id, page, per_page),
-            PLATFORM_NAME_REDDIT => self.get_reddit_comments(content_db_id, page, per_page),
-            PLATFORM_NAME_TWITTER => self.get_twitter_comments(content_db_id, page, per_page),
-            _ => self.get_tiktok_comments(content_db_id, page, per_page),
+        match platform {
+            SupportedPlatform::Tiktok => self.get_tiktok_comments(content_db_id, page, per_page),
+            SupportedPlatform::Facebook => {
+                self.get_facebook_comments(content_db_id, page, per_page)
+            }
+            SupportedPlatform::Instagram => {
+                self.get_instagram_comments(content_db_id, page, per_page)
+            }
+            SupportedPlatform::Reddit => self.get_reddit_comments(content_db_id, page, per_page),
+            SupportedPlatform::Twitter => self.get_twitter_comments(content_db_id, page, per_page),
         }
     }
 
@@ -145,6 +148,7 @@ impl AgentRepository {
                     0 => "pending".to_string(),
                     1 => "processing".to_string(),
                     2 => "completed".to_string(),
+                    3 => "failed".to_string(),
                     _ => "pending".to_string(),
                 },
                 comment_created_at: c.create_time.map(|t| t.and_utc()),
@@ -485,19 +489,47 @@ impl AgentRepository {
         &self,
         comment_id: &str,
         new_status: i16,
+        platform: SupportedPlatform,
     ) -> Result<usize, diesel::result::Error> {
-        use glance_mind_db::schema::gm_agent_comments;
-
         let mut conn = self
             .pool
             .get()
             .map_err(|_| diesel::result::Error::NotFound)?;
 
-        diesel::update(
-            gm_agent_comments::table.filter(gm_agent_comments::comment_id.eq(comment_id)),
-        )
-        .set(gm_agent_comments::status.eq(new_status))
-        .execute(&mut conn)
+        match platform {
+            SupportedPlatform::Twitter => diesel::update(
+                gm_agent_twitter_comments::table
+                    .filter(gm_agent_twitter_comments::twitter_comment_id.eq(comment_id)),
+            )
+            .set(gm_agent_twitter_comments::status.eq(Some(new_status)))
+            .execute(&mut conn),
+            SupportedPlatform::Facebook => diesel::update(
+                gm_agent_facebook_comments::table
+                    .filter(gm_agent_facebook_comments::facebook_comment_id.eq(comment_id)),
+            )
+            .set(gm_agent_facebook_comments::status.eq(Some(new_status)))
+            .execute(&mut conn),
+            SupportedPlatform::Instagram => diesel::update(
+                gm_agent_instagram_comments::table
+                    .filter(gm_agent_instagram_comments::instagram_comment_id.eq(comment_id)),
+            )
+            .set(gm_agent_instagram_comments::status.eq(Some(new_status)))
+            .execute(&mut conn),
+            SupportedPlatform::Reddit => diesel::update(
+                gm_agent_reddit_comments::table
+                    .filter(gm_agent_reddit_comments::comment_id.eq(comment_id)),
+            )
+            .set(gm_agent_reddit_comments::status.eq(Some(new_status)))
+            .execute(&mut conn),
+            SupportedPlatform::Tiktok => {
+                use glance_mind_db::schema::gm_agent_comments;
+                diesel::update(
+                    gm_agent_comments::table.filter(gm_agent_comments::comment_id.eq(comment_id)),
+                )
+                .set(gm_agent_comments::status.eq(new_status))
+                .execute(&mut conn)
+            }
+        }
     }
 
     /// Get all videos for a campaign (for export)
@@ -543,33 +575,243 @@ impl AgentRepository {
     pub fn get_comments_by_device_unified(
         &self,
         device_id: &str,
-        platform: &str,
+        platform: SupportedPlatform,
         status_filter: Option<i16>,
         page: i64,
         per_page: i64,
     ) -> Result<PageResponse<UnifiedCommentWithConfigDto>, diesel::result::Error> {
-        let platform_upper = platform.to_uppercase();
-        match platform_upper.as_str() {
-            PLATFORM_NAME_TIKTOK => {
+        match platform {
+            SupportedPlatform::Tiktok => {
                 self.get_tiktok_comments_by_device(device_id, status_filter, page, per_page)
             }
-            PLATFORM_NAME_FACEBOOK => {
+            SupportedPlatform::Facebook => {
                 self.get_facebook_comments_by_device(device_id, status_filter, page, per_page)
             }
-            PLATFORM_NAME_INSTAGRAM => {
+            SupportedPlatform::Instagram => {
                 self.get_instagram_comments_by_device(device_id, status_filter, page, per_page)
             }
-            PLATFORM_NAME_REDDIT => {
+            SupportedPlatform::Reddit => {
                 self.get_reddit_comments_by_device(device_id, status_filter, page, per_page)
             }
-            PLATFORM_NAME_TWITTER => {
+            SupportedPlatform::Twitter => {
                 self.get_twitter_comments_by_device(device_id, status_filter, page, per_page)
             }
-            _ => {
-                // Default to TikTok for unknown platforms
-                self.get_tiktok_comments_by_device(device_id, status_filter, page, per_page)
-            }
         }
+    }
+
+    pub fn get_all_unified_comments_by_campaign(
+        &self,
+        campaign_id: i32,
+        platform_id: i32,
+    ) -> Result<Vec<UnifiedCommentDto>, diesel::result::Error> {
+        let platform = self.get_supported_platform(platform_id)?;
+        match platform {
+            SupportedPlatform::Tiktok => self.get_tiktok_comments_by_campaign(campaign_id),
+            SupportedPlatform::Facebook => self.get_facebook_comments_by_campaign(campaign_id),
+            SupportedPlatform::Instagram => self.get_instagram_comments_by_campaign(campaign_id),
+            SupportedPlatform::Reddit => self.get_reddit_comments_by_campaign(campaign_id),
+            SupportedPlatform::Twitter => self.get_twitter_comments_by_campaign(campaign_id),
+        }
+    }
+
+    fn get_tiktok_comments_by_campaign(
+        &self,
+        campaign_id: i32,
+    ) -> Result<Vec<UnifiedCommentDto>, diesel::result::Error> {
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|_| diesel::result::Error::NotFound)?;
+
+        let comments: Vec<AgentComment> = gm_agent_comments::table
+            .filter(gm_agent_comments::campaign_id.eq(Some(campaign_id)))
+            .order(gm_agent_comments::id.desc())
+            .select(AgentComment::as_select())
+            .load(&mut conn)?;
+
+        Ok(comments
+            .into_iter()
+            .map(|c| UnifiedCommentDto {
+                id: c.id,
+                content_db_id: c.video_db_id,
+                comment_id: c.comment_id,
+                platform: "tiktok".to_string(),
+                user_name: c.user_nickname,
+                user_id: c.user_unique_id,
+                content: c.content,
+                parent_comment_id: None,
+                like_count: None,
+                reply_count: None,
+                reason: c.reason,
+                suggested_reply: c.suggested_reply,
+                suggested_dm: c.suggested_dm,
+                suggested_reply_post: c.suggested_reply_post,
+                status: Self::status_i16_to_string(c.status),
+                comment_created_at: c.create_time.map(|t| t.and_utc()),
+                created_at: c.created_at,
+                campaign_id: c.campaign_id,
+            })
+            .collect())
+    }
+
+    fn get_facebook_comments_by_campaign(
+        &self,
+        campaign_id: i32,
+    ) -> Result<Vec<UnifiedCommentDto>, diesel::result::Error> {
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|_| diesel::result::Error::NotFound)?;
+
+        let comments: Vec<FacebookComment> = gm_agent_facebook_comments::table
+            .filter(gm_agent_facebook_comments::campaign_id.eq(Some(campaign_id)))
+            .order(gm_agent_facebook_comments::id.desc())
+            .select(FacebookComment::as_select())
+            .load(&mut conn)?;
+
+        Ok(comments
+            .into_iter()
+            .map(|c| UnifiedCommentDto {
+                id: c.id,
+                content_db_id: c.post_db_id,
+                comment_id: c.facebook_comment_id,
+                platform: "facebook".to_string(),
+                user_name: c.comment_username,
+                user_id: c.comment_user_id,
+                content: Some(c.comment_text),
+                parent_comment_id: c.parent_comment_id,
+                like_count: c.like_count,
+                reply_count: c.reply_count,
+                reason: c.reason,
+                suggested_reply: c.suggested_reply,
+                suggested_dm: c.suggested_dm,
+                suggested_reply_post: c.suggested_reply_post,
+                status: Self::status_option_i16_to_string(c.status),
+                comment_created_at: c.comment_created_at,
+                created_at: c.created_at,
+                campaign_id: c.campaign_id,
+            })
+            .collect())
+    }
+
+    fn get_instagram_comments_by_campaign(
+        &self,
+        campaign_id: i32,
+    ) -> Result<Vec<UnifiedCommentDto>, diesel::result::Error> {
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|_| diesel::result::Error::NotFound)?;
+
+        let comments: Vec<InstagramComment> = gm_agent_instagram_comments::table
+            .filter(gm_agent_instagram_comments::campaign_id.eq(Some(campaign_id)))
+            .order(gm_agent_instagram_comments::id.desc())
+            .select(InstagramComment::as_select())
+            .load(&mut conn)?;
+
+        Ok(comments
+            .into_iter()
+            .map(|c| UnifiedCommentDto {
+                id: c.id,
+                content_db_id: c.post_db_id,
+                comment_id: c.instagram_comment_id,
+                platform: "instagram".to_string(),
+                user_name: c.comment_username,
+                user_id: c.comment_user_id,
+                content: Some(c.comment_text),
+                parent_comment_id: c.parent_comment_id,
+                like_count: c.like_count.or(c.comment_like_count),
+                reply_count: c.child_comment_count,
+                reason: c.reason,
+                suggested_reply: c.suggested_reply,
+                suggested_dm: c.suggested_dm,
+                suggested_reply_post: c.suggested_reply_post,
+                status: Self::status_option_i16_to_string(c.status),
+                comment_created_at: c.comment_created_at,
+                created_at: c.created_at,
+                campaign_id: c.campaign_id,
+            })
+            .collect())
+    }
+
+    fn get_reddit_comments_by_campaign(
+        &self,
+        campaign_id: i32,
+    ) -> Result<Vec<UnifiedCommentDto>, diesel::result::Error> {
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|_| diesel::result::Error::NotFound)?;
+
+        let comments: Vec<RedditComment> = gm_agent_reddit_comments::table
+            .filter(gm_agent_reddit_comments::campaign_id.eq(Some(campaign_id)))
+            .order(gm_agent_reddit_comments::id.desc())
+            .select(RedditComment::as_select())
+            .load(&mut conn)?;
+
+        Ok(comments
+            .into_iter()
+            .map(|c| UnifiedCommentDto {
+                id: c.id,
+                content_db_id: c.post_db_id,
+                comment_id: c.comment_id,
+                platform: "reddit".to_string(),
+                user_name: c.author,
+                user_id: None,
+                content: c.body,
+                parent_comment_id: c.parent_id,
+                like_count: c.score,
+                reply_count: None,
+                reason: c.reason,
+                suggested_reply: c.suggested_reply,
+                suggested_dm: c.suggested_dm,
+                suggested_reply_post: c.suggested_reply_post,
+                status: Self::status_option_i16_to_string(c.status),
+                comment_created_at: c.comment_created_at,
+                created_at: c.created_at,
+                campaign_id: c.campaign_id,
+            })
+            .collect())
+    }
+
+    fn get_twitter_comments_by_campaign(
+        &self,
+        campaign_id: i32,
+    ) -> Result<Vec<UnifiedCommentDto>, diesel::result::Error> {
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|_| diesel::result::Error::NotFound)?;
+
+        let comments: Vec<TwitterComment> = gm_agent_twitter_comments::table
+            .filter(gm_agent_twitter_comments::campaign_id.eq(Some(campaign_id)))
+            .order(gm_agent_twitter_comments::id.desc())
+            .select(TwitterComment::as_select())
+            .load(&mut conn)?;
+
+        Ok(comments
+            .into_iter()
+            .map(|c| UnifiedCommentDto {
+                id: c.id,
+                content_db_id: c.tweet_db_id,
+                comment_id: c.twitter_comment_id,
+                platform: "twitter".to_string(),
+                user_name: c.comment_screen_name,
+                user_id: c.comment_user_id,
+                content: Some(c.comment_text),
+                parent_comment_id: c.in_reply_to_status_id,
+                like_count: c.favorite_count,
+                reply_count: c.reply_count,
+                reason: c.reason,
+                suggested_reply: c.suggested_reply,
+                suggested_dm: c.suggested_dm,
+                suggested_reply_post: c.suggested_reply_post,
+                status: Self::status_option_i16_to_string(c.status),
+                comment_created_at: c.comment_created_at,
+                created_at: c.created_at,
+                campaign_id: c.campaign_id,
+            })
+            .collect())
     }
 
     /// Get TikTok comments by device_id
@@ -653,6 +895,7 @@ impl AgentRepository {
                     0 => "pending".to_string(),
                     1 => "processing".to_string(),
                     2 => "completed".to_string(),
+                    3 => "failed".to_string(),
                     _ => "pending".to_string(),
                 },
                 user_nickname: comment.user_nickname,
@@ -1164,6 +1407,7 @@ impl AgentRepository {
             0 => "pending".to_string(),
             1 => "processing".to_string(),
             2 => "completed".to_string(),
+            3 => "failed".to_string(),
             _ => "pending".to_string(),
         }
     }
@@ -1173,6 +1417,7 @@ impl AgentRepository {
             Some(0) => "pending".to_string(),
             Some(1) => "processing".to_string(),
             Some(2) => "completed".to_string(),
+            Some(3) => "failed".to_string(),
             _ => "pending".to_string(),
         }
     }

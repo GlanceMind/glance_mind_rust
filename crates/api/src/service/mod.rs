@@ -21,6 +21,8 @@ pub mod social_account_service;
 pub mod social_group_service;
 pub mod template_service;
 // pub mod tikhub_client; // Replaced by laozhang_client
+pub mod nats_dm_service;
+pub mod redis_service;
 pub mod upload_task_service;
 pub mod user_service;
 pub mod video_capabilities;
@@ -28,6 +30,4 @@ pub mod video_case_service;
 pub mod video_service;
 pub mod vidu_client;
 pub(crate) mod wallet_service;
-pub mod nats_dm_service;
-pub mod redis_service;
 pub mod xunhupay_client;

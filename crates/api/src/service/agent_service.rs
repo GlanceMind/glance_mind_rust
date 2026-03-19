@@ -4,9 +4,11 @@ use crate::dto::agent_dto::{
 };
 use crate::dto::common::{PageRequest, PageResponse};
 use crate::error::api_error::ApiError;
+use crate::platform_routing::SupportedPlatform;
 use crate::repository::agent_repository::AgentRepository;
 use crate::service::redis_service::RedisService;
 use diesel::r2d2::{ConnectionManager, Pool};
+use diesel::result::Error as DieselError;
 use diesel::PgConnection;
 use rand::seq::SliceRandom;
 use std::collections::{HashMap, HashSet};
@@ -49,7 +51,12 @@ impl AgentService {
     ) -> Result<PageResponse<UnifiedCommentDto>, ApiError> {
         self.agent_repo
             .get_unified_comments(content_db_id, platform_id, req.page, req.page_size)
-            .map_err(|e| ApiError::InternalServerError(e.to_string()))
+            .map_err(|e| match e {
+                DieselError::NotFound => {
+                    ApiError::BadRequest(format!("Invalid platform_id: {}", platform_id))
+                }
+                _ => ApiError::InternalServerError(e.to_string()),
+            })
     }
 
     // New method for device-based query with platform support
@@ -60,12 +67,13 @@ impl AgentService {
     ) -> Result<DeviceCommentsResponse, ApiError> {
         let page_i64 = i64::from(query.page);
         let per_page_i64 = i64::from(query.per_page);
+        let platform = Self::parse_supported_platform_name(&query.platform)?;
 
         let page_response = self
             .agent_repo
             .get_comments_by_device_unified(
                 &query.device_id,
-                &query.platform,
+                platform,
                 query.status,
                 page_i64,
                 per_page_i64,
@@ -75,12 +83,12 @@ impl AgentService {
         let filtered = self.enforce_daily_limits(page_response.list);
         let filtered_total = filtered.len() as i64;
 
-        Ok(UnifiedCommentWithConfigDto::to_protocol_response(
+        UnifiedCommentWithConfigDto::to_protocol_response(
             filtered,
             filtered_total,
             query.page,
             query.per_page,
-        ))
+        )
     }
 
     /// Service-layer post-processing: dedup by comment_id, then quota-aware profile reassignment.
@@ -233,14 +241,18 @@ impl AgentService {
             .map_err(|e| ApiError::InternalServerError(e.to_string()))
     }
 
-    // New method for status update
     pub async fn update_comment_status(
         &self,
         dto: UpdateCommentStatusDto,
     ) -> Result<UpdateStatusResponse, ApiError> {
+        let platform = match dto.platform.as_deref() {
+            Some(platform) => Self::parse_supported_platform_name(platform)?,
+            None => SupportedPlatform::Tiktok,
+        };
+
         let affected = self
             .agent_repo
-            .update_comment_status(&dto.comment_id, dto.status)
+            .update_comment_status(&dto.comment_id, dto.status, platform)
             .map_err(|e| ApiError::InternalServerError(e.to_string()))?;
 
         if affected == 0 {
@@ -254,6 +266,26 @@ impl AgentService {
             success: true,
             message: "Status updated successfully".to_string(),
         })
+    }
+
+    pub async fn get_all_campaign_comments_unified(
+        &self,
+        campaign_id: i32,
+        platform_id: i32,
+    ) -> Result<Vec<UnifiedCommentDto>, ApiError> {
+        self.agent_repo
+            .get_all_unified_comments_by_campaign(campaign_id, platform_id)
+            .map_err(|e| match e {
+                DieselError::NotFound => {
+                    ApiError::BadRequest(format!("Invalid platform_id: {}", platform_id))
+                }
+                _ => ApiError::InternalServerError(e.to_string()),
+            })
+    }
+
+    fn parse_supported_platform_name(platform: &str) -> Result<SupportedPlatform, ApiError> {
+        SupportedPlatform::from_name(platform)
+            .ok_or_else(|| ApiError::BadRequest(format!("Unsupported platform: {}", platform)))
     }
 
     /// Get all videos for a campaign (for export)
@@ -286,7 +318,11 @@ mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
 
-    fn mock_comment(id: i32, comment_id: &str, campaign_id: Option<i32>) -> UnifiedCommentWithConfigDto {
+    fn mock_comment(
+        id: i32,
+        comment_id: &str,
+        campaign_id: Option<i32>,
+    ) -> UnifiedCommentWithConfigDto {
         UnifiedCommentWithConfigDto {
             id,
             comment_id: comment_id.to_string(),
@@ -362,7 +398,7 @@ mod tests {
         let comments = vec![
             mock_comment(1, "first", Some(1)),
             mock_comment(2, "second", Some(1)),
-            mock_comment(3, "first", Some(1)),  // dup of "first"
+            mock_comment(3, "first", Some(1)), // dup of "first"
             mock_comment(4, "third", Some(1)),
             mock_comment(5, "second", Some(1)), // dup of "second"
         ];
@@ -588,8 +624,11 @@ mod tests {
             }
         };
 
-        let group_accounts: HashMap<i32, Vec<(i32, Option<String>, i32)>> =
-            [(8010, vec![(7050, Some("Zero Limit Account".to_string()), 0)])].into();
+        let group_accounts: HashMap<i32, Vec<(i32, Option<String>, i32)>> = [(
+            8010,
+            vec![(7050, Some("Zero Limit Account".to_string()), 0)],
+        )]
+        .into();
         let campaign_to_group: HashMap<i32, i32> = [(700, 8010)].into();
 
         let comments = vec![
@@ -598,10 +637,17 @@ mod tests {
         ];
 
         let result = AgentService::enforce_daily_limits_inner(
-            comments, &campaign_to_group, &group_accounts, Some(&svc),
+            comments,
+            &campaign_to_group,
+            &group_accounts,
+            Some(&svc),
         );
 
-        assert_eq!(result.len(), 0, "Zero-limit accounts should reject all comments");
+        assert_eq!(
+            result.len(),
+            0,
+            "Zero-limit accounts should reject all comments"
+        );
     }
 
     // ========================================================================
@@ -625,7 +671,8 @@ mod tests {
                 (7061, Some("B".to_string()), 200),
                 (7062, Some("C".to_string()), 200),
             ],
-        )].into();
+        )]
+        .into();
         let campaign_to_group: HashMap<i32, i32> = [(800, 8020)].into();
 
         flush_keys(&svc, &account_ids);
@@ -634,10 +681,15 @@ mod tests {
         for i in 0..90 {
             let comments = vec![mock_comment(i, &format!("shuffle_{}", i), Some(800))];
             let result = AgentService::enforce_daily_limits_inner(
-                comments, &campaign_to_group, &group_accounts, Some(&svc),
+                comments,
+                &campaign_to_group,
+                &group_accounts,
+                Some(&svc),
             );
             if let Some(c) = result.first() {
-                *assignment_count.entry(c.profile_name.clone().unwrap_or_default()).or_insert(0) += 1;
+                *assignment_count
+                    .entry(c.profile_name.clone().unwrap_or_default())
+                    .or_insert(0) += 1;
             }
         }
 
@@ -646,7 +698,9 @@ mod tests {
             let count = assignment_count.get(profile).copied().unwrap_or(0);
             assert!(
                 count >= 10 && count <= 60,
-                "Profile '{}' got {} assignments (expected ~30 ± margin)", profile, count
+                "Profile '{}' got {} assignments (expected ~30 ± margin)",
+                profile,
+                count
             );
         }
 
@@ -683,7 +737,11 @@ mod tests {
             Some(&svc),
         );
 
-        assert_eq!(result.len(), 3, "All comments should be kept (no group → no filtering)");
+        assert_eq!(
+            result.len(),
+            3,
+            "All comments should be kept (no group → no filtering)"
+        );
         // profile_name unchanged
         for c in &result {
             assert_eq!(c.profile_name.as_deref(), Some("OriginalProfile"));

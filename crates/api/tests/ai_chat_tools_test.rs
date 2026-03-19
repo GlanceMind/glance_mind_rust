@@ -25,9 +25,7 @@ async fn login() -> Result<String, Box<dyn std::error::Error>> {
         .send()
         .await?;
     let body: serde_json::Value = response.json().await?;
-    let token = body["data"]["token"]
-        .as_str()
-        .ok_or("Token not found")?;
+    let token = body["data"]["token"].as_str().ok_or("Token not found")?;
     Ok(token.to_string())
 }
 
@@ -91,7 +89,9 @@ fn sse_has_message_end(body: &str) -> bool {
 async fn test_list_templates_via_chat() {
     let token = login().await.expect("Login failed");
     let client = reqwest::Client::new();
-    let conv_id = create_conversation(&client, &token).await.expect("Create conv");
+    let conv_id = create_conversation(&client, &token)
+        .await
+        .expect("Create conv");
     let body = send_message_and_get_sse(&client, &token, conv_id, "列出我的回复模板")
         .await
         .expect("Send message");
@@ -106,7 +106,9 @@ async fn test_list_templates_via_chat() {
 async fn test_list_materials_via_chat() {
     let token = login().await.expect("Login failed");
     let client = reqwest::Client::new();
-    let conv_id = create_conversation(&client, &token).await.expect("Create conv");
+    let conv_id = create_conversation(&client, &token)
+        .await
+        .expect("Create conv");
     let body = send_message_and_get_sse(&client, &token, conv_id, "列出我的素材库")
         .await
         .expect("Send message");
@@ -119,7 +121,9 @@ async fn test_list_materials_via_chat() {
 async fn test_list_material_tags_via_chat() {
     let token = login().await.expect("Login failed");
     let client = reqwest::Client::new();
-    let conv_id = create_conversation(&client, &token).await.expect("Create conv");
+    let conv_id = create_conversation(&client, &token)
+        .await
+        .expect("Create conv");
     let body = send_message_and_get_sse(&client, &token, conv_id, "显示所有素材标签")
         .await
         .expect("Send message");
@@ -134,7 +138,9 @@ async fn test_list_material_tags_via_chat() {
 async fn test_dm_stats_via_chat() {
     let token = login().await.expect("Login failed");
     let client = reqwest::Client::new();
-    let conv_id = create_conversation(&client, &token).await.expect("Create conv");
+    let conv_id = create_conversation(&client, &token)
+        .await
+        .expect("Create conv");
     let body = send_message_and_get_sse(&client, &token, conv_id, "查看DM统计数据")
         .await
         .expect("Send message");
@@ -149,7 +155,9 @@ async fn test_dm_stats_via_chat() {
 async fn test_list_notifications_via_chat() {
     let token = login().await.expect("Login failed");
     let client = reqwest::Client::new();
-    let conv_id = create_conversation(&client, &token).await.expect("Create conv");
+    let conv_id = create_conversation(&client, &token)
+        .await
+        .expect("Create conv");
     let body = send_message_and_get_sse(&client, &token, conv_id, "显示我的通知")
         .await
         .expect("Send message");
@@ -164,7 +172,9 @@ async fn test_list_notifications_via_chat() {
 async fn test_list_video_cases_via_chat() {
     let token = login().await.expect("Login failed");
     let client = reqwest::Client::new();
-    let conv_id = create_conversation(&client, &token).await.expect("Create conv");
+    let conv_id = create_conversation(&client, &token)
+        .await
+        .expect("Create conv");
     let body = send_message_and_get_sse(&client, &token, conv_id, "列出视频案例库")
         .await
         .expect("Send message");
@@ -179,7 +189,9 @@ async fn test_list_video_cases_via_chat() {
 async fn test_list_publish_tasks_via_chat() {
     let token = login().await.expect("Login failed");
     let client = reqwest::Client::new();
-    let conv_id = create_conversation(&client, &token).await.expect("Create conv");
+    let conv_id = create_conversation(&client, &token)
+        .await
+        .expect("Create conv");
     let body = send_message_and_get_sse(&client, &token, conv_id, "列出我的发布任务")
         .await
         .expect("Send message");
@@ -194,7 +206,9 @@ async fn test_list_publish_tasks_via_chat() {
 async fn test_dashboard_stats_via_chat() {
     let token = login().await.expect("Login failed");
     let client = reqwest::Client::new();
-    let conv_id = create_conversation(&client, &token).await.expect("Create conv");
+    let conv_id = create_conversation(&client, &token)
+        .await
+        .expect("Create conv");
     let body = send_message_and_get_sse(&client, &token, conv_id, "Show me dashboard stats")
         .await
         .expect("Send message");
@@ -211,7 +225,9 @@ async fn test_dashboard_stats_via_chat() {
 async fn test_wallet_balance_via_chat() {
     let token = login().await.expect("Login failed");
     let client = reqwest::Client::new();
-    let conv_id = create_conversation(&client, &token).await.expect("Create conv");
+    let conv_id = create_conversation(&client, &token)
+        .await
+        .expect("Create conv");
     let body = send_message_and_get_sse(&client, &token, conv_id, "What is my wallet balance?")
         .await
         .expect("Send message");

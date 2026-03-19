@@ -24,7 +24,9 @@ pub async fn create_conversation(
     Extension(state): Extension<UserState>,
     Json(req): Json<CreateConversationRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conv = state.ai_chat_service.create_conversation(user.id, req.title)?;
+    let conv = state
+        .ai_chat_service
+        .create_conversation(user.id, req.title)?;
     Ok(api_ok!(conv))
 }
 
@@ -35,7 +37,9 @@ pub async fn list_conversations(
 ) -> Result<impl IntoResponse, ApiError> {
     let page = query.page.unwrap_or(1);
     let page_size = query.page_size.unwrap_or(20);
-    let result = state.ai_chat_service.list_conversations(user.id, page, page_size)?;
+    let result = state
+        .ai_chat_service
+        .list_conversations(user.id, page, page_size)?;
     Ok(api_ok!(result))
 }
 
@@ -54,7 +58,9 @@ pub async fn update_conversation(
     Path(id): Path<i32>,
     Json(req): Json<UpdateConversationRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let conv = state.ai_chat_service.update_conversation(id, user.id, req)?;
+    let conv = state
+        .ai_chat_service
+        .update_conversation(id, user.id, req)?;
     Ok(api_ok!(conv))
 }
 
@@ -106,7 +112,11 @@ pub async fn send_message(
             )
             .await
         {
-            let _ = tx.send(SseEvent::Error { message: e.to_string() }).await;
+            let _ = tx
+                .send(SseEvent::Error {
+                    message: e.to_string(),
+                })
+                .await;
         }
     });
 
@@ -131,8 +141,15 @@ pub async fn confirm_plan(
     let user_id = user.id;
 
     tokio::spawn(async move {
-        if let Err(e) = service.confirm_plan(plan_id, user_id, &state, tx.clone()).await {
-            let _ = tx.send(SseEvent::Error { message: e.to_string() }).await;
+        if let Err(e) = service
+            .confirm_plan(plan_id, user_id, &state, tx.clone())
+            .await
+        {
+            let _ = tx
+                .send(SseEvent::Error {
+                    message: e.to_string(),
+                })
+                .await;
         }
     });
 
@@ -160,7 +177,9 @@ pub async fn update_plan_step(
     Path((plan_id, step_id)): Path<(i32, i32)>,
     Json(req): Json<UpdatePlanStepRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let step = state.ai_chat_service.update_plan_step(plan_id, step_id, user.id, req)?;
+    let step = state
+        .ai_chat_service
+        .update_plan_step(plan_id, step_id, user.id, req)?;
     Ok(api_ok!(step))
 }
 

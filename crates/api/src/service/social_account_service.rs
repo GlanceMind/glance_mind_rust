@@ -56,11 +56,10 @@ impl SocialAccountService {
         account_id: i32,
         user_id: i32,
     ) -> Result<SocialAccount, ApiError> {
-        let account = self
-            .repo
-            .find_by_id(account_id)
-            .await
-            .map_err(|_| ApiError::NotFound(format!("Social account {} not found", account_id)))?;
+        let account =
+            self.repo.find_by_id(account_id).await.map_err(|_| {
+                ApiError::NotFound(format!("Social account {} not found", account_id))
+            })?;
         if account.user_id != user_id {
             return Err(ApiError::Forbidden("Not your account".into()));
         }
@@ -209,10 +208,9 @@ impl SocialAccountService {
             ));
         }
 
-        self.repo
-            .clear_group(id)
-            .await
-            .map_err(|_| ApiError::InternalServerError("Failed to remove from group".to_string()))?;
+        self.repo.clear_group(id).await.map_err(|_| {
+            ApiError::InternalServerError("Failed to remove from group".to_string())
+        })?;
 
         Ok(())
     }
@@ -256,17 +254,18 @@ impl SocialAccountService {
         dto: BatchCreateAccountsDto,
     ) -> Result<BatchCreateResultDto, ApiError> {
         // Parse profile range
-        let (prefix, start_num, end_num) = self.parse_profile_range(&dto.profile_start, &dto.profile_end)?;
-        
+        let (prefix, start_num, end_num) =
+            self.parse_profile_range(&dto.profile_start, &dto.profile_end)?;
+
         let total_count = end_num - start_num + 1;
-        
+
         // Validate: max 100 accounts per batch
         if total_count > 100 {
             return Err(ApiError::BadRequest(
                 "Maximum 100 accounts can be created in a single batch".to_string(),
             ));
         }
-        
+
         if total_count <= 0 {
             return Err(ApiError::BadRequest(
                 "Invalid profile range: start must be less than or equal to end".to_string(),
@@ -280,11 +279,11 @@ impl SocialAccountService {
 
         // Generate accounts
         let mut new_accounts: Vec<NewSocialAccount> = Vec::with_capacity(total_count as usize);
-        
+
         for i in start_num..=end_num {
             let profile_name = format!("{}{}", prefix, i);
             let username = format!("{}_{}", dto.username, profile_name);
-            
+
             new_accounts.push(NewSocialAccount {
                 user_id,
                 platform_id: dto.platform_id,
@@ -305,7 +304,7 @@ impl SocialAccountService {
             Ok(accounts) => {
                 let created_ids: Vec<i32> = accounts.iter().map(|a| a.id).collect();
                 info!("Successfully created {} accounts", accounts.len());
-                
+
                 Ok(BatchCreateResultDto {
                     created_count: accounts.len() as i32,
                     total_attempted: total_count,
@@ -324,11 +323,7 @@ impl SocialAccountService {
 
     /// Parse profile range like "account_1" to "account_100"
     /// Returns (prefix, start_number, end_number)
-    fn parse_profile_range(
-        &self,
-        start: &str,
-        end: &str,
-    ) -> Result<(String, i32, i32), ApiError> {
+    fn parse_profile_range(&self, start: &str, end: &str) -> Result<(String, i32, i32), ApiError> {
         // Extract prefix and number from start
         let start_match = start.rfind(|c: char| !c.is_ascii_digit());
         let end_match = end.rfind(|c: char| !c.is_ascii_digit());
@@ -357,13 +352,13 @@ impl SocialAccountService {
         }
 
         // Parse numbers
-        let start_num: i32 = start_num_str.parse().map_err(|_| {
-            ApiError::BadRequest("Invalid number in profile_start".to_string())
-        })?;
+        let start_num: i32 = start_num_str
+            .parse()
+            .map_err(|_| ApiError::BadRequest("Invalid number in profile_start".to_string()))?;
 
-        let end_num: i32 = end_num_str.parse().map_err(|_| {
-            ApiError::BadRequest("Invalid number in profile_end".to_string())
-        })?;
+        let end_num: i32 = end_num_str
+            .parse()
+            .map_err(|_| ApiError::BadRequest("Invalid number in profile_end".to_string()))?;
 
         Ok((start_prefix.to_string(), start_num, end_num))
     }

@@ -11,8 +11,8 @@ use crate::repository::aipub_repository::AipubRepository;
 use chrono::Utc;
 use diesel::result::Error as DieselError;
 use glance_mind_db::entity::aipub::{
-    AiTaskStatus, AiTaskType, NewAipubPlan, NewAipubTask, PlanStatus, PlanType,
-    PublishTaskStatus, UpdateAipubAiTask, UpdateAipubPlan, UpdateAipubTask,
+    AiTaskStatus, AiTaskType, NewAipubPlan, NewAipubTask, PlanStatus, PlanType, PublishTaskStatus,
+    UpdateAipubAiTask, UpdateAipubPlan, UpdateAipubTask,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -40,8 +40,11 @@ impl AipubService {
         dto: CreatePlanDto,
     ) -> Result<PlanResponseDto, ApiError> {
         // Determine plan_type: default to "batch_text" if not specified
-        let plan_type = dto.plan_type.clone().unwrap_or_else(|| PlanType::BatchText.as_str().to_string());
-        
+        let plan_type = dto
+            .plan_type
+            .clone()
+            .unwrap_or_else(|| PlanType::BatchText.as_str().to_string());
+
         // Validate plan_type
         if PlanType::parse(&plan_type).is_none() {
             return Err(ApiError::BusinessError(BusinessError::InvalidInput(
@@ -69,7 +72,8 @@ impl AipubService {
                 }
                 if dto.social_account_id.is_some() {
                     return Err(ApiError::BusinessError(BusinessError::InvalidInput(
-                        "batch_text plan cannot have social_account_id, use group_id instead".to_string(),
+                        "batch_text plan cannot have social_account_id, use group_id instead"
+                            .to_string(),
                     )));
                 }
             }
@@ -82,7 +86,8 @@ impl AipubService {
                 }
                 if dto.group_id.is_some() {
                     return Err(ApiError::BusinessError(BusinessError::InvalidInput(
-                        "single_video plan cannot have group_id, use social_account_id instead".to_string(),
+                        "single_video plan cannot have group_id, use social_account_id instead"
+                            .to_string(),
                     )));
                 }
                 // single_video requires video_ai_model_id
@@ -101,7 +106,8 @@ impl AipubService {
                 }
                 if dto.social_account_id.is_some() {
                     return Err(ApiError::BusinessError(BusinessError::InvalidInput(
-                        "account_grooming plan cannot have social_account_id, use group_id instead".to_string(),
+                        "account_grooming plan cannot have social_account_id, use group_id instead"
+                            .to_string(),
                     )));
                 }
             }
@@ -136,8 +142,12 @@ impl AipubService {
                     }
                     // reddit_image requires either image_prompt (AI gen) or uploaded_image_urls
                     if pt == PlanType::RedditImage {
-                        let has_image_prompt = reddit_config["image_prompt"].as_str().map_or(false, |s| !s.is_empty());
-                        let has_uploaded = reddit_config["uploaded_image_urls"].as_array().map_or(false, |a| !a.is_empty());
+                        let has_image_prompt = reddit_config["image_prompt"]
+                            .as_str()
+                            .map_or(false, |s| !s.is_empty());
+                        let has_uploaded = reddit_config["uploaded_image_urls"]
+                            .as_array()
+                            .map_or(false, |a| !a.is_empty());
                         if !has_image_prompt && !has_uploaded {
                             return Err(ApiError::BusinessError(BusinessError::InvalidInput(
                                 "reddit_image plan requires reddit_config.image_prompt or reddit_config.uploaded_image_urls".to_string(),
@@ -173,15 +183,24 @@ impl AipubService {
         // Infer ai_task_types based on plan_type if not explicitly set
         let ai_task_types = dto.ai_task_types.clone().or_else(|| {
             match PlanType::parse(plan_type.as_str()) {
-                Some(PlanType::BatchText) => Some(vec![AiTaskType::ContentGen.as_str().to_string()]),
-                Some(PlanType::SingleVideo) => Some(vec![AiTaskType::ContentGen.as_str().to_string(), AiTaskType::VideoGen.as_str().to_string()]),
-                Some(PlanType::AccountGrooming) => Some(vec![AiTaskType::AccountGrooming.as_str().to_string()]),
+                Some(PlanType::BatchText) => {
+                    Some(vec![AiTaskType::ContentGen.as_str().to_string()])
+                }
+                Some(PlanType::SingleVideo) => Some(vec![
+                    AiTaskType::ContentGen.as_str().to_string(),
+                    AiTaskType::VideoGen.as_str().to_string(),
+                ]),
+                Some(PlanType::AccountGrooming) => {
+                    Some(vec![AiTaskType::AccountGrooming.as_str().to_string()])
+                }
                 Some(PlanType::RedditText) | Some(PlanType::RedditLink) => {
                     Some(vec![AiTaskType::ContentGen.as_str().to_string()])
                 }
                 Some(PlanType::RedditImage) => {
                     // If image_prompt is provided, need image_gen; otherwise just content_gen
-                    let has_ai_image = dto.ai_input.as_ref()
+                    let has_ai_image = dto
+                        .ai_input
+                        .as_ref()
                         .and_then(|ai| ai["reddit_config"]["image_prompt"].as_str())
                         .map_or(false, |s| !s.is_empty());
                     if has_ai_image {
@@ -263,65 +282,126 @@ impl AipubService {
             let freeze_result = match plan_type_enum {
                 Some(PlanType::AccountGrooming) => {
                     // 1 chat (batch name+bio) + N images (one avatar per account)
-                    let account_ids = self.repo.get_group_account_ids(plan.group_id.unwrap_or(0)).await
+                    let account_ids = self
+                        .repo
+                        .get_group_account_ids(plan.group_id.unwrap_or(0))
+                        .await
                         .unwrap_or_default();
                     let n = account_ids.len() as i32;
                     if n > 0 {
-                        Some(self.repo.freeze_budget(
-                            user_id, 1, n, 0,
-                            plan.chat_ai_model_id, plan.image_ai_model_id, None,
-                            "aipub_plan", plan.id,
-                        ).await)
+                        Some(
+                            self.repo
+                                .freeze_budget(
+                                    user_id,
+                                    1,
+                                    n,
+                                    0,
+                                    plan.chat_ai_model_id,
+                                    plan.image_ai_model_id,
+                                    None,
+                                    "aipub_plan",
+                                    plan.id,
+                                )
+                                .await,
+                        )
                     } else {
                         None // No accounts, no billing
                     }
                 }
                 Some(PlanType::BatchText) => {
                     // N chats (one content variation per account)
-                    let account_ids = self.repo.get_group_account_ids(plan.group_id.unwrap_or(0)).await
+                    let account_ids = self
+                        .repo
+                        .get_group_account_ids(plan.group_id.unwrap_or(0))
+                        .await
                         .unwrap_or_default();
                     let n = account_ids.len() as i32;
                     if n > 0 {
-                        Some(self.repo.freeze_budget(
-                            user_id, n, 0, 0,
-                            plan.chat_ai_model_id, None, None,
-                            "aipub_plan", plan.id,
-                        ).await)
+                        Some(
+                            self.repo
+                                .freeze_budget(
+                                    user_id,
+                                    n,
+                                    0,
+                                    0,
+                                    plan.chat_ai_model_id,
+                                    None,
+                                    None,
+                                    "aipub_plan",
+                                    plan.id,
+                                )
+                                .await,
+                        )
                     } else {
                         None
                     }
                 }
                 Some(PlanType::SingleVideo) => {
                     // 1 chat (content gen) + 1 video (video gen)
-                    Some(self.repo.freeze_budget(
-                        user_id, 1, 0, 1,
-                        plan.chat_ai_model_id, None, plan.video_ai_model_id,
-                        "aipub_plan", plan.id,
-                    ).await)
+                    Some(
+                        self.repo
+                            .freeze_budget(
+                                user_id,
+                                1,
+                                0,
+                                1,
+                                plan.chat_ai_model_id,
+                                None,
+                                plan.video_ai_model_id,
+                                "aipub_plan",
+                                plan.id,
+                            )
+                            .await,
+                    )
                 }
                 Some(PlanType::RedditText) | Some(PlanType::RedditLink) => {
                     // 1 chat call generates N variations (one per account)
-                    Some(self.repo.freeze_budget(
-                        user_id, 1, 0, 0,
-                        plan.chat_ai_model_id, None, None,
-                        "aipub_plan", plan.id,
-                    ).await)
+                    Some(
+                        self.repo
+                            .freeze_budget(
+                                user_id,
+                                1,
+                                0,
+                                0,
+                                plan.chat_ai_model_id,
+                                None,
+                                None,
+                                "aipub_plan",
+                                plan.id,
+                            )
+                            .await,
+                    )
                 }
                 Some(PlanType::RedditImage) => {
                     // 1 chat + N images (one per account, if AI-generated)
-                    let account_ids = self.repo.get_group_account_ids(plan.group_id.unwrap_or(0)).await
+                    let account_ids = self
+                        .repo
+                        .get_group_account_ids(plan.group_id.unwrap_or(0))
+                        .await
                         .unwrap_or_default();
                     let n = account_ids.len() as i32;
-                    let has_ai_image = plan.ai_input.as_ref()
+                    let has_ai_image = plan
+                        .ai_input
+                        .as_ref()
                         .and_then(|ai| ai["reddit_config"]["image_prompt"].as_str())
                         .map_or(false, |s| !s.is_empty());
                     let image_count = if has_ai_image { n } else { 0 };
                     if n > 0 {
-                        Some(self.repo.freeze_budget(
-                            user_id, 1, image_count, 0,
-                            plan.chat_ai_model_id, plan.image_ai_model_id, None,
-                            "aipub_plan", plan.id,
-                        ).await)
+                        Some(
+                            self.repo
+                                .freeze_budget(
+                                    user_id,
+                                    1,
+                                    image_count,
+                                    0,
+                                    plan.chat_ai_model_id,
+                                    plan.image_ai_model_id,
+                                    None,
+                                    "aipub_plan",
+                                    plan.id,
+                                )
+                                .await,
+                        )
                     } else {
                         None
                     }
@@ -348,13 +428,13 @@ impl AipubService {
 
         // NOTE: AI tasks are now created by the Scheduler, not by the API.
         // The Scheduler will pick up pending plans and create ai_tasks.
-        // 
+        //
         // If direct content is provided (no AI generation needed), create publish tasks immediately.
         if dto.content.is_some() && dto.ai_task_types.is_none() {
             // Direct content - create publish tasks immediately
             self.expand_plan_to_tasks(plan.id, dto.content.as_ref().unwrap().clone())
                 .await?;
-            
+
             // Update plan status to ready
             let update = UpdateAipubPlan {
                 status: Some(PlanStatus::Ready.as_str().to_string()),

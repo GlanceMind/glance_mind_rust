@@ -112,12 +112,14 @@ impl DmReplyRequest {
     pub fn validate(&self) -> Result<(), ApiError> {
         let trimmed = self.content.trim();
         if trimmed.is_empty() {
-            return Err(ApiError::BadRequest("Reply content must not be empty".into()));
+            return Err(ApiError::BadRequest(
+                "Reply content must not be empty".into(),
+            ));
         }
         if trimmed.len() > MAX_REPLY_CONTENT_LEN {
-            return Err(ApiError::BadRequest(
-                format!("Reply content exceeds {MAX_REPLY_CONTENT_LEN} characters"),
-            ));
+            return Err(ApiError::BadRequest(format!(
+                "Reply content exceeds {MAX_REPLY_CONTENT_LEN} characters"
+            )));
         }
         Ok(())
     }
@@ -145,16 +147,18 @@ impl DmSettingsRequest {
     pub fn validate(&self) -> Result<(), ApiError> {
         if let Some(ref mode) = self.reply_mode {
             if !VALID_REPLY_MODES.contains(&mode.as_str()) {
-                return Err(ApiError::BadRequest(
-                    format!("Invalid reply_mode '{mode}', must be one of: {}", VALID_REPLY_MODES.join(", ")),
-                ));
+                return Err(ApiError::BadRequest(format!(
+                    "Invalid reply_mode '{mode}', must be one of: {}",
+                    VALID_REPLY_MODES.join(", ")
+                )));
             }
         }
         if let Some(ref status) = self.status {
             if !VALID_CONV_STATUSES.contains(&status.as_str()) {
-                return Err(ApiError::BadRequest(
-                    format!("Invalid status '{status}', must be one of: {}", VALID_CONV_STATUSES.join(", ")),
-                ));
+                return Err(ApiError::BadRequest(format!(
+                    "Invalid status '{status}', must be one of: {}",
+                    VALID_CONV_STATUSES.join(", ")
+                )));
             }
         }
         Ok(())

@@ -22,7 +22,11 @@ impl VideoCaseRepository {
             .select(VideoCase::as_select())
             .first(conn)
             .map_err(|e| {
-                tracing::error!("Failed to get video case task_no={}: {:?}", task_no_param, e);
+                tracing::error!(
+                    "Failed to get video case task_no={}: {:?}",
+                    task_no_param,
+                    e
+                );
                 e
             })
     }
@@ -123,23 +127,38 @@ impl VideoCaseRepository {
         task_no_param: &str,
         update: UpdateVideoCase,
     ) -> Result<VideoCase, diesel::result::Error> {
-        diesel::update(gm_data_video_cases::table.filter(gm_data_video_cases::task_no.eq(task_no_param)))
-            .set(&update)
-            .returning(VideoCase::as_select())
-            .get_result(conn)
-            .map_err(|e| {
-                tracing::error!("Failed to update video case task_no={}: {:?}", task_no_param, e);
+        diesel::update(
+            gm_data_video_cases::table.filter(gm_data_video_cases::task_no.eq(task_no_param)),
+        )
+        .set(&update)
+        .returning(VideoCase::as_select())
+        .get_result(conn)
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to update video case task_no={}: {:?}",
+                task_no_param,
                 e
-            })
+            );
+            e
+        })
     }
 
     /// Delete a video case by task_no
-    pub fn delete(conn: &mut PgConnection, task_no_param: &str) -> Result<usize, diesel::result::Error> {
-        diesel::delete(gm_data_video_cases::table.filter(gm_data_video_cases::task_no.eq(task_no_param)))
-            .execute(conn)
-            .map_err(|e| {
-                tracing::error!("Failed to delete video case task_no={}: {:?}", task_no_param, e);
+    pub fn delete(
+        conn: &mut PgConnection,
+        task_no_param: &str,
+    ) -> Result<usize, diesel::result::Error> {
+        diesel::delete(
+            gm_data_video_cases::table.filter(gm_data_video_cases::task_no.eq(task_no_param)),
+        )
+        .execute(conn)
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to delete video case task_no={}: {:?}",
+                task_no_param,
                 e
-            })
+            );
+            e
+        })
     }
 }

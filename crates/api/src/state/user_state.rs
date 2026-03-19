@@ -7,6 +7,8 @@ use crate::repository::user_repository::UserRepository;
 use crate::repository::wallet_repository::WalletRepository;
 use crate::service::agent_analysis_service::AgentAnalysisService;
 use crate::service::agent_service::AgentService;
+use crate::service::ai_chat::AiChatRepository;
+use crate::service::ai_chat_service::AiChatService;
 use crate::service::aipub_service::AipubService;
 use crate::service::campaign_service::CampaignService;
 use crate::service::config_service::ConfigService;
@@ -16,8 +18,10 @@ use crate::service::email_verification_service::EmailVerificationService;
 use crate::service::jimeng_client::JimengClient;
 use crate::service::laozhang_client::LaoZhangClient;
 use crate::service::material_service::MaterialService;
+use crate::service::nats_dm_service::NatsDmService;
 use crate::service::platform_service::PlatformService;
 use crate::service::promo_code_service::PromoCodeService;
+use crate::service::redis_service::RedisService;
 use crate::service::referral_service::ReferralService;
 use crate::service::social_account_service::SocialAccountService;
 use crate::service::social_group_service::SocialGroupService;
@@ -26,10 +30,6 @@ use crate::service::upload_task_service::UploadTaskService;
 use crate::service::user_service::UserService;
 use crate::service::video_case_service::VideoCaseService;
 use crate::service::video_service::VideoService;
-use crate::service::ai_chat::AiChatRepository;
-use crate::service::ai_chat_service::AiChatService;
-use crate::service::nats_dm_service::NatsDmService;
-use crate::service::redis_service::RedisService;
 use crate::service::wallet_service::WalletService;
 use std::sync::Arc;
 
@@ -71,7 +71,8 @@ impl UserState {
         // Initialize LaoZhang client (shared for video_service and material_service)
         let laozhang_api_key = parameter::get("LAOZHANG_API_KEY");
         let laozhang_base_url = std::env::var("LAOZHANG_BASE_URL").ok();
-        let laozhang_client = LaoZhangClient::new(laozhang_api_key.clone(), laozhang_base_url.clone());
+        let laozhang_client =
+            LaoZhangClient::new(laozhang_api_key.clone(), laozhang_base_url.clone());
         let laozhang_client_for_material = LaoZhangClient::new(laozhang_api_key, laozhang_base_url);
 
         // Initialize JimengClient (optional - only if env vars are set)

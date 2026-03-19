@@ -178,11 +178,10 @@ class TestUnifiedCommentsAPI:
             "/api/v1/agent/contents/1/comments",
             params={"platform_id": 999}  # Invalid platform
         )
-        
-        # Should return empty or error
-        if resp.status_code == 200:
-            comments = get_comments_from_response(resp.json())
-            assert len(comments) == 0, "Should return empty for invalid platform"
+
+        assert resp.status_code in (400, 422), (
+            f"Invalid platform_id should fail loudly, got {resp.status_code}: {resp.text}"
+        )
 
 
 # =============================================================================

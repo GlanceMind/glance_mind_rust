@@ -12,15 +12,116 @@ struct DocSource {
 }
 
 static DOC_SOURCES: &[DocSource] = &[
-    DocSource { topic: "platform_overview", title: "产品概览", path: "/guide/introduction", keywords: &["platform", "tiktok", "instagram", "reddit", "twitter", "facebook", "平台", "支持", "概览", "功能"] },
-    DocSource { topic: "account_management", title: "社交账户管理", path: "/guide/account-management", keywords: &["account", "group", "device", "profile", "账号", "分组", "设备", "批量"] },
-    DocSource { topic: "campaign_creation", title: "创建获客任务", path: "/guide/create-task", keywords: &["campaign", "create", "keyword", "region", "budget", "search", "营销", "活动", "搜索", "计费", "预算", "互动", "获客", "任务"] },
-    DocSource { topic: "template_guide", title: "配置回复模板", path: "/guide/create-template", keywords: &["template", "persona", "reply", "dm_prompt", "模板", "回复", "人设", "话术"] },
-    DocSource { topic: "publish_plan", title: "创建发布计划", path: "/guide/ai-publish", keywords: &["publish", "plan", "batch_text", "single_video", "content_type", "发布", "计划", "视频", "内容类型", "分发"] },
-    DocSource { topic: "dm_group_control", title: "DM 私信群控", path: "/guide/dm-group-control", keywords: &["dm", "message", "inbox", "conversation", "group_control", "私信", "群控", "收件箱", "聊天"] },
-    DocSource { topic: "ai_insights", title: "AI 市场洞察", path: "/guide/ai-insights", keywords: &["insight", "analysis", "market", "洞察", "分析", "市场", "情报"] },
-    DocSource { topic: "executor_manual", title: "自动化执行器", path: "/guide/executor-manual", keywords: &["executor", "automation", "browser", "执行器", "自动化", "浏览器", "安装"] },
-    DocSource { topic: "tiktok_guide", title: "TikTok 使用要求", path: "/guide/tiktok/tiktok-requirements", keywords: &["tiktok", "proxy", "us_account", "要求", "代理", "美国"] },
+    DocSource {
+        topic: "platform_overview",
+        title: "产品概览",
+        path: "/guide/introduction",
+        keywords: &[
+            "platform",
+            "tiktok",
+            "instagram",
+            "reddit",
+            "twitter",
+            "facebook",
+            "平台",
+            "支持",
+            "概览",
+            "功能",
+        ],
+    },
+    DocSource {
+        topic: "account_management",
+        title: "社交账户管理",
+        path: "/guide/account-management",
+        keywords: &[
+            "account", "group", "device", "profile", "账号", "分组", "设备", "批量",
+        ],
+    },
+    DocSource {
+        topic: "campaign_creation",
+        title: "创建获客任务",
+        path: "/guide/create-task",
+        keywords: &[
+            "campaign", "create", "keyword", "region", "budget", "search", "营销", "活动", "搜索",
+            "计费", "预算", "互动", "获客", "任务",
+        ],
+    },
+    DocSource {
+        topic: "template_guide",
+        title: "配置回复模板",
+        path: "/guide/create-template",
+        keywords: &[
+            "template",
+            "persona",
+            "reply",
+            "dm_prompt",
+            "模板",
+            "回复",
+            "人设",
+            "话术",
+        ],
+    },
+    DocSource {
+        topic: "publish_plan",
+        title: "创建发布计划",
+        path: "/guide/ai-publish",
+        keywords: &[
+            "publish",
+            "plan",
+            "batch_text",
+            "single_video",
+            "content_type",
+            "发布",
+            "计划",
+            "视频",
+            "内容类型",
+            "分发",
+        ],
+    },
+    DocSource {
+        topic: "dm_group_control",
+        title: "DM 私信群控",
+        path: "/guide/dm-group-control",
+        keywords: &[
+            "dm",
+            "message",
+            "inbox",
+            "conversation",
+            "group_control",
+            "私信",
+            "群控",
+            "收件箱",
+            "聊天",
+        ],
+    },
+    DocSource {
+        topic: "ai_insights",
+        title: "AI 市场洞察",
+        path: "/guide/ai-insights",
+        keywords: &[
+            "insight", "analysis", "market", "洞察", "分析", "市场", "情报",
+        ],
+    },
+    DocSource {
+        topic: "executor_manual",
+        title: "自动化执行器",
+        path: "/guide/executor-manual",
+        keywords: &[
+            "executor",
+            "automation",
+            "browser",
+            "执行器",
+            "自动化",
+            "浏览器",
+            "安装",
+        ],
+    },
+    DocSource {
+        topic: "tiktok_guide",
+        title: "TikTok 使用要求",
+        path: "/guide/tiktok/tiktok-requirements",
+        keywords: &["tiktok", "proxy", "us_account", "要求", "代理", "美国"],
+    },
 ];
 
 struct DocChunk {
@@ -56,25 +157,23 @@ async fn init_cache() -> Vec<DocChunk> {
         let keywords: Vec<String> = src.keywords.iter().map(|k| k.to_string()).collect();
         async move {
             match client.get(&url).send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    match resp.text().await {
-                        Ok(html) => {
-                            let content = extract_text_from_html(&html);
-                            tracing::info!("Loaded doc: {} ({} chars)", title, content.len());
-                            Some(DocChunk {
-                                topic: topic.to_string(),
-                                title: title.to_string(),
-                                content,
-                                keywords,
-                                url: url.clone(),
-                            })
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to read body from {}: {}", url, e);
-                            None
-                        }
+                Ok(resp) if resp.status().is_success() => match resp.text().await {
+                    Ok(html) => {
+                        let content = extract_text_from_html(&html);
+                        tracing::info!("Loaded doc: {} ({} chars)", title, content.len());
+                        Some(DocChunk {
+                            topic: topic.to_string(),
+                            title: title.to_string(),
+                            content,
+                            keywords,
+                            url: url.clone(),
+                        })
                     }
-                }
+                    Err(e) => {
+                        tracing::warn!("Failed to read body from {}: {}", url, e);
+                        None
+                    }
+                },
                 Ok(resp) => {
                     tracing::warn!("Non-200 from {}: {}", url, resp.status());
                     None

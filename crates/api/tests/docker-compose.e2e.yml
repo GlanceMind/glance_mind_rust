@@ -30,6 +30,14 @@ services:
       retries: 10
       start_period: 15s
 
+  nats:
+    image: nats:2.10-alpine
+    container_name: api-e2e-nats
+    command: ["-js", "--auth", "glancemind-dev-token", "-m", "8222"]
+    ports:
+      - "4223:4222"
+      - "8223:8222"
+
   xunhupay-mock:
     build:
       context: ../../../../mock-services
@@ -118,6 +126,8 @@ services:
       PORT: 8080
       JWT_SECRET: e2e_test_jwt_secret_key_12345
       RUST_LOG: info
+      NATS_URL: nats://nats:4222
+      NATS_TOKEN: glancemind-dev-token
       OPENAI_API_KEY: mock-openai-key
       OPENAI_BASE_URL: http://laozhang-mock:8100/v1
       LAOZHANG_API_KEY: mock-laozhang-key
@@ -140,6 +150,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      nats:
+        condition: service_started
       laozhang-mock:
         condition: service_healthy
       tikhub-mock:

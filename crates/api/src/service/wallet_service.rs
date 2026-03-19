@@ -550,10 +550,7 @@ impl WalletService {
         txn: WalletTransaction,
         query: QueryResponse,
     ) -> Result<WalletTransaction, ApiError> {
-        let order_no = txn
-            .external_txn_id
-            .as_deref()
-            .unwrap_or("unknown");
+        let order_no = txn.external_txn_id.as_deref().unwrap_or("unknown");
 
         if query.errcode != 0 {
             tracing::warn!(
@@ -562,15 +559,10 @@ impl WalletService {
                 order_no,
                 query.errmsg
             );
-            return self
-                .fetch_transaction_by_order_no(order_no)
-                .await;
+            return self.fetch_transaction_by_order_no(order_no).await;
         }
 
-        let gateway_status = query
-            .data
-            .as_ref()
-            .and_then(|data| data.status.as_deref());
+        let gateway_status = query.data.as_ref().and_then(|data| data.status.as_deref());
 
         tracing::info!(
             "XunhuPay query result for order {}: gateway_status={:?}, local_status={}",
@@ -585,16 +577,11 @@ impl WalletService {
                 order_no,
                 error
             );
-            return self
-                .fetch_transaction_by_order_no(order_no)
-                .await;
+            return self.fetch_transaction_by_order_no(order_no).await;
         }
 
         let current_status = Self::payment_status_from_txn(&txn);
-        let next_status = Self::query_status_to_payment_status(
-            current_status,
-            gateway_status,
-        );
+        let next_status = Self::query_status_to_payment_status(current_status, gateway_status);
 
         if next_status == current_status {
             return Ok(txn);

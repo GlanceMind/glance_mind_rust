@@ -16,10 +16,7 @@ pub fn routes() -> Router<UserState> {
             "/conversations/:conv_id/reply",
             post(dm_handler::send_reply),
         )
-        .route(
-            "/conversations/:conv_id/read",
-            post(dm_handler::mark_read),
-        )
+        .route("/conversations/:conv_id/read", post(dm_handler::mark_read))
         .route(
             "/conversations/:conv_id/settings",
             put(dm_handler::update_settings),

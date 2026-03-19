@@ -199,10 +199,7 @@ impl WalletRepository {
             .load(&mut conn)
     }
 
-    pub async fn count_pending_recharge_orders(
-        &self,
-        user_id: i32,
-    ) -> Result<i64, DieselError> {
+    pub async fn count_pending_recharge_orders(&self, user_id: i32) -> Result<i64, DieselError> {
         let mut conn = self.pool.get().expect("Connection error");
         wallet_transactions::table
             .filter(wallet_transactions::user_id.eq(user_id))
@@ -371,8 +368,7 @@ impl WalletRepository {
                 wallet_transactions::table
                     .filter(wallet_transactions::id.eq(txn_id))
                     .filter(
-                        wallet_transactions::payment_status
-                            .eq(Some(current_status.as_db_value())),
+                        wallet_transactions::payment_status.eq(Some(current_status.as_db_value())),
                     ),
             )
             .set((

@@ -1,6 +1,4 @@
-use crate::dto::material_dto::{
-    CreateMaterialRequest, MaterialListQuery, UpdateMaterialRequest,
-};
+use crate::dto::material_dto::{CreateMaterialRequest, MaterialListQuery, UpdateMaterialRequest};
 use crate::error::api_error::ApiError;
 use crate::error::request_error::ValidatedRequest;
 use crate::response::api_result::ApiResult;
@@ -29,10 +27,7 @@ pub async fn get_material(
     Extension(user): Extension<User>,
     Path(id): Path<i32>,
 ) -> Result<ApiResult<crate::dto::material_dto::MaterialDetail>, ApiError> {
-    let material = state
-        .material_service
-        .get_material(id, user.id)
-        .await?;
+    let material = state.material_service.get_material(id, user.id).await?;
     Ok(ApiResult::ok(material))
 }
 
@@ -72,10 +67,7 @@ pub async fn delete_material(
     Extension(user): Extension<User>,
     Path(id): Path<i32>,
 ) -> Result<ApiResult<()>, ApiError> {
-    state
-        .material_service
-        .delete_material(id, user.id)
-        .await?;
+    state.material_service.delete_material(id, user.id).await?;
     Ok(ApiResult::ok(()))
 }
 

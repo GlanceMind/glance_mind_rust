@@ -65,10 +65,8 @@ impl SocialAccountRepository {
 
         if let Some(ref did) = device_id {
             let pattern = format!("%{}%", did);
-            count_query =
-                count_query.filter(social_accounts::device_id.ilike(pattern.clone()));
-            items_query =
-                items_query.filter(social_accounts::device_id.ilike(pattern));
+            count_query = count_query.filter(social_accounts::device_id.ilike(pattern.clone()));
+            items_query = items_query.filter(social_accounts::device_id.ilike(pattern));
         }
 
         let total: i64 = count_query.count().get_result(&mut conn)?;
@@ -260,7 +258,7 @@ impl SocialAccountRepository {
         let updated = diesel::update(
             social_accounts::table
                 .filter(social_accounts::user_id.eq(user_id))
-                .filter(social_accounts::profile_name.eq_any(profile_names))
+                .filter(social_accounts::profile_name.eq_any(profile_names)),
         )
         .set(social_accounts::group_id.eq(Some(group_id)))
         .execute(&mut conn)?;

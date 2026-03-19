@@ -173,9 +173,7 @@ pub enum SseEvent {
         display_hint: Option<String>,
     },
     #[serde(rename = "questionnaire")]
-    Questionnaire {
-        questionnaire: QuestionnairePayload,
-    },
+    Questionnaire { questionnaire: QuestionnairePayload },
     #[serde(rename = "plan_created")]
     PlanCreated {
         plan_id: i32,
@@ -196,15 +194,9 @@ pub enum SseEvent {
     #[serde(rename = "step_completed")]
     StepCompleted { step_id: i32, result: Value },
     #[serde(rename = "step_failed")]
-    StepFailed {
-        step_id: i32,
-        error: String,
-    },
+    StepFailed { step_id: i32, error: String },
     #[serde(rename = "plan_completed")]
-    PlanCompleted {
-        plan_id: i32,
-        summary: String,
-    },
+    PlanCompleted { plan_id: i32, summary: String },
     #[serde(rename = "error")]
     Error { message: String },
 }
@@ -247,10 +239,9 @@ impl SseEvent {
                     "display_hint": display_hint,
                 }),
             ),
-            Self::Questionnaire { questionnaire } => (
-                "questionnaire",
-                serde_json::json!(questionnaire),
-            ),
+            Self::Questionnaire { questionnaire } => {
+                ("questionnaire", serde_json::json!(questionnaire))
+            }
             Self::PlanCreated {
                 plan_id,
                 title,
@@ -314,22 +305,51 @@ pub fn compress_tool_result(tool_name: &str, result: &Value) -> String {
     let total = result.get("total").and_then(|t| t.as_i64());
 
     match tool_name {
-        "list_social_accounts" => compress_list_result(list, total, &["username", "status", "platform_id"], "social accounts"),
-        "list_campaigns" => compress_list_result(list, total, &["name", "status", "platform_id"], "campaigns"),
-        "list_publish_plans" => compress_list_result(list, total, &["name", "status", "content_type", "platform_id"], "publish plans"),
+        "list_social_accounts" => compress_list_result(
+            list,
+            total,
+            &["username", "status", "platform_id"],
+            "social accounts",
+        ),
+        "list_campaigns" => {
+            compress_list_result(list, total, &["name", "status", "platform_id"], "campaigns")
+        }
+        "list_publish_plans" => compress_list_result(
+            list,
+            total,
+            &["name", "status", "content_type", "platform_id"],
+            "publish plans",
+        ),
         "list_templates" => compress_list_result(list, total, &["name", "content"], "templates"),
-        "list_social_groups" => compress_list_result(list, total, &["id", "group_name", "platform_id", "account_count"], "social groups"),
-        "list_materials" => compress_list_result(list, total, &["id", "tag", "file_type"], "materials"),
-        "get_wallet_transactions" => compress_list_result(list, total, &["amount", "type", "description", "created_at"], "transactions"),
+        "list_social_groups" => compress_list_result(
+            list,
+            total,
+            &["id", "group_name", "platform_id", "account_count"],
+            "social groups",
+        ),
+        "list_materials" => {
+            compress_list_result(list, total, &["id", "tag", "file_type"], "materials")
+        }
+        "get_wallet_transactions" => compress_list_result(
+            list,
+            total,
+            &["amount", "type", "description", "created_at"],
+            "transactions",
+        ),
         "list_ai_models" => {
             if let Some(arr) = result.as_array().or(list) {
-                let items: Vec<String> = arr.iter().map(|m| {
-                    format!("{{id:{},name:\"{}\",type:\"{}\",active:{}}}",
-                        m["id"].as_i64().unwrap_or(0),
-                        m["name"].as_str().unwrap_or("?"),
-                        m["model_type"].as_str().unwrap_or("?"),
-                        m["is_active"].as_bool().unwrap_or(false))
-                }).collect();
+                let items: Vec<String> = arr
+                    .iter()
+                    .map(|m| {
+                        format!(
+                            "{{id:{},name:\"{}\",type:\"{}\",active:{}}}",
+                            m["id"].as_i64().unwrap_or(0),
+                            m["name"].as_str().unwrap_or("?"),
+                            m["model_type"].as_str().unwrap_or("?"),
+                            m["is_active"].as_bool().unwrap_or(false)
+                        )
+                    })
+                    .collect();
                 format!("[{}]", items.join(","))
             } else {
                 serde_json::to_string(result).unwrap_or_default()
@@ -341,15 +361,23 @@ pub fn compress_tool_result(tool_name: &str, result: &Value) -> String {
                 .as_array()
                 .map(|fields| fields.len())
                 .unwrap_or(0);
-            format!("questionnaire(intent=\"{}\",fields={})", intent, field_count)
+            format!(
+                "questionnaire(intent=\"{}\",fields={})",
+                intent, field_count
+            )
         }
         "list_platforms" => {
             if let Some(arr) = result.as_array().or(list) {
-                let items: Vec<String> = arr.iter().map(|p| {
-                    format!("{{id:{},name:\"{}\"}}",
-                        p["id"].as_i64().unwrap_or(0),
-                        p["name"].as_str().unwrap_or("?"))
-                }).collect();
+                let items: Vec<String> = arr
+                    .iter()
+                    .map(|p| {
+                        format!(
+                            "{{id:{},name:\"{}\"}}",
+                            p["id"].as_i64().unwrap_or(0),
+                            p["name"].as_str().unwrap_or("?")
+                        )
+                    })
+                    .collect();
                 format!("[{}]", items.join(","))
             } else {
                 serde_json::to_string(result).unwrap_or_default()
@@ -357,31 +385,61 @@ pub fn compress_tool_result(tool_name: &str, result: &Value) -> String {
         }
         "list_regions" => {
             if let Some(arr) = result.as_array().or(list) {
-                let items: Vec<String> = arr.iter().map(|r| {
-                    format!("{{id:{},platform_id:{},code:\"{}\",name:\"{}\"}}",
-                        r["id"].as_i64().unwrap_or(0),
-                        r["platform_id"].as_i64().unwrap_or(0),
-                        r["code"].as_str().unwrap_or("?"),
-                        r["display_name"].as_str().or(r["name"].as_str()).unwrap_or("?"))
-                }).collect();
+                let items: Vec<String> = arr
+                    .iter()
+                    .map(|r| {
+                        format!(
+                            "{{id:{},platform_id:{},code:\"{}\",name:\"{}\"}}",
+                            r["id"].as_i64().unwrap_or(0),
+                            r["platform_id"].as_i64().unwrap_or(0),
+                            r["code"].as_str().unwrap_or("?"),
+                            r["display_name"]
+                                .as_str()
+                                .or(r["name"].as_str())
+                                .unwrap_or("?")
+                        )
+                    })
+                    .collect();
                 format!("[{}]", items.join(","))
             } else {
                 serde_json::to_string(result).unwrap_or_default()
             }
         }
-        "list_video_tasks" => compress_list_result(list, total, &["id", "status", "model_name"], "video tasks"),
-        "list_video_cases" => compress_list_result(list, total, &["id", "task_no", "title", "status"], "video cases"),
-        "list_publish_tasks" => compress_list_result(list, total, &["id", "status", "platform_id", "account_name"], "publish tasks"),
-        "list_campaign_contents" => compress_list_result(list, total, &["id", "content_type", "author", "text"], "campaign contents"),
+        "list_video_tasks" => {
+            compress_list_result(list, total, &["id", "status", "model_name"], "video tasks")
+        }
+        "list_video_cases" => compress_list_result(
+            list,
+            total,
+            &["id", "task_no", "title", "status"],
+            "video cases",
+        ),
+        "list_publish_tasks" => compress_list_result(
+            list,
+            total,
+            &["id", "status", "platform_id", "account_name"],
+            "publish tasks",
+        ),
+        "list_campaign_contents" => compress_list_result(
+            list,
+            total,
+            &["id", "content_type", "author", "text"],
+            "campaign contents",
+        ),
         "list_dm_conversations" => {
             if let Some(convs) = result.get("conversations").and_then(|c| c.as_array()) {
-                let items: Vec<String> = convs.iter().map(|c| {
-                    format!("{{conv_id:\"{}\",remote_username:\"{}\",unread:{},platform_id:{}}}",
-                        c["conv_id"].as_str().unwrap_or("?"),
-                        c["remote_username"].as_str().unwrap_or("?"),
-                        c["unread_count"].as_i64().unwrap_or(0),
-                        c["platform_id"].as_i64().unwrap_or(0))
-                }).collect();
+                let items: Vec<String> = convs
+                    .iter()
+                    .map(|c| {
+                        format!(
+                            "{{conv_id:\"{}\",remote_username:\"{}\",unread:{},platform_id:{}}}",
+                            c["conv_id"].as_str().unwrap_or("?"),
+                            c["remote_username"].as_str().unwrap_or("?"),
+                            c["unread_count"].as_i64().unwrap_or(0),
+                            c["platform_id"].as_i64().unwrap_or(0)
+                        )
+                    })
+                    .collect();
                 format!("{{conversations:[{}]}}", items.join(","))
             } else {
                 serde_json::to_string(result).unwrap_or_default()
@@ -389,12 +447,17 @@ pub fn compress_tool_result(tool_name: &str, result: &Value) -> String {
         }
         "list_notifications" => {
             if let Some(arr) = result.as_array().or(list) {
-                let items: Vec<String> = arr.iter().map(|n| {
-                    format!("{{id:{},title:\"{}\",read:{}}}",
-                        n["id"].as_i64().unwrap_or(0),
-                        n["title"].as_str().unwrap_or("?"),
-                        n["read"].as_bool().unwrap_or(false))
-                }).collect();
+                let items: Vec<String> = arr
+                    .iter()
+                    .map(|n| {
+                        format!(
+                            "{{id:{},title:\"{}\",read:{}}}",
+                            n["id"].as_i64().unwrap_or(0),
+                            n["title"].as_str().unwrap_or("?"),
+                            n["read"].as_bool().unwrap_or(false)
+                        )
+                    })
+                    .collect();
                 format!("[{}]", items.join(","))
             } else {
                 serde_json::to_string(result).unwrap_or_default()
@@ -402,7 +465,11 @@ pub fn compress_tool_result(tool_name: &str, result: &Value) -> String {
         }
         "search_knowledge" => {
             let s = serde_json::to_string(result).unwrap_or_default();
-            if s.len() > 4000 { format!("{}...(truncated)", &s[..4000]) } else { s }
+            if s.len() > 4000 {
+                format!("{}...(truncated)", &s[..4000])
+            } else {
+                s
+            }
         }
         _ => {
             let full = serde_json::to_string(result).unwrap_or_default();
@@ -415,35 +482,48 @@ pub fn compress_tool_result(tool_name: &str, result: &Value) -> String {
     }
 }
 
-fn compress_list_result(list: Option<&Vec<Value>>, total: Option<i64>, fields: &[&str], label: &str) -> String {
+fn compress_list_result(
+    list: Option<&Vec<Value>>,
+    total: Option<i64>,
+    fields: &[&str],
+    label: &str,
+) -> String {
     let items = match list {
         Some(arr) if !arr.is_empty() => arr,
         _ => {
-            return format!("{{\"total\":0,\"list\":[],\"note\":\"No {} found\"}}", label);
+            return format!(
+                "{{\"total\":0,\"list\":[],\"note\":\"No {} found\"}}",
+                label
+            );
         }
     };
     let total_count = total.unwrap_or(items.len() as i64);
-    let compressed: Vec<Value> = items.iter().map(|item| {
-        let mut obj = serde_json::Map::new();
-        if let Some(id) = item.get("id") {
-            obj.insert("id".into(), id.clone());
-        }
-        for &field in fields {
-            if field == "id" { continue; }
-            if let Some(val) = item.get(field) {
-                if let Some(s) = val.as_str() {
-                    if s.len() > 100 {
-                        obj.insert(field.into(), Value::String(format!("{}...", &s[..100])));
+    let compressed: Vec<Value> = items
+        .iter()
+        .map(|item| {
+            let mut obj = serde_json::Map::new();
+            if let Some(id) = item.get("id") {
+                obj.insert("id".into(), id.clone());
+            }
+            for &field in fields {
+                if field == "id" {
+                    continue;
+                }
+                if let Some(val) = item.get(field) {
+                    if let Some(s) = val.as_str() {
+                        if s.len() > 100 {
+                            obj.insert(field.into(), Value::String(format!("{}...", &s[..100])));
+                        } else {
+                            obj.insert(field.into(), val.clone());
+                        }
                     } else {
                         obj.insert(field.into(), val.clone());
                     }
-                } else {
-                    obj.insert(field.into(), val.clone());
                 }
             }
-        }
-        Value::Object(obj)
-    }).collect();
+            Value::Object(obj)
+        })
+        .collect();
     serde_json::json!({ "total": total_count, "list": compressed }).to_string()
 }
 

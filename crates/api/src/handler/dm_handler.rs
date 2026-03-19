@@ -21,7 +21,9 @@ fn require_nats_dm(state: &UserState) -> Result<&NatsDmService, ApiError> {
 fn parse_conv_id(conv_id: &str) -> Result<(i32, &str), ApiError> {
     let parts: Vec<&str> = conv_id.splitn(2, '_').collect();
     if parts.len() != 2 {
-        return Err(ApiError::BadRequest("Invalid conv_id format, expected {account_id}_{remote_user}".into()));
+        return Err(ApiError::BadRequest(
+            "Invalid conv_id format, expected {account_id}_{remote_user}".into(),
+        ));
     }
     let social_account_id: i32 = parts[0]
         .parse()
@@ -68,11 +70,14 @@ async fn verify_device_ownership(
         platform_id: None,
         status: None,
     };
-    let result = state.social_account_service.list_accounts(user_id, req).await?;
+    let result = state
+        .social_account_service
+        .list_accounts(user_id, req)
+        .await?;
     if result.total == 0 {
-        return Err(ApiError::NotFound(
-            format!("No accounts bound to device {device_id}"),
-        ));
+        return Err(ApiError::NotFound(format!(
+            "No accounts bound to device {device_id}"
+        )));
     }
     Ok(())
 }
@@ -126,13 +131,9 @@ pub async fn send_reply(
             .social_account_service
             .get_account_by_id(social_account_id, user.id)
             .await?;
-        device_id = account
-            .device_id
-            .unwrap_or_default();
+        device_id = account.device_id.unwrap_or_default();
         platform_id = account.platform_id;
-        profile_name = account
-            .profile_name
-            .unwrap_or_default();
+        profile_name = account.profile_name.unwrap_or_default();
     }
 
     if device_id.trim().is_empty() {

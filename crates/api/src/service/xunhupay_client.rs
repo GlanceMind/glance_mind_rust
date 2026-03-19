@@ -81,7 +81,11 @@ impl XunhuPayClient {
 
         let body = resp.text().await.map_err(|e| format!("Read body: {e}"))?;
         let raw_json: JsonValue = serde_json::from_str(&body).map_err(|e| {
-            warn!("XunhuPay pay response parse failed: {}; body={}", e, &body[..body.len().min(500)]);
+            warn!(
+                "XunhuPay pay response parse failed: {}; body={}",
+                e,
+                &body[..body.len().min(500)]
+            );
             format!("Parse pay response: unexpected response format")
         })?;
         verify_response_hash_from_value(&raw_json, &self.app_secret)
@@ -128,8 +132,12 @@ impl XunhuPayClient {
         let body = resp.text().await.map_err(|e| format!("Read body: {e}"))?;
         tracing::debug!("XunhuPay query response: {}", &body[..body.len().min(500)]);
 
-        serde_json::from_str::<QueryResponse>(&body)
-            .map_err(|e| format!("Parse query response: {e} | body={}", &body[..body.len().min(300)]))
+        serde_json::from_str::<QueryResponse>(&body).map_err(|e| {
+            format!(
+                "Parse query response: {e} | body={}",
+                &body[..body.len().min(300)]
+            )
+        })
     }
 
     // ---- Refund (退款) -----------------------------------------------------
@@ -168,7 +176,11 @@ impl XunhuPayClient {
 
         let body = resp.text().await.map_err(|e| format!("Read body: {e}"))?;
         let raw_json: JsonValue = serde_json::from_str(&body).map_err(|e| {
-            warn!("XunhuPay refund response parse failed: {}; body={}", e, &body[..body.len().min(500)]);
+            warn!(
+                "XunhuPay refund response parse failed: {}; body={}",
+                e,
+                &body[..body.len().min(500)]
+            );
             format!("Parse refund response: unexpected response format")
         })?;
         verify_response_hash_from_value(&raw_json, &self.app_secret)
@@ -261,7 +273,11 @@ pub fn verify_hash(params: &BTreeMap<String, String>, app_secret: &str, hash: &s
 
 fn normalize_gateway(raw: &str) -> String {
     let trimmed = raw.trim().trim_end_matches('/');
-    for suffix in ["/payment/do.html", "/payment/query.html", "/payment/refund.html"] {
+    for suffix in [
+        "/payment/do.html",
+        "/payment/query.html",
+        "/payment/refund.html",
+    ] {
         if let Some(base) = trimmed.strip_suffix(suffix) {
             return base.trim_end_matches('/').to_string();
         }
@@ -284,7 +300,9 @@ fn json_scalar_to_string(value: &JsonValue) -> Option<String> {
     }
 }
 
-fn response_params_from_value(value: &JsonValue) -> Result<(BTreeMap<String, String>, String), String> {
+fn response_params_from_value(
+    value: &JsonValue,
+) -> Result<(BTreeMap<String, String>, String), String> {
     let obj = value
         .as_object()
         .ok_or_else(|| "response is not a JSON object".to_string())?;
@@ -369,7 +387,11 @@ pub struct PayResponse {
     #[serde(default)]
     pub errmsg: String,
     /// XunhuPay internal order id (field name in JSON is `openid` due to legacy bug)
-    #[serde(alias = "openid", default, deserialize_with = "deserialize_opt_string_or_number")]
+    #[serde(
+        alias = "openid",
+        default,
+        deserialize_with = "deserialize_opt_string_or_number"
+    )]
     pub order_id: Option<String>,
     /// QR-code URL for PC scanning
     pub url_qrcode: Option<String>,
@@ -476,10 +498,7 @@ mod tests {
         ]);
         let hash = generate_hash(&params, TEST_SECRET);
         assert_eq!(hash.len(), 32, "MD5 must be 32 hex chars");
-        assert!(
-            hash.chars().all(|c| c.is_ascii_hexdigit()),
-            "Must be hex"
-        );
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()), "Must be hex");
     }
 
     #[test]
@@ -515,10 +534,7 @@ mod tests {
         ]);
         let hash = generate_hash(&params, TEST_SECRET);
         // Recompute manually
-        let raw = format!(
-            "a_field=first&m_field=middle&z_field=last{}",
-            TEST_SECRET
-        );
+        let raw = format!("a_field=first&m_field=middle&z_field=last{}", TEST_SECRET);
         let expected = format!("{:x}", md5::compute(raw.as_bytes()));
         assert_eq!(hash, expected);
     }
@@ -557,11 +573,7 @@ mod tests {
 
     #[test]
     fn test_verify_notification_roundtrip() {
-        let client = XunhuPayClient::new(
-            "TEST_APP".to_string(),
-            TEST_SECRET.to_string(),
-            None,
-        );
+        let client = XunhuPayClient::new("TEST_APP".to_string(), TEST_SECRET.to_string(), None);
 
         let mut notification = PayNotification {
             trade_order_id: "ORDER001".to_string(),
@@ -598,11 +610,7 @@ mod tests {
 
     #[test]
     fn test_verify_notification_with_extra_fields() {
-        let client = XunhuPayClient::new(
-            "APP".to_string(),
-            TEST_SECRET.to_string(),
-            None,
-        );
+        let client = XunhuPayClient::new("APP".to_string(), TEST_SECRET.to_string(), None);
 
         let mut params = BTreeMap::new();
         params.insert("trade_order_id".to_string(), "O1".to_string());
@@ -642,11 +650,7 @@ mod tests {
 
     #[test]
     fn test_verify_notification_bad_hash() {
-        let client = XunhuPayClient::new(
-            "APP".to_string(),
-            TEST_SECRET.to_string(),
-            None,
-        );
+        let client = XunhuPayClient::new("APP".to_string(), TEST_SECRET.to_string(), None);
 
         let notification = PayNotification {
             trade_order_id: "O1".to_string(),

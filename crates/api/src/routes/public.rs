@@ -63,9 +63,6 @@ pub fn public_routes(user_state: &UserState) -> Router<UserState> {
             post(upload_task_handler::update_task_status),
         )
         // XunhuPay payment callback (no auth — signature verified internally)
-        .route(
-            "/payment/notify",
-            post(wallet_handler::payment_notify),
-        )
+        .route("/payment/notify", post(wallet_handler::payment_notify))
         .merge(email_verification_router)
 }

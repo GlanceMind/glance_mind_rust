@@ -40,7 +40,7 @@ async fn login() -> Result<String, Box<dyn std::error::Error>> {
 #[ignore] // Requires running server
 async fn test_batch_create_accounts_small_range() {
     let token = login().await.expect("Failed to login");
-    
+
     let client = reqwest::Client::new();
     let response = client
         .post(format!("{}/accounts/batch", BASE_URL))
@@ -60,12 +60,12 @@ async fn test_batch_create_accounts_small_range() {
 
     assert_eq!(response.status(), 200);
     let body: serde_json::Value = response.json().await.expect("Failed to parse response");
-    
+
     assert_eq!(body["data"]["created_count"].as_i64(), Some(10));
     assert_eq!(body["data"]["total_attempted"].as_i64(), Some(10));
     assert!(body["data"]["created_ids"].is_array());
     assert_eq!(body["data"]["created_ids"].as_array().unwrap().len(), 10);
-    
+
     println!("✅ Batch created 10 accounts successfully");
     println!("   Created IDs: {:?}", body["data"]["created_ids"]);
 }
@@ -75,7 +75,7 @@ async fn test_batch_create_accounts_small_range() {
 #[ignore]
 async fn test_batch_create_accounts_max_limit() {
     let token = login().await.expect("Failed to login");
-    
+
     let client = reqwest::Client::new();
     let response = client
         .post(format!("{}/accounts/batch", BASE_URL))
@@ -95,10 +95,10 @@ async fn test_batch_create_accounts_max_limit() {
 
     assert_eq!(response.status(), 200);
     let body: serde_json::Value = response.json().await.expect("Failed to parse response");
-    
+
     assert_eq!(body["data"]["created_count"].as_i64(), Some(100));
     assert_eq!(body["data"]["total_attempted"].as_i64(), Some(100));
-    
+
     println!("✅ Batch created 100 accounts (max limit) successfully");
 }
 
@@ -107,7 +107,7 @@ async fn test_batch_create_accounts_max_limit() {
 #[ignore]
 async fn test_batch_create_accounts_exceed_limit() {
     let token = login().await.expect("Failed to login");
-    
+
     let client = reqwest::Client::new();
     let response = client
         .post(format!("{}/accounts/batch", BASE_URL))
@@ -128,13 +128,14 @@ async fn test_batch_create_accounts_exceed_limit() {
     // Should return 400 Bad Request
     assert_eq!(response.status(), 400);
     let body: serde_json::Value = response.json().await.expect("Failed to parse response");
-    
+
     // Verify error message mentions the limit (check both 'message' and 'msg' fields)
-    let message = body["message"].as_str()
+    let message = body["message"]
+        .as_str()
         .or(body["msg"].as_str())
         .unwrap_or("");
     assert!(message.contains("100") || message.to_lowercase().contains("maximum"));
-    
+
     println!("✅ Correctly rejected batch creation exceeding 100 accounts");
     println!("   Error message: {}", message);
 }
@@ -144,7 +145,7 @@ async fn test_batch_create_accounts_exceed_limit() {
 #[ignore]
 async fn test_batch_create_accounts_invalid_range() {
     let token = login().await.expect("Failed to login");
-    
+
     let client = reqwest::Client::new();
     let response = client
         .post(format!("{}/accounts/batch", BASE_URL))
@@ -164,7 +165,7 @@ async fn test_batch_create_accounts_invalid_range() {
 
     // Should return 400 Bad Request
     assert_eq!(response.status(), 400);
-    
+
     println!("✅ Correctly rejected invalid profile range (start > end)");
 }
 
@@ -173,7 +174,7 @@ async fn test_batch_create_accounts_invalid_range() {
 #[ignore]
 async fn test_batch_create_accounts_mismatched_prefix() {
     let token = login().await.expect("Failed to login");
-    
+
     let client = reqwest::Client::new();
     let response = client
         .post(format!("{}/accounts/batch", BASE_URL))
@@ -194,13 +195,14 @@ async fn test_batch_create_accounts_mismatched_prefix() {
     // Should return 400 Bad Request
     assert_eq!(response.status(), 400);
     let body: serde_json::Value = response.json().await.expect("Failed to parse response");
-    
+
     // Check both 'message' and 'msg' fields
-    let message = body["message"].as_str()
+    let message = body["message"]
+        .as_str()
         .or(body["msg"].as_str())
         .unwrap_or("");
     assert!(message.to_lowercase().contains("prefix"));
-    
+
     println!("✅ Correctly rejected mismatched profile prefixes");
     println!("   Error message: {}", message);
 }
@@ -220,9 +222,12 @@ async fn test_batch_create_accounts_with_group() {
         .await
         .expect("Failed to list groups");
 
-    let group_body: serde_json::Value = group_response.json().await.expect("Failed to parse group response");
+    let group_body: serde_json::Value = group_response
+        .json()
+        .await
+        .expect("Failed to parse group response");
     let groups = group_body["data"]["list"].as_array();
-    
+
     let group_id = if let Some(groups) = groups {
         if !groups.is_empty() {
             groups[0]["id"].as_i64().map(|id| id as i32)
@@ -255,7 +260,7 @@ async fn test_batch_create_accounts_with_group() {
         assert_eq!(response.status(), 200);
         let body: serde_json::Value = response.json().await.expect("Failed to parse response");
         assert_eq!(body["data"]["created_count"].as_i64(), Some(5));
-        
+
         println!("✅ Batch created 5 accounts with group_id={}", gid);
     } else {
         println!("⚠️  No groups found, skipping group assignment test");
@@ -288,14 +293,16 @@ async fn test_batch_create_verify_usernames() {
 
     assert_eq!(response.status(), 200);
     let body: serde_json::Value = response.json().await.expect("Failed to parse response");
-    
-    let created_ids = body["data"]["created_ids"].as_array().expect("Created IDs not found");
+
+    let created_ids = body["data"]["created_ids"]
+        .as_array()
+        .expect("Created IDs not found");
     assert_eq!(created_ids.len(), 3);
 
     // Verify each created account
     for (i, id_value) in created_ids.iter().enumerate() {
         let account_id = id_value.as_i64().expect("Invalid ID");
-        
+
         // Get account details (assuming there's a detail endpoint or list with filter)
         let list_response = client
             .get(format!("{}/accounts?page=1&page_size=100", BASE_URL))
@@ -304,20 +311,31 @@ async fn test_batch_create_verify_usernames() {
             .await
             .expect("Failed to list accounts");
 
-        let list_body: serde_json::Value = list_response.json().await.expect("Failed to parse list response");
-        let accounts = list_body["data"]["list"].as_array().expect("List not found");
-        
+        let list_body: serde_json::Value = list_response
+            .json()
+            .await
+            .expect("Failed to parse list response");
+        let accounts = list_body["data"]["list"]
+            .as_array()
+            .expect("List not found");
+
         // Find the created account
-        let account = accounts.iter().find(|a| a["id"].as_i64() == Some(account_id));
+        let account = accounts
+            .iter()
+            .find(|a| a["id"].as_i64() == Some(account_id));
         if let Some(acc) = account {
             let expected_profile = format!("profile_{}", i + 1);
             let expected_username = format!("myuser_{}", expected_profile);
-            
-            assert_eq!(acc["profile_name"].as_str(), Some(expected_profile.as_str()));
+
+            assert_eq!(
+                acc["profile_name"].as_str(),
+                Some(expected_profile.as_str())
+            );
             assert_eq!(acc["username"].as_str(), Some(expected_username.as_str()));
-            
-            println!("   Account {}: username={}, profile={}", 
-                account_id, 
+
+            println!(
+                "   Account {}: username={}, profile={}",
+                account_id,
                 acc["username"].as_str().unwrap_or(""),
                 acc["profile_name"].as_str().unwrap_or("")
             );
@@ -341,8 +359,9 @@ async fn test_batch_create_complete_flow() {
         .send()
         .await
         .expect("Failed to get stats");
-    
-    let initial_body: serde_json::Value = initial_stats.json().await.expect("Failed to parse stats");
+
+    let initial_body: serde_json::Value =
+        initial_stats.json().await.expect("Failed to parse stats");
     let initial_total = initial_body["data"]["total"].as_i64().unwrap_or(0);
     println!("   Initial total: {}", initial_total);
 
@@ -364,9 +383,18 @@ async fn test_batch_create_complete_flow() {
         .expect("Failed to batch create");
 
     assert_eq!(create_response.status(), 200);
-    let create_body: serde_json::Value = create_response.json().await.expect("Failed to parse create response");
-    let created_ids = create_body["data"]["created_ids"].as_array().expect("Created IDs not found");
-    println!("   Created {} accounts: {:?}", created_ids.len(), created_ids);
+    let create_body: serde_json::Value = create_response
+        .json()
+        .await
+        .expect("Failed to parse create response");
+    let created_ids = create_body["data"]["created_ids"]
+        .as_array()
+        .expect("Created IDs not found");
+    println!(
+        "   Created {} accounts: {:?}",
+        created_ids.len(),
+        created_ids
+    );
 
     println!("Step 3: Verify new account count...");
     let final_stats = client
@@ -375,8 +403,11 @@ async fn test_batch_create_complete_flow() {
         .send()
         .await
         .expect("Failed to get final stats");
-    
-    let final_body: serde_json::Value = final_stats.json().await.expect("Failed to parse final stats");
+
+    let final_body: serde_json::Value = final_stats
+        .json()
+        .await
+        .expect("Failed to parse final stats");
     let final_total = final_body["data"]["total"].as_i64().unwrap_or(0);
     println!("   Final total: {}", final_total);
 
@@ -392,7 +423,7 @@ async fn test_batch_create_complete_flow() {
             .send()
             .await
             .expect("Failed to delete account");
-        
+
         assert_eq!(delete_response.status(), 200);
     }
     println!("   ✅ Cleaned up {} accounts", created_ids.len());
