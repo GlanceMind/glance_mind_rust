@@ -101,12 +101,13 @@ impl JimengClient {
         let is_pro = matches!(params.resolution, JimengResolution::V30Pro);
 
         let (binary_data_base64, image_urls) = if is_pro {
-            // Pro uses image_urls for I2V (image_base64 here is actually a URL for Pro)
-            let urls = match mode {
+            // Pro uses binary_data_base64 for I2V (the caller provides base64 data,
+            // not HTTP URLs; image_urls is only for the scheduler path).
+            let b64 = match mode {
                 JimengVideoMode::ImageFirstFrame => Some(vec![params.image_base64.unwrap()]),
                 _ => None,
             };
-            (None, urls)
+            (b64, None)
         } else {
             let b64 = match mode {
                 JimengVideoMode::ImageFirstLastFrame => Some(vec![
@@ -899,5 +900,140 @@ mod tests {
             "At least 720P T2V/I2V + 1080P T2V should pass. Got {} passes.",
             pass
         );
+    }
+
+    /// Focused test: Pro I2V via binary_data_base64 (the bug-fix path).
+    ///
+    ///   cargo test -p glance_mind_api test_real_jimeng_pro_i2v -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn test_real_jimeng_pro_i2v() {
+        let client = make_client();
+        let img_b64 = JimengClient::encode_image(&test_bmp_256());
+
+        println!("\n━━━ Jimeng Pro I2V (binary_data_base64) ━━━");
+        let handle = client
+            .create_image_to_video(
+                "让画面中的场景缓缓动起来，微风吹过树叶轻轻摇摆".into(),
+                img_b64,
+                5,
+                JimengResolution::V30Pro,
+            )
+            .await
+            .expect("Pro I2V submit should succeed");
+
+        println!("  submitted: task_id={}, req_key={}", handle.task_id, handle.req_key);
+        assert_eq!(handle.req_key, "jimeng_ti2v_v30_pro");
+
+        let result = poll_done(&client, &handle, 60, 5)
+            .await
+            .expect("Pro I2V poll should succeed");
+
+        assert!(result.is_done(), "Pro I2V task should complete, got status={}", result.status);
+        let url = result.get_video_url().expect("Pro I2V should have video URL");
+        println!("  DONE: {}", &url[..url.len().min(80)]);
+    }
+
+    /// Manual acceptance test: Pro I2V with a real image file from disk.
+    /// Prints the video URL for manual review.
+    ///
+    ///   cargo test -p glance_mind_api test_real_jimeng_pro_i2v_file -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn test_real_jimeng_pro_i2v_file() {
+        let img_path = std::env::var("JIMENG_TEST_IMAGE")
+            .unwrap_or_else(|_| "/Users/jacksoom/Desktop/a.png".to_string());
+        let img_bytes = std::fs::read(&img_path)
+            .unwrap_or_else(|e| panic!("Cannot read {}: {}", img_path, e));
+        let img_b64 = JimengClient::encode_image(&img_bytes);
+        println!("\nImage: {} ({} bytes, base64 len={})", img_path, img_bytes.len(), img_b64.len());
+
+        let client = make_client();
+
+        println!("\n━━━ Jimeng Pro I2V (real image file) ━━━");
+        let handle = client
+            .create_image_to_video(
+                "让T恤上的卡通猪厨师活过来，拿着烤肉盘微笑，背景烟雾缭绕".into(),
+                img_b64,
+                5,
+                JimengResolution::V30Pro,
+            )
+            .await
+            .expect("Pro I2V submit should succeed");
+
+        println!("  submitted: task_id={}, req_key={}", handle.task_id, handle.req_key);
+
+        let result = poll_done(&client, &handle, 60, 5)
+            .await
+            .expect("Pro I2V poll should succeed");
+
+        assert!(result.is_done(), "Pro I2V should complete, got status={}", result.status);
+        let url = result.get_video_url().expect("Should have video URL");
+        println!("\n  ✅ VIDEO URL:\n  {}\n", url);
+    }
+
+    /// Quick smoke test: 720P T2V + 720P I2V + Pro T2V + Pro I2V (skip slow FL).
+    ///
+    ///   cargo test -p glance_mind_api test_real_jimeng_core_modes -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn test_real_jimeng_core_modes() {
+        let client = make_client();
+        let img_b64 = JimengClient::encode_image(&test_bmp_256());
+
+        struct Case {
+            label: &'static str,
+            resolution: JimengResolution,
+            is_i2v: bool,
+        }
+        let cases = [
+            Case { label: "720P T2V",  resolution: JimengResolution::V30_720p, is_i2v: false },
+            Case { label: "720P I2V",  resolution: JimengResolution::V30_720p, is_i2v: true  },
+            Case { label: "Pro T2V",   resolution: JimengResolution::V30Pro,   is_i2v: false },
+            Case { label: "Pro I2V",   resolution: JimengResolution::V30Pro,   is_i2v: true  },
+        ];
+
+        let mut pass = 0usize;
+        let mut fail = 0usize;
+
+        for (idx, c) in cases.iter().enumerate() {
+            println!("\n━━━ [{}/{}] {} ━━━", idx + 1, cases.len(), c.label);
+
+            let handle_result = if c.is_i2v {
+                client.create_image_to_video(
+                    "让画面中的场景缓缓动起来，微风吹过树叶轻轻摇摆".into(),
+                    img_b64.clone(), 5, c.resolution,
+                ).await
+            } else {
+                client.create_text_to_video(
+                    "春天的樱花树下，花瓣随风飘落，阳光透过树枝洒下斑驳的光影".into(),
+                    "16:9".into(), 5, c.resolution,
+                ).await
+            };
+
+            match handle_result {
+                Ok(handle) => {
+                    println!("  submitted: task_id={}, req_key={}", handle.task_id, handle.req_key);
+                    match poll_done(&client, &handle, 60, 5).await {
+                        Ok(r) if r.is_done() => {
+                            let url = r.get_video_url().unwrap_or_default();
+                            println!("  DONE: {}", &url[..url.len().min(80)]);
+                            pass += 1;
+                        }
+                        Ok(r) => { println!("  FAIL: status={}", r.status); fail += 1; }
+                        Err(e) => { println!("  FAIL poll: {}", e); fail += 1; }
+                    }
+                }
+                Err(e) => { println!("  FAIL submit: {:?}", e); fail += 1; }
+            }
+
+            if idx + 1 < cases.len() {
+                println!("  (cooldown 5s...)");
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+        }
+
+        println!("\n━━━ Summary: PASS={}, FAIL={} ━━━", pass, fail);
+        assert_eq!(fail, 0, "All core modes should pass");
     }
 }

@@ -347,6 +347,8 @@ pub struct AipubTask {
     pub published_at: Option<DateTime<Utc>>,
     /// Reference to the AI task that generated this publish task content
     pub ai_task_id: Option<i32>,
+    pub video_stage_started_at: Option<DateTime<Utc>>,
+    pub video_ai_task_id: Option<i32>,
 }
 
 #[derive(Debug, Clone, Insertable)]

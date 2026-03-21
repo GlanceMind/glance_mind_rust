@@ -472,6 +472,8 @@ diesel::table! {
         updated_at -> Nullable<Timestamptz>,
         published_at -> Nullable<Timestamptz>,
         ai_task_id -> Nullable<Int4>,
+        video_stage_started_at -> Nullable<Timestamptz>,
+        video_ai_task_id -> Nullable<Int4>,
     }
 }
 
@@ -948,6 +950,11 @@ diesel::table! {
         #[max_length = 64]
         open_order_id -> Nullable<Varchar>,
         paid_at -> Nullable<Timestamptz>,
+        #[max_length = 50]
+        reference_sub_type -> Nullable<Varchar>,
+        reference_sub_id -> Nullable<Int4>,
+        #[max_length = 128]
+        biz_key -> Nullable<Varchar>,
     }
 }
 
