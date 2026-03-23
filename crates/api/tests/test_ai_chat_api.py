@@ -1119,6 +1119,100 @@ class TestCoreQueryTools:
         tc_starts = [e for e in events if e["event"] == "tool_call_start"]
         assert len(tc_starts) >= 1
 
+    def test_product_help_query_uses_search_knowledge(self, auth_client):
+        resp = auth_client.post(f"{API_PREFIX}/conversations", json={"title": "Knowledge Q"})
+        conv_id = extract_data(resp.json())["id"]
+
+        resp = auth_client.post(
+            f"{API_PREFIX}/conversations/{conv_id}/messages",
+            json={"content": "GlanceMind 里的回复模板怎么配置？"},
+            stream=True,
+            timeout=180,
+        )
+        events = parse_sse_events(resp)
+
+        search_starts = [
+            e for e in events
+            if e["event"] == "tool_call_start"
+            and e["data"].get("tool_name") == "search_knowledge"
+        ]
+        assert search_starts, "Product help query should deterministically trigger search_knowledge"
+
+        end_events = [e for e in events if e["event"] == "message_end"]
+        error_events = [e for e in events if e["event"] == "error"]
+        assert end_events or error_events, "Knowledge search stream must terminate explicitly"
+        assert not error_events, f"Knowledge search stream should not fail: {error_events}"
+
+        matching_results = [
+            e for e in events
+            if e["event"] == "tool_call_result"
+            and e["data"].get("tool_call_id") == search_starts[0]["data"]["tool_call_id"]
+        ]
+        assert matching_results, "search_knowledge tool call should emit a matching result"
+        result_data = matching_results[0]["data"]
+        assert result_data["success"] is True
+        assert result_data.get("display_hint") == "hidden"
+        assert result_data["result"]["hidden"] is True
+        assert "sources" in result_data["result"]
+        assert "content" not in json.dumps(result_data["result"], ensure_ascii=False)
+
+    def test_generic_writing_request_finishes_without_search_knowledge(self, auth_client):
+        resp = auth_client.post(f"{API_PREFIX}/conversations", json={"title": "Writing Q"})
+        conv_id = extract_data(resp.json())["id"]
+
+        resp = auth_client.post(
+            f"{API_PREFIX}/conversations/{conv_id}/messages",
+            json={"content": "生成一个网红笔记的回复模板"},
+            stream=True,
+            timeout=180,
+        )
+        events = parse_sse_events(resp)
+
+        search_starts = [
+            e for e in events
+            if e["event"] == "tool_call_start"
+            and e["data"].get("tool_name") == "search_knowledge"
+        ]
+        end_events = [e for e in events if e["event"] == "message_end"]
+        error_events = [e for e in events if e["event"] == "error"]
+
+        assert not search_starts, "Generic writing request should not be forced into search_knowledge"
+        assert end_events or error_events, "Generic writing request must still terminate explicitly"
+        assert not error_events, f"Generic writing request should not fail: {error_events}"
+
+    def test_model_fallback_succeeds_after_primary_model_503(self, auth_client):
+        if not API_BASE_URL.startswith("http://localhost:8081"):
+            pytest.skip("Fallback simulation expects local E2E API environment")
+
+        resp = auth_client.post(f"{API_PREFIX}/conversations", json={"title": "Fallback Success Q"})
+        conv_id = extract_data(resp.json())["id"]
+
+        resp = auth_client.post(
+            f"{API_PREFIX}/conversations/{conv_id}/messages",
+            json={
+                "content": "GlanceMind 里的回复模板怎么配置？ [FORCE_MODEL_FALLBACK_TEST]",
+                "model_id": 1,
+            },
+            stream=True,
+            timeout=180,
+        )
+        events = parse_sse_events(resp)
+
+        search_starts = [
+            e for e in events
+            if e["event"] == "tool_call_start"
+            and e["data"].get("tool_name") == "search_knowledge"
+        ]
+        assert search_starts, "Fallback simulation should still query knowledge first"
+
+        end_events = [e for e in events if e["event"] == "message_end"]
+        error_events = [e for e in events if e["event"] == "error"]
+        deltas = [e for e in events if e["event"] == "text_delta"]
+
+        assert deltas, "Fallback success path should still return answer text"
+        assert end_events, "Fallback success path should finish with message_end"
+        assert not error_events, f"Fallback success should not surface an error: {error_events}"
+
 
 # ===========================================================================
 # 11. Interactive follow-up scenarios (requires LLM)

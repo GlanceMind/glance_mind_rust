@@ -4,8 +4,147 @@ use crate::error::api_error::ApiError;
 use crate::service::ai_chat::*;
 use crate::state::user_state::UserState;
 use glance_mind_db::entity::ai_chat::*;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::sync::mpsc;
+
+fn display_hint_for_tool(tool_name: &str) -> Option<&'static str> {
+    match tool_name {
+        "create_questionnaire_proposal" | "search_knowledge" => Some("hidden"),
+        _ => None,
+    }
+}
+
+const PRODUCT_HELP_QUERY_CUES: &[&str] = &[
+    "怎么", "如何", "是什么", "什么是", "哪些", "有哪些", "区别", "支持", "配置", "设置",
+    "入口", "在哪", "在哪里", "计费", "收费", "规则", "教程", "帮助", "文档", "guide",
+    "how to", "what is", "which", "difference", "pricing", "billing", "configure", "setup",
+    "docs", "documentation",
+];
+
+const PRODUCT_HELP_TOPICS: &[&str] = &[
+    "glancemind", "回复模板", "template", "人设", "营销活动", "campaign", "发布计划",
+    "publish plan", "计费", "钱包", "dm", "私信群控", "收件箱", "账号分组", "social group",
+    "平台", "platform", "执行器", "executor", "市场洞察", "ai 智能获客", "获客",
+];
+
+const GENERIC_WRITING_CUES: &[&str] = &[
+    "生成一个", "写一个", "帮我写", "给我一个", "起草", "润色", "改写", "翻译",
+    "write", "generate", "draft", "compose", "reply template", "caption", "文案", "笔记",
+    "评论回复", "示例", "例子", "网红笔记",
+];
+
+const DEFAULT_CHAT_MODEL_KEY: &str = "gpt-5.2";
+
+fn infer_forced_knowledge_query(content: &str) -> Option<String> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lower = trimmed.to_lowercase();
+    if looks_like_generic_writing_request(&lower) && !looks_like_product_help_query(&lower) {
+        return None;
+    }
+
+    if looks_like_product_help_query(&lower) && contains_product_help_topic(&lower) {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
+}
+
+fn looks_like_product_help_query(lower: &str) -> bool {
+    lower.contains('?')
+        || lower.contains('？')
+        || PRODUCT_HELP_QUERY_CUES.iter().any(|cue| lower.contains(cue))
+}
+
+fn contains_product_help_topic(lower: &str) -> bool {
+    PRODUCT_HELP_TOPICS.iter().any(|topic| lower.contains(topic))
+}
+
+fn looks_like_generic_writing_request(lower: &str) -> bool {
+    GENERIC_WRITING_CUES.iter().any(|cue| lower.contains(cue))
+}
+
+fn default_chat_model_key() -> String {
+    std::env::var("AI_CHAT_MODEL").unwrap_or_else(|_| DEFAULT_CHAT_MODEL_KEY.to_string())
+}
+
+fn is_retryable_model_provider_error(error: &str) -> bool {
+    let lower = error.to_lowercase();
+    lower.contains("503")
+        || lower.contains("service unavailable")
+        || lower.contains("no available accounts")
+        || lower.contains("rate limit")
+        || lower.contains("too many requests")
+        || lower.contains("429")
+}
+
+fn friendly_ai_chat_error_message(error: &str) -> String {
+    let lower = error.to_lowercase();
+    if is_retryable_model_provider_error(error) {
+        "AI 模型服务暂时不可用，请稍后重试或切换到其他模型。".to_string()
+    } else if lower.contains("timed out") || lower.contains("timeout") {
+        "AI 模型响应超时，请稍后重试或切换到其他模型。".to_string()
+    } else {
+        error.to_string()
+    }
+}
+
+fn build_forced_tool_call(
+    tool_name: &str,
+    params: &Value,
+    unique_suffix: &str,
+) -> llm_client::ToolCall {
+    llm_client::ToolCall {
+        id: format!("forced_{}_{}", tool_name, unique_suffix),
+        call_type: "function".into(),
+        function: llm_client::FunctionCall {
+            name: tool_name.to_string(),
+            arguments: serde_json::to_string(params).unwrap_or_else(|_| "{}".into()),
+        },
+    }
+}
+
+fn client_safe_tool_result(tool_name: &str, display_hint: Option<&str>, result: &Value) -> Value {
+    if display_hint != Some("hidden") {
+        return result.clone();
+    }
+
+    match tool_name {
+        "search_knowledge" => {
+            let sources = result
+                .as_array()
+                .map(|entries| {
+                    entries
+                        .iter()
+                        .take(3)
+                        .map(|entry| {
+                            json!({
+                                "title": entry.get("title").and_then(|v| v.as_str()).unwrap_or("Unknown"),
+                                "topic": entry.get("topic").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                                "url": entry.get("url").and_then(|v| v.as_str()).unwrap_or(""),
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+
+            json!({
+                "hidden": true,
+                "count": result.as_array().map(|entries| entries.len()).unwrap_or(0),
+                "sources": sources,
+            })
+        }
+        "create_questionnaire_proposal" => json!({
+            "hidden": true,
+            "intent": result.get("intent").and_then(|v| v.as_str()).unwrap_or("unknown"),
+            "field_count": result.get("fields").and_then(|v| v.as_array()).map(|v| v.len()).unwrap_or(0),
+        }),
+        _ => json!({ "hidden": true }),
+    }
+}
 
 #[derive(Clone)]
 pub struct AiChatService {
@@ -253,6 +392,66 @@ impl AiChatService {
         String::new()
     }
 
+    fn persist_assistant_tool_calls(
+        &self,
+        conv_id: i32,
+        text_content: &str,
+        tool_calls: &[llm_client::ToolCall],
+        messages: &mut Vec<llm_client::ChatMessage>,
+    ) -> Result<(), ApiError> {
+        let tc_json: Value = serde_json::to_value(tool_calls).unwrap_or_default();
+        self.repo.create_message(&NewAiMessage {
+            conversation_id: conv_id,
+            role: "assistant".into(),
+            content: text_content.to_string(),
+            tool_calls: Some(tc_json),
+            tool_call_id: None,
+            plan_id: None,
+        })?;
+
+        messages.push(llm_client::ChatMessage {
+            role: "assistant".into(),
+            content: Some(text_content.to_string()),
+            tool_calls: Some(tool_calls.to_vec()),
+            tool_call_id: None,
+        });
+
+        Ok(())
+    }
+
+    async fn build_chat_model_attempts(
+        &self,
+        preferred_model_key: Option<&str>,
+        state: &UserState,
+    ) -> Result<Vec<String>, ApiError> {
+        let mut attempts = Vec::new();
+        let preferred = preferred_model_key
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(default_chat_model_key);
+        attempts.push(preferred.clone());
+
+        let fallback_models = state
+            .config_service
+            .get_ai_models_by_type("chat")
+            .await
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+
+        for model in fallback_models {
+            let key = model.model_key.trim();
+            if key.is_empty() {
+                continue;
+            }
+            if attempts.iter().any(|existing| existing == key) {
+                continue;
+            }
+            attempts.push(key.to_string());
+        }
+
+        Ok(attempts)
+    }
+
     pub async fn send_message(
         &self,
         conv_id: i32,
@@ -271,7 +470,7 @@ impl AiChatService {
             )));
         }
 
-        let model_key: Option<String> = if let Some(mid) = model_id {
+        let preferred_model_key: Option<String> = if let Some(mid) = model_id {
             let model = state
                 .config_service
                 .get_ai_model_by_id(mid)
@@ -339,6 +538,13 @@ impl AiChatService {
                 );
             }
 
+            directives.push_str(
+                "\n\n产品帮助问答判定规则：\n\
+                - 只有当用户明确在问 GlanceMind 平台功能、配置、规则、入口、计费、支持范围、功能区别时，才调用 search_knowledge。\n\
+                - 如果用户是在让你直接写模板、文案、评论回复、DM 话术、营销示例或其他创作内容，这是通用写作任务，不要调用 search_knowledge。\n\
+                - 如果系统已提供 search_knowledge 的工具结果，优先基于现有结果回答，不要重复检索同一主题。\n",
+            );
+
             if questionnaire_submission.is_some() {
                 directives.push_str(
                     "\n用户本轮消息包含 questionnaire_submission，结构化字段值比展示文本更可靠，必须以结构化字段为准。\n",
@@ -366,72 +572,132 @@ impl AiChatService {
         let mut tool_call_count = 0;
         let mut total_usage = llm_client::LlmUsage::default();
         let mut empty_response_retry_count = 0usize;
+        let mut active_model_key = preferred_model_key.clone();
+
+        if questionnaire_submission.is_none() {
+            if let Some(query) = infer_forced_knowledge_query(content) {
+                let params = json!({ "query": query });
+                let forced_call = build_forced_tool_call(
+                    "search_knowledge",
+                    &params,
+                    &format!("{}_{}", conv_id, history.len()),
+                );
+                let forced_calls = vec![forced_call.clone()];
+                self.persist_assistant_tool_calls(conv_id, "", &forced_calls, &mut messages)?;
+
+                tool_call_count += 1;
+                let _ = tx
+                    .send(SseEvent::ToolCallStart {
+                        tool_call_id: forced_call.id.clone(),
+                        tool_name: forced_call.function.name.clone(),
+                    })
+                    .await;
+                let forced_result =
+                    ToolRegistry::execute("search_knowledge", params, user_id, state).await;
+                self.process_tool_result(
+                    conv_id,
+                    user_id,
+                    &forced_call.id,
+                    "search_knowledge",
+                    forced_result,
+                    &tx,
+                    &mut messages,
+                )
+                .await?;
+            }
+        }
 
         loop {
-            let (stream_tx, mut stream_rx) = mpsc::channel::<llm_client::LlmStreamEvent>(64);
-            let llm = self.llm.clone();
-            let msgs_clone = messages.clone();
-            let tools_clone = tools.clone();
-            let model_override = model_key.clone();
-
-            let stream_handle = tokio::spawn(async move {
-                llm.chat_stream(
-                    &msgs_clone,
-                    &tools_clone,
-                    stream_tx,
-                    model_override.as_deref(),
-                )
-                .await
-            });
+            let model_attempts = self
+                .build_chat_model_attempts(active_model_key.as_deref(), state)
+                .await?;
 
             let mut text_content = String::new();
+            let mut assembled_tool_calls: Option<Vec<llm_client::ToolCall>> = None;
+            let mut successful_model_key: Option<String> = None;
+            let mut last_retryable_error: Option<String> = None;
 
-            while let Some(evt) = stream_rx.recv().await {
-                match evt {
-                    llm_client::LlmStreamEvent::TextDelta(delta) => {
-                        text_content.push_str(&delta);
-                        let _ = tx.send(SseEvent::TextDelta { delta }).await;
+            for attempt_model_key in model_attempts {
+                let (stream_tx, mut stream_rx) = mpsc::channel::<llm_client::LlmStreamEvent>(64);
+                let llm = self.llm.clone();
+                let msgs_clone = messages.clone();
+                let tools_clone = tools.clone();
+                let model_override = Some(attempt_model_key.clone());
+
+                let stream_handle = tokio::spawn(async move {
+                    llm.chat_stream(
+                        &msgs_clone,
+                        &tools_clone,
+                        stream_tx,
+                        model_override.as_deref(),
+                    )
+                    .await
+                });
+
+                text_content.clear();
+
+                while let Some(evt) = stream_rx.recv().await {
+                    match evt {
+                        llm_client::LlmStreamEvent::TextDelta(delta) => {
+                            text_content.push_str(&delta);
+                            let _ = tx.send(SseEvent::TextDelta { delta }).await;
+                        }
+                        llm_client::LlmStreamEvent::Usage(u) => {
+                            total_usage.prompt_tokens += u.prompt_tokens;
+                            total_usage.completion_tokens += u.completion_tokens;
+                            total_usage.total_tokens += u.total_tokens;
+                        }
+                        llm_client::LlmStreamEvent::ToolCallDelta { .. } => {
+                            // Deltas are accumulated inside chat_stream; we just wait for Done
+                        }
+                        llm_client::LlmStreamEvent::Done => break,
                     }
-                    llm_client::LlmStreamEvent::Usage(u) => {
-                        total_usage.prompt_tokens += u.prompt_tokens;
-                        total_usage.completion_tokens += u.completion_tokens;
-                        total_usage.total_tokens += u.total_tokens;
+                }
+
+                let stream_result = stream_handle
+                    .await
+                    .map_err(|e| ApiError::AiServiceError(format!("Stream task failed: {}", e)))?;
+
+                match stream_result {
+                    Ok(tool_calls) => {
+                        assembled_tool_calls = tool_calls;
+                        successful_model_key = Some(attempt_model_key);
+                        break;
                     }
-                    llm_client::LlmStreamEvent::ToolCallDelta { .. } => {
-                        // Deltas are accumulated inside chat_stream; we just wait for Done
+                    Err(err)
+                        if text_content.trim().is_empty()
+                            && is_retryable_model_provider_error(&err) =>
+                    {
+                        tracing::warn!(
+                            conv_id = conv_id,
+                            user_id = user_id,
+                            model = %attempt_model_key,
+                            error = %err,
+                            "AI Chat model unavailable, trying fallback model"
+                        );
+                        last_retryable_error = Some(err);
+                        continue;
                     }
-                    llm_client::LlmStreamEvent::Done => break,
+                    Err(err) => {
+                        return Err(ApiError::AiServiceError(friendly_ai_chat_error_message(&err)));
+                    }
                 }
             }
 
-            let assembled_tool_calls = stream_handle
-                .await
-                .map_err(|e| ApiError::AiServiceError(format!("Stream task failed: {}", e)))?
-                .map_err(|e| ApiError::AiServiceError(e))?;
+            if let Some(model_key) = successful_model_key {
+                active_model_key = Some(model_key);
+            } else if let Some(err) = last_retryable_error {
+                return Err(ApiError::AiServiceError(friendly_ai_chat_error_message(&err)));
+            }
 
             if let Some(ref tool_calls) = assembled_tool_calls {
                 if !tool_calls.is_empty() {
-                    // Persist assistant message with tool_calls
-                    let tc_json: Value = serde_json::to_value(tool_calls).unwrap_or_default();
-                    self.repo.create_message(&NewAiMessage {
-                        conversation_id: conv_id,
-                        role: "assistant".into(),
-                        content: text_content.clone(),
-                        tool_calls: Some(tc_json),
-                        tool_call_id: None,
-                        plan_id: None,
-                    })?;
-
-                    messages.push(llm_client::ChatMessage {
-                        role: "assistant".into(),
-                        content: if text_content.is_empty() {
-                            Some(String::new())
-                        } else {
-                            Some(text_content.clone())
-                        },
-                        tool_calls: Some(tool_calls.clone()),
-                        tool_call_id: None,
-                    });
+                    self.persist_assistant_tool_calls(
+                        conv_id,
+                        &text_content,
+                        tool_calls,
+                        &mut messages,
+                    )?;
 
                     // Execute tools - parallel for ReadOnly, sequential for mutations
                     let (readonly_calls, mutation_calls): (Vec<_>, Vec<_>) =
@@ -617,15 +883,14 @@ impl AiChatService {
             },
         });
 
-        let display_hint = match tool_name {
-            "create_questionnaire_proposal" => Some("hidden".to_string()),
-            _ => None,
-        };
+        let display_hint = display_hint_for_tool(tool_name).map(str::to_string);
+        let client_result =
+            client_safe_tool_result(tool_name, display_hint.as_deref(), &result_value);
 
         let _ = tx
             .send(SseEvent::ToolCallResult {
                 tool_call_id: tc_id.to_string(),
-                result: result_value.clone(),
+                result: client_result,
                 success,
                 display_hint: display_hint.clone(),
             })
@@ -907,5 +1172,83 @@ impl AiChatService {
         }
 
         Ok(PlanStepDto::from(step))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        client_safe_tool_result, display_hint_for_tool, friendly_ai_chat_error_message,
+        infer_forced_knowledge_query, is_retryable_model_provider_error,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn search_knowledge_tool_results_are_hidden() {
+        assert_eq!(display_hint_for_tool("search_knowledge"), Some("hidden"));
+        assert_eq!(
+            display_hint_for_tool("create_questionnaire_proposal"),
+            Some("hidden")
+        );
+        assert_eq!(display_hint_for_tool("list_platforms"), None);
+    }
+
+    #[test]
+    fn infer_forced_knowledge_query_matches_product_help_only() {
+        assert_eq!(
+            infer_forced_knowledge_query("GlanceMind 里的回复模板怎么配置？"),
+            Some("GlanceMind 里的回复模板怎么配置？".to_string())
+        );
+        assert_eq!(
+            infer_forced_knowledge_query("DM 私信群控是什么"),
+            Some("DM 私信群控是什么".to_string())
+        );
+        assert_eq!(infer_forced_knowledge_query("生成一个网红笔记的回复模板"), None);
+        assert_eq!(infer_forced_knowledge_query("帮我写一段评论回复文案"), None);
+    }
+
+    #[test]
+    fn hidden_tool_result_for_search_knowledge_is_client_safe() {
+        let safe = client_safe_tool_result(
+            "search_knowledge",
+            Some("hidden"),
+            &json!([
+                {
+                    "title": "配置回复模板",
+                    "topic": "template_guide",
+                    "url": "https://docs.glancemind.org/guide/create-template.html",
+                    "content": "very long body that should never be streamed to hidden clients"
+                }
+            ]),
+        );
+
+        assert_eq!(safe["hidden"], json!(true));
+        assert_eq!(safe["count"], json!(1));
+        assert_eq!(safe["sources"][0]["title"], json!("配置回复模板"));
+        assert!(safe["sources"][0].get("content").is_none());
+    }
+
+    #[test]
+    fn provider_unavailable_errors_are_retryable() {
+        assert!(is_retryable_model_provider_error(
+            "LLM API error 503 Service Unavailable: No available accounts"
+        ));
+        assert!(is_retryable_model_provider_error(
+            "LLM API error 429 Too Many Requests"
+        ));
+        assert!(!is_retryable_model_provider_error(
+            "LLM API error 400 Invalid request"
+        ));
+    }
+
+    #[test]
+    fn friendly_ai_error_message_hides_provider_details() {
+        let friendly = friendly_ai_chat_error_message(
+            "LLM API error 503 Service Unavailable: {\"error\":{\"message\":\"No available accounts\"}}",
+        );
+        assert_eq!(
+            friendly,
+            "AI 模型服务暂时不可用，请稍后重试或切换到其他模型。"
+        );
     }
 }

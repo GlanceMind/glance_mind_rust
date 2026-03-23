@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::env;
+use std::time::Duration;
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone)]
@@ -11,6 +12,7 @@ pub struct LlmClient {
     api_key: String,
     base_url: String,
     model: String,
+    request_timeout_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,18 +66,35 @@ struct PartialToolCall {
     arguments: String,
 }
 
+const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
+const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 120;
+
 impl LlmClient {
     pub fn new() -> Self {
         let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set in environment");
         let base_url =
             env::var("OPENAI_BASE_URL").unwrap_or_else(|_| "https://timicc.com/v1".into());
         let model = env::var("AI_CHAT_MODEL").unwrap_or_else(|_| "gpt-5.2".into());
+        let connect_timeout_secs = parse_env_u64(
+            "AI_CHAT_CONNECT_TIMEOUT_SECS",
+            DEFAULT_CONNECT_TIMEOUT_SECS,
+        );
+        let request_timeout_secs = parse_env_u64(
+            "AI_CHAT_REQUEST_TIMEOUT_SECS",
+            DEFAULT_REQUEST_TIMEOUT_SECS,
+        );
+        let client = Client::builder()
+            .connect_timeout(Duration::from_secs(connect_timeout_secs))
+            .timeout(Duration::from_secs(request_timeout_secs))
+            .build()
+            .expect("Failed to build AI chat HTTP client");
 
         Self {
-            client: Client::new(),
+            client,
             api_key,
             base_url,
             model,
+            request_timeout_secs,
         }
     }
 
@@ -111,7 +130,7 @@ impl LlmClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("LLM request failed: {}", e))?;
+            .map_err(|e| self.format_request_error("LLM request failed", &e))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -125,7 +144,7 @@ impl LlmClient {
 
         use futures::StreamExt;
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| format!("Stream read error: {}", e))?;
+            let chunk = chunk.map_err(|e| self.format_request_error("Stream read error", &e))?;
             let raw = String::from_utf8_lossy(&chunk);
             buffer.push_str(&raw.replace("\r\n", "\n"));
 
@@ -316,7 +335,7 @@ impl LlmClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("LLM request failed: {}", e))?;
+            .map_err(|e| self.format_request_error("LLM request failed", &e))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -358,6 +377,25 @@ impl LlmClient {
 
         Ok((msg, usage))
     }
+
+    fn format_request_error(&self, context: &str, error: &reqwest::Error) -> String {
+        if error.is_timeout() {
+            format!(
+                "{}: request timed out after {}s",
+                context, self.request_timeout_secs
+            )
+        } else {
+            format!("{}: {}", context, error)
+        }
+    }
+}
+
+fn parse_env_u64(key: &str, default: u64) -> u64 {
+    env::var(key)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
 }
 
 #[cfg(test)]
@@ -370,6 +408,7 @@ mod tests {
             api_key: "test-key".into(),
             base_url: "http://localhost".into(),
             model: "test-model".into(),
+            request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
         }
     }
 
@@ -422,5 +461,21 @@ mod tests {
         assert_eq!(calls[0].id, "stream_tool_call_2");
         assert_eq!(calls[0].function.name, "create_plan_proposal");
         assert_eq!(calls[0].function.arguments, "{}");
+    }
+
+    #[test]
+    fn format_request_error_mentions_timeout_budget() {
+        let client = stub_client();
+        let error = client
+            .client
+            .get("::invalid-url")
+            .build()
+            .expect_err("request should fail");
+
+        let formatted = client.format_request_error("LLM request failed", &error);
+        assert!(
+            formatted.starts_with("LLM request failed:"),
+            "unexpected error format: {formatted}"
+        );
     }
 }

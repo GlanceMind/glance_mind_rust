@@ -464,22 +464,48 @@ pub fn compress_tool_result(tool_name: &str, result: &Value) -> String {
             }
         }
         "search_knowledge" => {
-            let s = serde_json::to_string(result).unwrap_or_default();
-            if s.len() > 4000 {
-                format!("{}...(truncated)", &s[..4000])
-            } else {
-                s
-            }
+            compress_search_knowledge_result(result)
         }
         _ => {
             let full = serde_json::to_string(result).unwrap_or_default();
-            if full.len() > 2000 {
-                format!("{}...(truncated)", &full[..2000])
-            } else {
-                full
-            }
+            truncate_with_suffix(&full, 2000, "...(truncated)")
         }
     }
+}
+
+fn compress_search_knowledge_result(result: &Value) -> String {
+    let entries = match result.as_array() {
+        Some(arr) if !arr.is_empty() => arr,
+        _ => return "knowledge_results(total=0)".to_string(),
+    };
+
+    let mut lines = vec![format!("knowledge_results(total={})", entries.len())];
+    for (idx, entry) in entries.iter().take(3).enumerate() {
+        let title = entry
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown");
+        let topic = entry
+            .get("topic")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let url = entry.get("url").and_then(|v| v.as_str()).unwrap_or("");
+        let snippet = entry
+            .get("content")
+            .and_then(|v| v.as_str())
+            .map(|s| truncate_with_suffix(s, 240, "..."))
+            .unwrap_or_default();
+        lines.push(format!(
+            "{}. title=\"{}\" | topic=\"{}\" | url=\"{}\" | snippet=\"{}\"",
+            idx + 1,
+            title,
+            topic,
+            url,
+            snippet.replace('"', "'")
+        ));
+    }
+
+    lines.join("\n")
 }
 
 fn compress_list_result(
@@ -511,8 +537,11 @@ fn compress_list_result(
                 }
                 if let Some(val) = item.get(field) {
                     if let Some(s) = val.as_str() {
-                        if s.len() > 100 {
-                            obj.insert(field.into(), Value::String(format!("{}...", &s[..100])));
+                        if s.chars().count() > 100 {
+                            obj.insert(
+                                field.into(),
+                                Value::String(truncate_with_suffix(s, 100, "...")),
+                            );
                         } else {
                             obj.insert(field.into(), val.clone());
                         }
@@ -525,6 +554,16 @@ fn compress_list_result(
         })
         .collect();
     serde_json::json!({ "total": total_count, "list": compressed }).to_string()
+}
+
+fn truncate_with_suffix(input: &str, max_chars: usize, suffix: &str) -> String {
+    if input.chars().count() <= max_chars {
+        return input.to_string();
+    }
+
+    let mut truncated = input.chars().take(max_chars).collect::<String>();
+    truncated.push_str(suffix);
+    truncated
 }
 
 pub const SYSTEM_PROMPT: &str = r#"你是 GlanceMind AI 助手，一个智能全能助理。
@@ -555,6 +594,8 @@ pub const SYSTEM_PROMPT: &str = r#"你是 GlanceMind AI 助手，一个智能全
 
 产品知识检索规则：
 当用户询问平台功能、操作方法、计费规则等产品相关问题时，必须先调用 search_knowledge 工具检索帮助文档，基于检索结果回答，不要凭记忆回答。
+只有当用户明确在问 GlanceMind 平台本身的功能、配置、规则、入口、计费、支持范围或功能区别时，才调用 search_knowledge。
+如果用户是在让你直接写模板、文案、评论回复、DM 话术或其他创作内容，这是通用写作任务，不要因为出现“模板”“回复”等词就调用 search_knowledge。
 可搜索的主题包括：
 - 各平台支持的功能（TikTok/Instagram/Reddit/Twitter/Facebook 的搜索模式和内容类型）
 - 营销活动 vs AI 发布计划的区别和适用场景
@@ -762,4 +803,38 @@ pub fn redact_sensitive_fields(mut value: Value) -> Value {
         }
     }
     value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn truncate_with_suffix_handles_multibyte_text() {
+        let input = "你好世界欢迎使用GlanceMind";
+        let truncated = truncate_with_suffix(input, 4, "...");
+        assert_eq!(truncated, "你好世界...");
+    }
+
+    #[test]
+    fn compress_search_knowledge_result_returns_summary_instead_of_raw_json() {
+        let result = json!([
+            {
+                "title": "配置回复模板",
+                "topic": "template_guide",
+                "url": "https://docs.glancemind.org/guide/create-template.html",
+                "content": "这是一个很长的中文摘要".repeat(80)
+            }
+        ]);
+
+        let compressed = compress_tool_result("search_knowledge", &result);
+
+        assert!(compressed.starts_with("knowledge_results(total=1)"));
+        assert!(compressed.contains("title=\"配置回复模板\""));
+        assert!(compressed.contains("topic=\"template_guide\""));
+        assert!(compressed.contains("https://docs.glancemind.org/guide/create-template.html"));
+        assert!(!compressed.trim_start().starts_with('['));
+        assert!(compressed.chars().count() < 500);
+    }
 }
