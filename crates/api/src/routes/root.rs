@@ -434,6 +434,9 @@ pub fn routes(
                                 user_state.clone(),
                                 auth_middleware::auth,
                             ))
+                            .layer(axum::Extension(
+                                crate::service::novel_service::NovelService::new(&user_state.db),
+                            ))
                             .layer(axum::Extension(novel_worker_dispatcher.clone()))
                             .layer(axum::Extension(user_state.clone())),
                     )

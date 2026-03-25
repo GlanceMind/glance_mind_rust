@@ -5,7 +5,7 @@ use crate::schema::{
     gm_novel_embedding_profiles, gm_novel_global_summary_snapshots, gm_novel_jobs,
     gm_novel_knowledge_chunks, gm_novel_knowledge_imports, gm_novel_llm_profiles,
     gm_novel_memory_chunks, gm_novel_plot_arc_snapshots, gm_novel_project_config_snapshots,
-    gm_novel_projects, gm_novel_stage_runs,
+    gm_novel_projects, gm_novel_stage_events, gm_novel_stage_runs,
 };
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
@@ -517,6 +517,27 @@ pub struct NovelKnowledgeChunk {
     pub chunk_index: i32,
     pub content: String,
     pub metadata: JsonValue,
+    pub created_at: DateTime<Utc>,
+}
+
+// =============================================================================
+// NovelStageEvent
+// =============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize, Queryable, Identifiable, Selectable)]
+#[diesel(table_name = gm_novel_stage_events)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct NovelStageEvent {
+    pub id: i64,
+    pub project_id: String,
+    pub job_id: Option<i64>,
+    pub stage_run_id: Option<i64>,
+    pub chapter_number: Option<i32>,
+    pub sequence: i64,
+    pub event_type: String,
+    pub stage_code: Option<String>,
+    pub payload: JsonValue,
+    pub occurred_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
 }
 

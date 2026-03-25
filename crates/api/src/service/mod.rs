@@ -27,6 +27,7 @@ pub mod drama_projection;
 pub mod drama_stream_hub;
 pub mod drama_worker_dispatcher;
 pub mod nats_dm_service;
+pub mod novel_service;
 pub mod novel_worker_dispatcher;
 pub mod redis_service;
 pub mod upload_task_service;

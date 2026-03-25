@@ -1,16 +1,55 @@
-//! Novel engine HTTP handlers (phase 1 stubs). Service layer wiring comes later.
+//! Novel engine HTTP handlers — wired to NovelService + NovelWorkerDispatcher.
+
 use axum::{
     extract::{Multipart, Path, Query},
     http::StatusCode,
     response::IntoResponse,
     Extension, Json,
 };
+use chrono::Utc;
 use glance_mind_db::entity::user::User;
+use uuid::Uuid;
 
 use crate::dto::novel_dto::*;
+use crate::service::novel_service::NovelService;
+use crate::service::novel_worker_dispatcher::NovelWorkerDispatcher;
 
-fn not_implemented(user: &User, endpoint: &'static str) -> impl IntoResponse {
-    let _ = user.id;
+fn ok_response(data: serde_json::Value) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "code": 0,
+            "msg": "success",
+            "msg_cn": "成功",
+            "data": data,
+        })),
+    )
+}
+
+fn created_response(data: serde_json::Value) -> impl IntoResponse {
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "code": 0,
+            "msg": "success",
+            "msg_cn": "成功",
+            "data": data,
+        })),
+    )
+}
+
+fn err_response(status: StatusCode, msg: &str) -> impl IntoResponse {
+    (
+        status,
+        Json(serde_json::json!({
+            "code": status.as_u16(),
+            "msg": msg,
+            "msg_cn": msg,
+        })),
+    )
+}
+
+fn not_implemented(endpoint: &'static str) -> impl IntoResponse {
     (
         StatusCode::NOT_IMPLEMENTED,
         Json(serde_json::json!({
@@ -22,427 +61,1146 @@ fn not_implemented(user: &User, endpoint: &'static str) -> impl IntoResponse {
     )
 }
 
-// --- Project & Config (1-9) ---
+// ---------------------------------------------------------------------------
+// Helpers for worker-dispatch endpoints
+// ---------------------------------------------------------------------------
+
+fn require_dispatcher(
+    dispatcher: &Option<NovelWorkerDispatcher>,
+) -> Result<&NovelWorkerDispatcher, impl IntoResponse> {
+    dispatcher
+        .as_ref()
+        .ok_or_else(|| err_response(StatusCode::SERVICE_UNAVAILABLE, "novel worker unavailable"))
+}
+
+fn build_envelope(
+    project_id: &str,
+    job: &glance_mind_db::entity::novel::NovelJob,
+    stage_code: &str,
+    task_type: NovelWorkerTaskType,
+    chapter_number: Option<i32>,
+    payload: serde_json::Value,
+) -> NovelWorkerTaskEnvelope {
+    NovelWorkerTaskEnvelope {
+        task_id: Uuid::new_v4().to_string(),
+        project_id: project_id.to_string(),
+        job_id: job.id,
+        stage_code: stage_code.to_string(),
+        task_type,
+        interaction_version: 1,
+        chapter_number,
+        payload,
+        created_at: Utc::now(),
+    }
+}
+
+fn job_accepted_response(project_id: &str, job_id: i64) -> impl IntoResponse {
+    created_response(serde_json::json!({
+        "project_id": project_id,
+        "job_id": job_id,
+        "status": "pending",
+        "accepted": true,
+    }))
+}
+
+// =========================================================================
+// Project & Config (1-9)
+// =========================================================================
 
 pub async fn create_project(
     Extension(user): Extension<User>,
-    Json(_req): Json<NovelProjectCreateRequest>,
+    Extension(service): Extension<NovelService>,
+    Json(req): Json<NovelProjectCreateRequest>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "POST /novel/projects")
+    match service.create_project(user.id, &req) {
+        Ok(project) => created_response(serde_json::to_value(&project).unwrap_or_default())
+            .into_response(),
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
 pub async fn list_projects(
     Extension(user): Extension<User>,
-    Query(_query): Query<NovelProjectListQuery>,
+    Extension(service): Extension<NovelService>,
+    Query(query): Query<NovelProjectListQuery>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "GET /novel/projects")
+    let page = query.page.unwrap_or(1);
+    let page_size = query.page_size.unwrap_or(20);
+    match service.list_projects(user.id, query.status.as_deref(), page, page_size) {
+        Ok((items, total)) => ok_response(serde_json::json!({
+            "list": serde_json::to_value(&items).unwrap_or_default(),
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }))
+        .into_response(),
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
 pub async fn get_project(
     Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
+    Extension(service): Extension<NovelService>,
+    Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "GET /novel/projects/:project_id")
+    match service.get_project(&project_id, user.id) {
+        Ok(project) => {
+            ok_response(serde_json::to_value(&project).unwrap_or_default()).into_response()
+        }
+        Err(e) => err_response(StatusCode::NOT_FOUND, &e).into_response(),
+    }
 }
 
 pub async fn delete_project(
     Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
+    Extension(service): Extension<NovelService>,
+    Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "DELETE /novel/projects/:project_id")
+    match service.delete_project(&project_id, user.id) {
+        Ok(()) => ok_response(serde_json::json!({
+            "project_id": project_id,
+            "deleted": true,
+        }))
+        .into_response(),
+        Err(e) => err_response(StatusCode::NOT_FOUND, &e).into_response(),
+    }
 }
 
 pub async fn cancel_project(
     Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
+    Extension(service): Extension<NovelService>,
+    Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "POST /novel/projects/:project_id/cancel")
+    match service.cancel_project(&project_id, user.id) {
+        Ok(()) => ok_response(serde_json::json!({
+            "project_id": project_id,
+            "status": "cancel_requested",
+            "accepted": true,
+        }))
+        .into_response(),
+        Err(e) => err_response(StatusCode::NOT_FOUND, &e).into_response(),
+    }
 }
 
 pub async fn update_project(
     Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
-    Json(_req): Json<NovelProjectUpdateRequest>,
+    Extension(service): Extension<NovelService>,
+    Path(project_id): Path<String>,
+    Json(req): Json<NovelProjectUpdateRequest>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "PATCH /novel/projects/:project_id")
+    match service.update_project(&project_id, user.id, &req) {
+        Ok(project) => {
+            ok_response(serde_json::to_value(&project).unwrap_or_default()).into_response()
+        }
+        Err(e) => err_response(StatusCode::NOT_FOUND, &e).into_response(),
+    }
 }
 
 pub async fn list_config_snapshots(
-    Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "GET /novel/projects/:project_id/config-snapshots")
+    match service.list_config_snapshots(&project_id) {
+        Ok(snaps) => {
+            ok_response(serde_json::to_value(&snaps).unwrap_or_default()).into_response()
+        }
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
 pub async fn create_config_snapshot(
-    Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
-    Json(_req): Json<NovelConfigSnapshotCreateRequest>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path(project_id): Path<String>,
+    Json(req): Json<NovelConfigSnapshotCreateRequest>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "POST /novel/projects/:project_id/config-snapshots")
+    match service.create_config_snapshot(&project_id, &req) {
+        Ok(snap) => {
+            created_response(serde_json::to_value(&snap).unwrap_or_default()).into_response()
+        }
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
 pub async fn activate_config_snapshot(
-    Extension(user): Extension<User>,
-    Path((_project_id, _snapshot_id)): Path<(String, i64)>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path((project_id, snapshot_id)): Path<(String, i64)>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "POST /novel/projects/:project_id/config-snapshots/:snapshot_id/activate")
+    match service.activate_config_snapshot(&project_id, snapshot_id) {
+        Ok(()) => ok_response(serde_json::json!({
+            "project_id": project_id,
+            "snapshot_id": snapshot_id,
+            "activated": true,
+        }))
+        .into_response(),
+        Err(e) => err_response(StatusCode::NOT_FOUND, &e).into_response(),
+    }
 }
 
-// --- Profiles (10-19) ---
+// =========================================================================
+// LLM Profiles (10-14)
+// =========================================================================
 
-pub async fn list_llm_profiles(Extension(user): Extension<User>) -> impl IntoResponse {
-    not_implemented(&user, "GET /novel/llm-profiles")
+pub async fn list_llm_profiles(
+    Extension(user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+) -> impl IntoResponse {
+    match service.list_llm_profiles(user.id) {
+        Ok(profiles) => {
+            ok_response(serde_json::to_value(&profiles).unwrap_or_default()).into_response()
+        }
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
 pub async fn create_llm_profile(
     Extension(user): Extension<User>,
-    Json(_req): Json<NovelLlmProfileCreateRequest>,
+    Extension(service): Extension<NovelService>,
+    Json(req): Json<NovelLlmProfileCreateRequest>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "POST /novel/llm-profiles")
+    match service.create_llm_profile(user.id, &req) {
+        Ok(profile) => {
+            created_response(serde_json::to_value(&profile).unwrap_or_default()).into_response()
+        }
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
 pub async fn update_llm_profile(
     Extension(user): Extension<User>,
-    Path(_id): Path<i64>,
-    Json(_req): Json<NovelLlmProfileUpdateRequest>,
+    Extension(service): Extension<NovelService>,
+    Path(id): Path<i64>,
+    Json(req): Json<NovelLlmProfileUpdateRequest>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "PUT /novel/llm-profiles/:id")
+    match service.update_llm_profile(id, user.id, &req) {
+        Ok(profile) => {
+            ok_response(serde_json::to_value(&profile).unwrap_or_default()).into_response()
+        }
+        Err(e) => err_response(StatusCode::NOT_FOUND, &e).into_response(),
+    }
 }
 
 pub async fn delete_llm_profile(
     Extension(user): Extension<User>,
-    Path(_id): Path<i64>,
+    Extension(service): Extension<NovelService>,
+    Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "DELETE /novel/llm-profiles/:id")
+    match service.delete_llm_profile(id, user.id) {
+        Ok(()) => ok_response(serde_json::json!({ "id": id, "deleted": true })).into_response(),
+        Err(e) => err_response(StatusCode::NOT_FOUND, &e).into_response(),
+    }
 }
 
 pub async fn test_llm_profile(
-    Extension(user): Extension<User>,
+    Extension(_user): Extension<User>,
     Path(_id): Path<i64>,
     Json(_req): Json<NovelLlmProfileTestRequest>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "POST /novel/llm-profiles/:id/test")
+    not_implemented("POST /novel/llm-profiles/:id/test")
 }
 
-pub async fn list_embedding_profiles(Extension(user): Extension<User>) -> impl IntoResponse {
-    not_implemented(&user, "GET /novel/embedding-profiles")
+// =========================================================================
+// Embedding Profiles (15-19)
+// =========================================================================
+
+pub async fn list_embedding_profiles(
+    Extension(user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+) -> impl IntoResponse {
+    match service.list_embedding_profiles(user.id) {
+        Ok(profiles) => {
+            ok_response(serde_json::to_value(&profiles).unwrap_or_default()).into_response()
+        }
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
 pub async fn create_embedding_profile(
     Extension(user): Extension<User>,
-    Json(_req): Json<NovelEmbeddingProfileCreateRequest>,
+    Extension(service): Extension<NovelService>,
+    Json(req): Json<NovelEmbeddingProfileCreateRequest>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "POST /novel/embedding-profiles")
+    match service.create_embedding_profile(user.id, &req) {
+        Ok(profile) => {
+            created_response(serde_json::to_value(&profile).unwrap_or_default()).into_response()
+        }
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
 pub async fn update_embedding_profile(
     Extension(user): Extension<User>,
-    Path(_id): Path<i64>,
-    Json(_req): Json<NovelEmbeddingProfileUpdateRequest>,
+    Extension(service): Extension<NovelService>,
+    Path(id): Path<i64>,
+    Json(req): Json<NovelEmbeddingProfileUpdateRequest>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "PUT /novel/embedding-profiles/:id")
+    match service.update_embedding_profile(id, user.id, &req) {
+        Ok(profile) => {
+            ok_response(serde_json::to_value(&profile).unwrap_or_default()).into_response()
+        }
+        Err(e) => err_response(StatusCode::NOT_FOUND, &e).into_response(),
+    }
 }
 
 pub async fn delete_embedding_profile(
     Extension(user): Extension<User>,
-    Path(_id): Path<i64>,
+    Extension(service): Extension<NovelService>,
+    Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "DELETE /novel/embedding-profiles/:id")
+    match service.delete_embedding_profile(id, user.id) {
+        Ok(()) => ok_response(serde_json::json!({ "id": id, "deleted": true })).into_response(),
+        Err(e) => err_response(StatusCode::NOT_FOUND, &e).into_response(),
+    }
 }
 
 pub async fn test_embedding_profile(
-    Extension(user): Extension<User>,
+    Extension(_user): Extension<User>,
     Path(_id): Path<i64>,
     Json(_req): Json<NovelEmbeddingProfileTestRequest>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "POST /novel/embedding-profiles/:id/test")
+    not_implemented("POST /novel/embedding-profiles/:id/test")
 }
 
-// --- Architecture (20-22) ---
+// =========================================================================
+// Architecture (20-22)
+// =========================================================================
 
 pub async fn generate_architecture(
     Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
-    Json(_req): Json<NovelArchitectureGenerateRequest>,
+    Extension(service): Extension<NovelService>,
+    Extension(dispatcher): Extension<Option<NovelWorkerDispatcher>>,
+    Path(project_id): Path<String>,
+    Json(req): Json<NovelArchitectureGenerateRequest>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "POST /novel/projects/:project_id/architecture/generate")
+    let dispatcher = match require_dispatcher(&dispatcher) {
+        Ok(d) => d,
+        Err(e) => return e.into_response(),
+    };
+
+    let payload = serde_json::json!({
+        "config_snapshot_id": req.config_snapshot_id,
+        "override_user_guidance": req.override_user_guidance,
+    });
+    let job = match service.create_job(
+        &project_id,
+        user.id,
+        "n01_architecture",
+        "generate_architecture",
+        None,
+        payload.clone(),
+    ) {
+        Ok(j) => j,
+        Err(e) => return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+
+    let envelope = build_envelope(
+        &project_id,
+        &job,
+        "n01_architecture",
+        NovelWorkerTaskType::GenerateArchitecture,
+        None,
+        payload,
+    );
+    if let Err(e) = dispatcher.enqueue(&envelope).await {
+        return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
+    }
+
+    job_accepted_response(&project_id, job.id).into_response()
 }
 
 pub async fn get_architecture(
-    Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "GET /novel/projects/:project_id/architecture")
+    match service.get_architecture(&project_id) {
+        Ok(Some(arch)) => {
+            ok_response(serde_json::to_value(&arch).unwrap_or_default()).into_response()
+        }
+        Ok(None) => ok_response(serde_json::Value::Null).into_response(),
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
 pub async fn update_architecture(
-    Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
-    Json(_req): Json<NovelArchitectureUpdateRequest>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path(project_id): Path<String>,
+    Json(req): Json<NovelArchitectureUpdateRequest>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "PUT /novel/projects/:project_id/architecture")
+    match service.update_architecture(&project_id, &req) {
+        Ok(arch) => {
+            ok_response(serde_json::to_value(&arch).unwrap_or_default()).into_response()
+        }
+        Err(e) => err_response(StatusCode::NOT_FOUND, &e).into_response(),
+    }
 }
 
-// --- State docs (23-28) ---
+// =========================================================================
+// State docs (23-28)
+// =========================================================================
 
 pub async fn get_character_state(
-    Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "GET /novel/projects/:project_id/character-state")
+    match service.get_character_state(&project_id) {
+        Ok(Some(state)) => {
+            ok_response(serde_json::to_value(&state).unwrap_or_default()).into_response()
+        }
+        Ok(None) => ok_response(serde_json::Value::Null).into_response(),
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
 pub async fn update_character_state(
-    Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
-    Json(_req): Json<NovelCharacterStateUpdateRequest>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path(project_id): Path<String>,
+    Json(req): Json<NovelCharacterStateUpdateRequest>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "PUT /novel/projects/:project_id/character-state")
+    match service.update_character_state(&project_id, &req.state_text) {
+        Ok(state) => {
+            ok_response(serde_json::to_value(&state).unwrap_or_default()).into_response()
+        }
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
 pub async fn get_global_summary(
-    Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "GET /novel/projects/:project_id/global-summary")
+    match service.get_global_summary(&project_id) {
+        Ok(Some(summary)) => {
+            ok_response(serde_json::to_value(&summary).unwrap_or_default()).into_response()
+        }
+        Ok(None) => ok_response(serde_json::Value::Null).into_response(),
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
 pub async fn update_global_summary(
-    Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
-    Json(_req): Json<NovelGlobalSummaryUpdateRequest>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path(project_id): Path<String>,
+    Json(req): Json<NovelGlobalSummaryUpdateRequest>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "PUT /novel/projects/:project_id/global-summary")
+    match service.update_global_summary(&project_id, &req.summary_text) {
+        Ok(summary) => {
+            ok_response(serde_json::to_value(&summary).unwrap_or_default()).into_response()
+        }
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
 pub async fn get_plot_arcs(
-    Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "GET /novel/projects/:project_id/plot-arcs")
+    match service.get_plot_arcs(&project_id) {
+        Ok(Some(arcs)) => {
+            ok_response(serde_json::to_value(&arcs).unwrap_or_default()).into_response()
+        }
+        Ok(None) => ok_response(serde_json::Value::Null).into_response(),
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
 pub async fn update_plot_arcs(
-    Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
-    Json(_req): Json<NovelPlotArcsUpdateRequest>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path(project_id): Path<String>,
+    Json(req): Json<NovelPlotArcsUpdateRequest>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "PUT /novel/projects/:project_id/plot-arcs")
+    match service.update_plot_arcs(&project_id, &req.plot_arcs_text) {
+        Ok(arcs) => {
+            ok_response(serde_json::to_value(&arcs).unwrap_or_default()).into_response()
+        }
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
-// --- Blueprint (29-34) ---
+// =========================================================================
+// Blueprint (29-34)
+// =========================================================================
 
 pub async fn generate_blueprint(
     Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
-    Json(_req): Json<NovelBlueprintGenerateRequest>,
+    Extension(service): Extension<NovelService>,
+    Extension(dispatcher): Extension<Option<NovelWorkerDispatcher>>,
+    Path(project_id): Path<String>,
+    Json(req): Json<NovelBlueprintGenerateRequest>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "POST /novel/projects/:project_id/blueprint/generate")
+    let dispatcher = match require_dispatcher(&dispatcher) {
+        Ok(d) => d,
+        Err(e) => return e.into_response(),
+    };
+
+    let payload = serde_json::json!({
+        "config_snapshot_id": req.config_snapshot_id,
+        "override_user_guidance": req.override_user_guidance,
+    });
+    let job = match service.create_job(
+        &project_id,
+        user.id,
+        "n02_blueprint",
+        "generate_blueprint",
+        None,
+        payload.clone(),
+    ) {
+        Ok(j) => j,
+        Err(e) => return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+
+    let envelope = build_envelope(
+        &project_id,
+        &job,
+        "n02_blueprint",
+        NovelWorkerTaskType::GenerateBlueprint,
+        None,
+        payload,
+    );
+    if let Err(e) = dispatcher.enqueue(&envelope).await {
+        return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
+    }
+
+    job_accepted_response(&project_id, job.id).into_response()
 }
 
 pub async fn get_blueprint(
-    Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "GET /novel/projects/:project_id/blueprint")
+    match service.get_blueprint(&project_id) {
+        Ok(Some(bp)) => {
+            ok_response(serde_json::to_value(&bp).unwrap_or_default()).into_response()
+        }
+        Ok(None) => ok_response(serde_json::Value::Null).into_response(),
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
 pub async fn update_blueprint(
-    Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
-    Json(_req): Json<NovelBlueprintUpdateRequest>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path(project_id): Path<String>,
+    Json(req): Json<NovelBlueprintUpdateRequest>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "PUT /novel/projects/:project_id/blueprint")
+    match service.update_blueprint(&project_id, &req.raw_text) {
+        Ok(bp) => ok_response(serde_json::to_value(&bp).unwrap_or_default()).into_response(),
+        Err(e) => err_response(StatusCode::NOT_FOUND, &e).into_response(),
+    }
 }
 
 pub async fn list_blueprint_chapters(
-    Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "GET /novel/projects/:project_id/blueprint/chapters")
+    match service.list_blueprint_chapters(&project_id) {
+        Ok(chapters) => {
+            ok_response(serde_json::to_value(&chapters).unwrap_or_default()).into_response()
+        }
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
 pub async fn get_blueprint_chapter(
-    Extension(user): Extension<User>,
-    Path((_project_id, _chapter_number)): Path<(String, i32)>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path((project_id, chapter_number)): Path<(String, i32)>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "GET /novel/projects/:project_id/blueprint/chapters/:chapter_number")
+    match service.get_blueprint_chapter(&project_id, chapter_number) {
+        Ok(Some(ch)) => {
+            ok_response(serde_json::to_value(&ch).unwrap_or_default()).into_response()
+        }
+        Ok(None) => ok_response(serde_json::Value::Null).into_response(),
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
 pub async fn update_blueprint_chapter(
-    Extension(user): Extension<User>,
-    Path((_project_id, _chapter_number)): Path<(String, i32)>,
-    Json(_req): Json<NovelBlueprintChapterUpdateRequest>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path((project_id, chapter_number)): Path<(String, i32)>,
+    Json(req): Json<NovelBlueprintChapterUpdateRequest>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "PUT /novel/projects/:project_id/blueprint/chapters/:chapter_number")
+    match service.update_blueprint_chapter(&project_id, chapter_number, &req) {
+        Ok(ch) => ok_response(serde_json::to_value(&ch).unwrap_or_default()).into_response(),
+        Err(e) => err_response(StatusCode::NOT_FOUND, &e).into_response(),
+    }
 }
 
-// --- Chapter prompt (35-37) ---
+// =========================================================================
+// Chapter prompt (35-37)
+// =========================================================================
 
 pub async fn build_chapter_prompt(
     Extension(user): Extension<User>,
-    Path((_project_id, _chapter_number)): Path<(String, i32)>,
-    Json(_req): Json<NovelChapterPromptBuildRequest>,
+    Extension(service): Extension<NovelService>,
+    Extension(dispatcher): Extension<Option<NovelWorkerDispatcher>>,
+    Path((project_id, chapter_number)): Path<(String, i32)>,
+    Json(req): Json<NovelChapterPromptBuildRequest>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "POST /novel/projects/:project_id/chapters/:chapter_number/prompt/build")
+    let dispatcher = match require_dispatcher(&dispatcher) {
+        Ok(d) => d,
+        Err(e) => return e.into_response(),
+    };
+
+    let payload = serde_json::to_value(&req).unwrap_or_default();
+    let job = match service.create_job(
+        &project_id,
+        user.id,
+        "n03_chapter_prompt",
+        "build_chapter_prompt",
+        Some(chapter_number),
+        payload.clone(),
+    ) {
+        Ok(j) => j,
+        Err(e) => return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+
+    let envelope = build_envelope(
+        &project_id,
+        &job,
+        "n03_chapter_prompt",
+        NovelWorkerTaskType::BuildChapterPrompt,
+        Some(chapter_number),
+        payload,
+    );
+    if let Err(e) = dispatcher.enqueue(&envelope).await {
+        return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
+    }
+
+    job_accepted_response(&project_id, job.id).into_response()
 }
 
 pub async fn get_chapter_prompt(
-    Extension(user): Extension<User>,
-    Path((_project_id, _chapter_number)): Path<(String, i32)>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path((project_id, chapter_number)): Path<(String, i32)>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "GET /novel/projects/:project_id/chapters/:chapter_number/prompt")
+    match service.get_chapter_prompt(&project_id, chapter_number) {
+        Ok(Some(prompt)) => {
+            ok_response(serde_json::to_value(&prompt).unwrap_or_default()).into_response()
+        }
+        Ok(None) => ok_response(serde_json::Value::Null).into_response(),
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
 pub async fn update_chapter_prompt(
-    Extension(user): Extension<User>,
-    Path((_project_id, _chapter_number)): Path<(String, i32)>,
-    Json(_req): Json<NovelChapterPromptUpdateRequest>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path((project_id, chapter_number)): Path<(String, i32)>,
+    Json(req): Json<NovelChapterPromptUpdateRequest>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "PUT /novel/projects/:project_id/chapters/:chapter_number/prompt")
+    let text = req.edited_prompt_text.as_deref().unwrap_or_default();
+    match service.update_chapter_prompt(&project_id, chapter_number, text) {
+        Ok(prompt) => {
+            ok_response(serde_json::to_value(&prompt).unwrap_or_default()).into_response()
+        }
+        Err(e) => err_response(StatusCode::NOT_FOUND, &e).into_response(),
+    }
 }
 
-// --- Chapter flow (38-44) ---
+// =========================================================================
+// Chapter flow (38-44)
+// =========================================================================
 
 pub async fn generate_chapter_draft(
     Extension(user): Extension<User>,
-    Path((_project_id, _chapter_number)): Path<(String, i32)>,
-    Json(_req): Json<NovelChapterDraftGenerateRequest>,
+    Extension(service): Extension<NovelService>,
+    Extension(dispatcher): Extension<Option<NovelWorkerDispatcher>>,
+    Path((project_id, chapter_number)): Path<(String, i32)>,
+    Json(req): Json<NovelChapterDraftGenerateRequest>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "POST /novel/projects/:project_id/chapters/:chapter_number/draft/generate")
+    let dispatcher = match require_dispatcher(&dispatcher) {
+        Ok(d) => d,
+        Err(e) => return e.into_response(),
+    };
+
+    let payload = serde_json::json!({
+        "prompt_id": req.prompt_id,
+        "config_snapshot_id": req.config_snapshot_id,
+    });
+    let job = match service.create_job(
+        &project_id,
+        user.id,
+        "n04_chapter_draft",
+        "generate_chapter_draft",
+        Some(chapter_number),
+        payload.clone(),
+    ) {
+        Ok(j) => j,
+        Err(e) => return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+
+    let envelope = build_envelope(
+        &project_id,
+        &job,
+        "n04_chapter_draft",
+        NovelWorkerTaskType::GenerateChapterDraft,
+        Some(chapter_number),
+        payload,
+    );
+    if let Err(e) = dispatcher.enqueue(&envelope).await {
+        return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
+    }
+
+    job_accepted_response(&project_id, job.id).into_response()
 }
 
 pub async fn list_chapters(
-    Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path(project_id): Path<String>,
     Query(_query): Query<NovelChapterListQuery>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "GET /novel/projects/:project_id/chapters")
+    match service.list_chapters(&project_id) {
+        Ok(chapters) => {
+            ok_response(serde_json::to_value(&chapters).unwrap_or_default()).into_response()
+        }
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
 pub async fn get_chapter(
-    Extension(user): Extension<User>,
-    Path((_project_id, _chapter_number)): Path<(String, i32)>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path((project_id, chapter_number)): Path<(String, i32)>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "GET /novel/projects/:project_id/chapters/:chapter_number")
+    match service.get_chapter(&project_id, chapter_number) {
+        Ok(Some(ch)) => {
+            ok_response(serde_json::to_value(&ch).unwrap_or_default()).into_response()
+        }
+        Ok(None) => ok_response(serde_json::Value::Null).into_response(),
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
 pub async fn update_chapter(
-    Extension(user): Extension<User>,
-    Path((_project_id, _chapter_number)): Path<(String, i32)>,
-    Json(_req): Json<NovelChapterUpdateRequest>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path((project_id, chapter_number)): Path<(String, i32)>,
+    Json(req): Json<NovelChapterUpdateRequest>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "PUT /novel/projects/:project_id/chapters/:chapter_number")
+    match service.update_chapter(&project_id, chapter_number, &req) {
+        Ok(ch) => ok_response(serde_json::to_value(&ch).unwrap_or_default()).into_response(),
+        Err(e) => err_response(StatusCode::NOT_FOUND, &e).into_response(),
+    }
 }
 
 pub async fn enrich_chapter(
     Extension(user): Extension<User>,
-    Path((_project_id, _chapter_number)): Path<(String, i32)>,
-    Json(_req): Json<NovelChapterEnrichRequest>,
+    Extension(service): Extension<NovelService>,
+    Extension(dispatcher): Extension<Option<NovelWorkerDispatcher>>,
+    Path((project_id, chapter_number)): Path<(String, i32)>,
+    Json(req): Json<NovelChapterEnrichRequest>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "POST /novel/projects/:project_id/chapters/:chapter_number/enrich")
+    let dispatcher = match require_dispatcher(&dispatcher) {
+        Ok(d) => d,
+        Err(e) => return e.into_response(),
+    };
+
+    let payload = serde_json::json!({
+        "config_snapshot_id": req.config_snapshot_id,
+        "target_words": req.target_words,
+    });
+    let job = match service.create_job(
+        &project_id,
+        user.id,
+        "n05_enrich",
+        "enrich_chapter",
+        Some(chapter_number),
+        payload.clone(),
+    ) {
+        Ok(j) => j,
+        Err(e) => return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+
+    let envelope = build_envelope(
+        &project_id,
+        &job,
+        "n05_enrich",
+        NovelWorkerTaskType::EnrichChapterText,
+        Some(chapter_number),
+        payload,
+    );
+    if let Err(e) = dispatcher.enqueue(&envelope).await {
+        return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
+    }
+
+    job_accepted_response(&project_id, job.id).into_response()
 }
 
 pub async fn finalize_chapter(
     Extension(user): Extension<User>,
-    Path((_project_id, _chapter_number)): Path<(String, i32)>,
-    Json(_req): Json<NovelChapterFinalizeRequest>,
+    Extension(service): Extension<NovelService>,
+    Extension(dispatcher): Extension<Option<NovelWorkerDispatcher>>,
+    Path((project_id, chapter_number)): Path<(String, i32)>,
+    Json(req): Json<NovelChapterFinalizeRequest>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "POST /novel/projects/:project_id/chapters/:chapter_number/finalize")
+    let dispatcher = match require_dispatcher(&dispatcher) {
+        Ok(d) => d,
+        Err(e) => return e.into_response(),
+    };
+
+    let payload = serde_json::json!({
+        "config_snapshot_id": req.config_snapshot_id,
+        "use_current_draft_text": req.use_current_draft_text,
+    });
+    let job = match service.create_job(
+        &project_id,
+        user.id,
+        "n06_finalize",
+        "finalize_chapter",
+        Some(chapter_number),
+        payload.clone(),
+    ) {
+        Ok(j) => j,
+        Err(e) => return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+
+    let envelope = build_envelope(
+        &project_id,
+        &job,
+        "n06_finalize",
+        NovelWorkerTaskType::FinalizeChapter,
+        Some(chapter_number),
+        payload,
+    );
+    if let Err(e) = dispatcher.enqueue(&envelope).await {
+        return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
+    }
+
+    job_accepted_response(&project_id, job.id).into_response()
 }
 
 pub async fn batch_generate_chapters(
     Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
-    Json(_req): Json<NovelChapterBatchGenerateRequest>,
+    Extension(service): Extension<NovelService>,
+    Extension(dispatcher): Extension<Option<NovelWorkerDispatcher>>,
+    Path(project_id): Path<String>,
+    Json(req): Json<NovelChapterBatchGenerateRequest>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "POST /novel/projects/:project_id/chapters/batch-generate")
+    let dispatcher = match require_dispatcher(&dispatcher) {
+        Ok(d) => d,
+        Err(e) => return e.into_response(),
+    };
+
+    let payload = serde_json::to_value(&req).unwrap_or_default();
+    let job = match service.create_job(
+        &project_id,
+        user.id,
+        "n07_batch",
+        "batch_generate_chapters",
+        None,
+        payload.clone(),
+    ) {
+        Ok(j) => j,
+        Err(e) => return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+
+    let envelope = build_envelope(
+        &project_id,
+        &job,
+        "n07_batch",
+        NovelWorkerTaskType::BatchGenerateChapters,
+        None,
+        payload,
+    );
+    if let Err(e) = dispatcher.enqueue(&envelope).await {
+        return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
+    }
+
+    job_accepted_response(&project_id, job.id).into_response()
 }
 
-// --- Consistency (45-47) ---
+// =========================================================================
+// Consistency (45-47)
+// =========================================================================
 
 pub async fn create_consistency_check(
     Extension(user): Extension<User>,
-    Path((_project_id, _chapter_number)): Path<(String, i32)>,
-    Json(_req): Json<NovelConsistencyCheckRequest>,
+    Extension(service): Extension<NovelService>,
+    Extension(dispatcher): Extension<Option<NovelWorkerDispatcher>>,
+    Path((project_id, chapter_number)): Path<(String, i32)>,
+    Json(req): Json<NovelConsistencyCheckRequest>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "POST /novel/projects/:project_id/chapters/:chapter_number/consistency-checks")
+    let dispatcher = match require_dispatcher(&dispatcher) {
+        Ok(d) => d,
+        Err(e) => return e.into_response(),
+    };
+
+    let payload = serde_json::json!({
+        "config_snapshot_id": req.config_snapshot_id,
+        "chapter_number": chapter_number,
+    });
+    let job = match service.create_job(
+        &project_id,
+        user.id,
+        "n08_consistency",
+        "run_consistency_check",
+        Some(chapter_number),
+        payload.clone(),
+    ) {
+        Ok(j) => j,
+        Err(e) => return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+
+    let envelope = build_envelope(
+        &project_id,
+        &job,
+        "n08_consistency",
+        NovelWorkerTaskType::RunConsistencyCheck,
+        Some(chapter_number),
+        payload,
+    );
+    if let Err(e) = dispatcher.enqueue(&envelope).await {
+        return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
+    }
+
+    job_accepted_response(&project_id, job.id).into_response()
 }
 
 pub async fn list_consistency_checks(
-    Extension(user): Extension<User>,
-    Path((_project_id, _chapter_number)): Path<(String, i32)>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path((project_id, chapter_number)): Path<(String, i32)>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "GET /novel/projects/:project_id/chapters/:chapter_number/consistency-checks")
+    match service.list_consistency_checks(&project_id, chapter_number) {
+        Ok(checks) => {
+            ok_response(serde_json::to_value(&checks).unwrap_or_default()).into_response()
+        }
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
 pub async fn get_latest_consistency_check(
-    Extension(user): Extension<User>,
-    Path((_project_id, _chapter_number)): Path<(String, i32)>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path((project_id, chapter_number)): Path<(String, i32)>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "GET /novel/projects/:project_id/chapters/:chapter_number/consistency-checks/latest")
+    match service.get_latest_consistency_check(&project_id, chapter_number) {
+        Ok(Some(check)) => {
+            ok_response(serde_json::to_value(&check).unwrap_or_default()).into_response()
+        }
+        Ok(None) => ok_response(serde_json::Value::Null).into_response(),
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
-// --- Knowledge & memory (48-51) ---
+// =========================================================================
+// Knowledge & memory (48-51)
+// =========================================================================
 
 pub async fn import_knowledge(
-    Extension(user): Extension<User>,
+    Extension(_user): Extension<User>,
     Path(_project_id): Path<String>,
     _multipart: Multipart,
 ) -> impl IntoResponse {
-    not_implemented(&user, "POST /novel/projects/:project_id/knowledge/imports")
+    not_implemented("POST /novel/projects/:project_id/knowledge/imports")
 }
 
 pub async fn list_knowledge_imports(
-    Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "GET /novel/projects/:project_id/knowledge/imports")
+    match service.list_knowledge_imports(&project_id) {
+        Ok(imports) => {
+            ok_response(serde_json::to_value(&imports).unwrap_or_default()).into_response()
+        }
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
 pub async fn list_knowledge_chunks(
-    Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
-    Query(_query): Query<NovelKnowledgeChunksQuery>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path(project_id): Path<String>,
+    Query(query): Query<NovelKnowledgeChunksQuery>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "GET /novel/projects/:project_id/knowledge/chunks")
+    match service.list_knowledge_chunks(&project_id, query.knowledge_import_id) {
+        Ok(chunks) => {
+            ok_response(serde_json::to_value(&chunks).unwrap_or_default()).into_response()
+        }
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
 pub async fn clear_memory(
     Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
+    Extension(service): Extension<NovelService>,
+    Extension(dispatcher): Extension<Option<NovelWorkerDispatcher>>,
+    Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "POST /novel/projects/:project_id/memory/clear")
+    let dispatcher = match require_dispatcher(&dispatcher) {
+        Ok(d) => d,
+        Err(e) => return e.into_response(),
+    };
+
+    let payload = serde_json::json!({ "project_id": project_id });
+    let job = match service.create_job(
+        &project_id,
+        user.id,
+        "n09_memory",
+        "clear_memory",
+        None,
+        payload.clone(),
+    ) {
+        Ok(j) => j,
+        Err(e) => return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+
+    let envelope = build_envelope(
+        &project_id,
+        &job,
+        "n09_memory",
+        NovelWorkerTaskType::ClearMemory,
+        None,
+        payload,
+    );
+    if let Err(e) = dispatcher.enqueue(&envelope).await {
+        return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
+    }
+
+    job_accepted_response(&project_id, job.id).into_response()
 }
 
-// --- Jobs & events (52-55) ---
+// =========================================================================
+// Jobs & events (52-55)
+// =========================================================================
 
 pub async fn list_jobs(
-    Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "GET /novel/projects/:project_id/jobs")
+    match service.list_jobs(&project_id) {
+        Ok(jobs) => {
+            ok_response(serde_json::to_value(&jobs).unwrap_or_default()).into_response()
+        }
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
 
 pub async fn get_job(
-    Extension(user): Extension<User>,
-    Path((_project_id, _job_id)): Path<(String, i64)>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path((project_id, job_id)): Path<(String, i64)>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "GET /novel/projects/:project_id/jobs/:job_id")
+    let job = match service.get_job(&project_id, job_id) {
+        Ok(Some(j)) => j,
+        Ok(None) => {
+            return err_response(StatusCode::NOT_FOUND, "job not found").into_response()
+        }
+        Err(e) => return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+
+    let stage_runs = match service.list_stage_runs(job.id) {
+        Ok(runs) => runs,
+        Err(e) => return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+
+    let mut job_json = serde_json::to_value(&job).unwrap_or_default();
+    if let Some(obj) = job_json.as_object_mut() {
+        obj.insert(
+            "stage_runs".to_string(),
+            serde_json::to_value(&stage_runs).unwrap_or_default(),
+        );
+    }
+    ok_response(job_json).into_response()
 }
 
 pub async fn retry_job(
     Extension(user): Extension<User>,
-    Path((_project_id, _job_id)): Path<(String, i64)>,
+    Extension(service): Extension<NovelService>,
+    Extension(dispatcher): Extension<Option<NovelWorkerDispatcher>>,
+    Path((project_id, job_id)): Path<(String, i64)>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "POST /novel/projects/:project_id/jobs/:job_id/retry")
+    let dispatcher = match require_dispatcher(&dispatcher) {
+        Ok(d) => d,
+        Err(e) => return e.into_response(),
+    };
+
+    let original_job = match service.get_job(&project_id, job_id) {
+        Ok(Some(j)) => j,
+        Ok(None) => {
+            return err_response(StatusCode::NOT_FOUND, "job not found").into_response()
+        }
+        Err(e) => return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+
+    let new_job = match service.create_job(
+        &project_id,
+        user.id,
+        &original_job.stage_code,
+        &original_job.task_type,
+        original_job.chapter_number,
+        original_job.request_payload.clone(),
+    ) {
+        Ok(j) => j,
+        Err(e) => return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+
+    let task_type = match original_job.task_type.as_str() {
+        "generate_architecture" => NovelWorkerTaskType::GenerateArchitecture,
+        "generate_blueprint" => NovelWorkerTaskType::GenerateBlueprint,
+        "build_chapter_prompt" => NovelWorkerTaskType::BuildChapterPrompt,
+        "generate_chapter_draft" => NovelWorkerTaskType::GenerateChapterDraft,
+        "enrich_chapter" => NovelWorkerTaskType::EnrichChapterText,
+        "finalize_chapter" => NovelWorkerTaskType::FinalizeChapter,
+        "run_consistency_check" => NovelWorkerTaskType::RunConsistencyCheck,
+        "clear_memory" => NovelWorkerTaskType::ClearMemory,
+        "batch_generate_chapters" => NovelWorkerTaskType::BatchGenerateChapters,
+        other => {
+            let msg = format!("unknown task_type for retry: {other}");
+            return err_response(StatusCode::BAD_REQUEST, &msg).into_response();
+        }
+    };
+
+    let envelope = build_envelope(
+        &project_id,
+        &new_job,
+        &original_job.stage_code,
+        task_type,
+        original_job.chapter_number,
+        original_job.request_payload.clone(),
+    );
+    if let Err(e) = dispatcher.enqueue(&envelope).await {
+        return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
+    }
+
+    job_accepted_response(&project_id, new_job.id).into_response()
 }
 
 pub async fn list_events(
-    Extension(user): Extension<User>,
-    Path(_project_id): Path<String>,
-    Query(_query): Query<NovelEventsQuery>,
+    Extension(_user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path(project_id): Path<String>,
+    Query(query): Query<NovelEventsQuery>,
 ) -> impl IntoResponse {
-    not_implemented(&user, "GET /novel/projects/:project_id/events")
+    let limit = query.limit.unwrap_or(50);
+    match service.list_events(&project_id, query.after_sequence, limit) {
+        Ok(events) => {
+            let next_seq = events.last().map(|e| e.sequence).unwrap_or(0);
+            ok_response(serde_json::json!({
+                "project_id": project_id,
+                "after_sequence": query.after_sequence,
+                "next_sequence": next_seq,
+                "events": serde_json::to_value(&events).unwrap_or_default(),
+            }))
+            .into_response()
+        }
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
 }
