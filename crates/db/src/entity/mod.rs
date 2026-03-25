@@ -25,6 +25,7 @@ pub mod user;
 pub mod user_wallet;
 pub mod video;
 pub mod video_case;
+pub mod novel;
 pub mod wallet_transaction;
 
 // Re-export all entities for convenience
@@ -51,4 +52,5 @@ pub use user::*;
 pub use user_wallet::*;
 pub use video::*;
 pub use video_case::*;
+pub use novel::*;
 pub use wallet_transaction::*;
