@@ -503,6 +503,18 @@ pub struct NovelKnowledgeImport {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Insertable)]
+#[diesel(table_name = gm_novel_knowledge_imports)]
+pub struct NewNovelKnowledgeImport {
+    pub project_id: String,
+    pub source_name: String,
+    pub source_type: String,
+    pub original_text: String,
+    pub segment_count: i32,
+    pub status: String,
+    pub source_stage_run_id: Option<i64>,
+}
+
 // =============================================================================
 // NovelKnowledgeChunk
 // =============================================================================

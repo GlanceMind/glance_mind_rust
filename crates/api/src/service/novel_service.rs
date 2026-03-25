@@ -325,6 +325,16 @@ impl NovelService {
             .map_err(|e| e.to_string())
     }
 
+    pub fn get_llm_profile(&self, id: i64, user_id: i32) -> Result<NovelLlmProfile, String> {
+        let mut conn = self.pool.get().map_err(|e| e.to_string())?;
+        gm_novel_llm_profiles::table
+            .filter(gm_novel_llm_profiles::id.eq(id))
+            .filter(gm_novel_llm_profiles::user_id.eq(user_id))
+            .filter(gm_novel_llm_profiles::deleted_at.is_null())
+            .first::<NovelLlmProfile>(&mut conn)
+            .map_err(|e| format!("LLM profile not found: {e}"))
+    }
+
     pub fn create_llm_profile(
         &self,
         user_id: i32,
@@ -425,6 +435,20 @@ impl NovelService {
             .order(gm_novel_embedding_profiles::created_at.desc())
             .load::<NovelEmbeddingProfile>(&mut conn)
             .map_err(|e| e.to_string())
+    }
+
+    pub fn get_embedding_profile(
+        &self,
+        id: i64,
+        user_id: i32,
+    ) -> Result<NovelEmbeddingProfile, String> {
+        let mut conn = self.pool.get().map_err(|e| e.to_string())?;
+        gm_novel_embedding_profiles::table
+            .filter(gm_novel_embedding_profiles::id.eq(id))
+            .filter(gm_novel_embedding_profiles::user_id.eq(user_id))
+            .filter(gm_novel_embedding_profiles::deleted_at.is_null())
+            .first::<NovelEmbeddingProfile>(&mut conn)
+            .map_err(|e| format!("Embedding profile not found: {e}"))
     }
 
     pub fn create_embedding_profile(
@@ -945,6 +969,41 @@ impl NovelService {
             .filter(gm_novel_knowledge_imports::project_id.eq(project_id))
             .order(gm_novel_knowledge_imports::created_at.desc())
             .load::<NovelKnowledgeImport>(&mut conn)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn get_config_snapshot(
+        &self,
+        project_id: &str,
+        snapshot_id: i64,
+    ) -> Result<NovelProjectConfigSnapshot, String> {
+        let mut conn = self.pool.get().map_err(|e| e.to_string())?;
+        gm_novel_project_config_snapshots::table
+            .filter(gm_novel_project_config_snapshots::project_id.eq(project_id))
+            .filter(gm_novel_project_config_snapshots::id.eq(snapshot_id))
+            .first::<NovelProjectConfigSnapshot>(&mut conn)
+            .map_err(|e| format!("Config snapshot not found: {e}"))
+    }
+
+    pub fn create_knowledge_import(
+        &self,
+        project_id: &str,
+        source_name: String,
+        original_text: String,
+    ) -> Result<NovelKnowledgeImport, String> {
+        let mut conn = self.pool.get().map_err(|e| e.to_string())?;
+        let row = NewNovelKnowledgeImport {
+            project_id: project_id.to_string(),
+            source_name,
+            source_type: "text_file".to_string(),
+            original_text,
+            segment_count: 0,
+            status: "pending".to_string(),
+            source_stage_run_id: None,
+        };
+        diesel::insert_into(gm_novel_knowledge_imports::table)
+            .values(&row)
+            .get_result::<NovelKnowledgeImport>(&mut conn)
             .map_err(|e| e.to_string())
     }
 

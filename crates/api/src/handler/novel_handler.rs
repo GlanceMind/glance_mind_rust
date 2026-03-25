@@ -8,6 +8,7 @@ use axum::{
 };
 use chrono::Utc;
 use glance_mind_db::entity::user::User;
+use std::time::Duration;
 use uuid::Uuid;
 
 use crate::dto::novel_dto::*;
@@ -45,18 +46,6 @@ fn err_response(status: StatusCode, msg: &str) -> impl IntoResponse {
             "code": status.as_u16(),
             "msg": msg,
             "msg_cn": msg,
-        })),
-    )
-}
-
-fn not_implemented(endpoint: &'static str) -> impl IntoResponse {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(serde_json::json!({
-            "code": 501,
-            "msg": "not implemented yet",
-            "msg_cn": "尚未实现",
-            "endpoint": endpoint,
         })),
     )
 }
@@ -101,6 +90,40 @@ fn job_accepted_response(project_id: &str, job_id: i64) -> impl IntoResponse {
         "status": "pending",
         "accepted": true,
     }))
+}
+
+fn knowledge_import_accepted_response(
+    project_id: &str,
+    job_id: i64,
+    knowledge_import_id: i64,
+) -> impl IntoResponse {
+    created_response(serde_json::json!({
+        "project_id": project_id,
+        "job_id": job_id,
+        "knowledge_import_id": knowledge_import_id,
+        "status": "pending",
+        "accepted": true,
+    }))
+}
+
+/// OpenAI-compatible chat completions URL from a stored base URL (adds `/v1` when missing).
+fn openai_chat_completions_url(base_url: &str) -> String {
+    let b = base_url.trim_end_matches('/');
+    if b.ends_with("/v1") {
+        format!("{b}/chat/completions")
+    } else {
+        format!("{b}/v1/chat/completions")
+    }
+}
+
+/// OpenAI-compatible embeddings URL from a stored base URL (adds `/v1` when missing).
+fn openai_embeddings_url(base_url: &str) -> String {
+    let b = base_url.trim_end_matches('/');
+    if b.ends_with("/v1") {
+        format!("{b}/embeddings")
+    } else {
+        format!("{b}/v1/embeddings")
+    }
 }
 
 // =========================================================================
@@ -294,11 +317,74 @@ pub async fn delete_llm_profile(
 }
 
 pub async fn test_llm_profile(
-    Extension(_user): Extension<User>,
-    Path(_id): Path<i64>,
+    Extension(user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path(id): Path<i64>,
     Json(_req): Json<NovelLlmProfileTestRequest>,
 ) -> impl IntoResponse {
-    not_implemented("POST /novel/llm-profiles/:id/test")
+    let profile = match service.get_llm_profile(id, user.id) {
+        Ok(p) => p,
+        Err(e) => return err_response(StatusCode::NOT_FOUND, &e).into_response(),
+    };
+
+    let url = openai_chat_completions_url(&profile.base_url);
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return err_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("http client: {e}"),
+            )
+            .into_response()
+        }
+    };
+
+    let body = serde_json::json!({
+        "model": profile.model_name,
+        "messages": [{"role": "user", "content": "Reply OK"}],
+        "max_tokens": 10_i32,
+    });
+
+    let resp = match client
+        .post(url)
+        .header("Authorization", format!("Bearer {}", profile.api_key))
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return err_response(StatusCode::BAD_GATEWAY, &format!("request failed: {e}"))
+                .into_response()
+        }
+    };
+
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    let preview: String = text.chars().take(512).collect();
+
+    if status.is_success() {
+        ok_response(serde_json::json!({
+            "ok": true,
+            "http_status": status.as_u16(),
+            "preview": preview,
+        }))
+        .into_response()
+    } else {
+        let detail = if preview.is_empty() {
+            "(empty body)".to_string()
+        } else {
+            preview
+        };
+        err_response(
+            StatusCode::BAD_GATEWAY,
+            &format!("provider returned {}: {}", status.as_u16(), detail),
+        )
+        .into_response()
+    }
 }
 
 // =========================================================================
@@ -356,11 +442,73 @@ pub async fn delete_embedding_profile(
 }
 
 pub async fn test_embedding_profile(
-    Extension(_user): Extension<User>,
-    Path(_id): Path<i64>,
+    Extension(user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Path(id): Path<i64>,
     Json(_req): Json<NovelEmbeddingProfileTestRequest>,
 ) -> impl IntoResponse {
-    not_implemented("POST /novel/embedding-profiles/:id/test")
+    let profile = match service.get_embedding_profile(id, user.id) {
+        Ok(p) => p,
+        Err(e) => return err_response(StatusCode::NOT_FOUND, &e).into_response(),
+    };
+
+    let url = openai_embeddings_url(&profile.base_url);
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return err_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("http client: {e}"),
+            )
+            .into_response()
+        }
+    };
+
+    let body = serde_json::json!({
+        "model": profile.model_name,
+        "input": "test",
+    });
+
+    let resp = match client
+        .post(url)
+        .header("Authorization", format!("Bearer {}", profile.api_key))
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return err_response(StatusCode::BAD_GATEWAY, &format!("request failed: {e}"))
+                .into_response()
+        }
+    };
+
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    let preview: String = text.chars().take(512).collect();
+
+    if status.is_success() {
+        ok_response(serde_json::json!({
+            "ok": true,
+            "http_status": status.as_u16(),
+            "preview": preview,
+        }))
+        .into_response()
+    } else {
+        let detail = if preview.is_empty() {
+            "(empty body)".to_string()
+        } else {
+            preview
+        };
+        err_response(
+            StatusCode::BAD_GATEWAY,
+            &format!("provider returned {}: {}", status.as_u16(), detail),
+        )
+        .into_response()
+    }
 }
 
 // =========================================================================
@@ -1003,11 +1151,140 @@ pub async fn get_latest_consistency_check(
 // =========================================================================
 
 pub async fn import_knowledge(
-    Extension(_user): Extension<User>,
-    Path(_project_id): Path<String>,
-    _multipart: Multipart,
+    Extension(user): Extension<User>,
+    Extension(service): Extension<NovelService>,
+    Extension(dispatcher): Extension<Option<NovelWorkerDispatcher>>,
+    Path(project_id): Path<String>,
+    mut multipart: Multipart,
 ) -> impl IntoResponse {
-    not_implemented("POST /novel/projects/:project_id/knowledge/imports")
+    let dispatcher = match require_dispatcher(&dispatcher) {
+        Ok(d) => d,
+        Err(e) => return e.into_response(),
+    };
+
+    let mut file_content: Option<String> = None;
+    let mut source_name: Option<String> = None;
+    let mut config_snapshot_id: Option<i64> = None;
+
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(e) => {
+                return err_response(
+                    StatusCode::BAD_REQUEST,
+                    &format!("multipart read error: {e}"),
+                )
+                .into_response()
+            }
+        };
+
+        let name = field.name().unwrap_or("").to_string();
+        match name.as_str() {
+            "file" => {
+                let filename = field.file_name().unwrap_or("unknown.txt").to_string();
+                if source_name.is_none() {
+                    source_name = Some(filename);
+                }
+                let bytes = match field.bytes().await {
+                    Ok(b) => b,
+                    Err(e) => {
+                        return err_response(
+                            StatusCode::BAD_REQUEST,
+                            &format!("read file field: {e}"),
+                        )
+                        .into_response()
+                    }
+                };
+                file_content = Some(String::from_utf8_lossy(&bytes).to_string());
+            }
+            "source_name" => {
+                let t = match field.text().await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        return err_response(
+                            StatusCode::BAD_REQUEST,
+                            &format!("read source_name: {e}"),
+                        )
+                        .into_response()
+                    }
+                };
+                source_name = Some(t);
+            }
+            "config_snapshot_id" => {
+                let t = match field.text().await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        return err_response(
+                            StatusCode::BAD_REQUEST,
+                            &format!("read config_snapshot_id: {e}"),
+                        )
+                        .into_response()
+                    }
+                };
+                config_snapshot_id = t.parse().ok();
+            }
+            _ => {}
+        }
+    }
+
+    let Some(text) = file_content else {
+        return err_response(StatusCode::BAD_REQUEST, "missing multipart field: file").into_response();
+    };
+    let Some(snapshot_id) = config_snapshot_id else {
+        return err_response(
+            StatusCode::BAD_REQUEST,
+            "missing or invalid config_snapshot_id",
+        )
+        .into_response();
+    };
+
+    if let Err(e) = service.get_project(&project_id, user.id) {
+        return err_response(StatusCode::NOT_FOUND, &e).into_response();
+    }
+    if let Err(e) = service.get_config_snapshot(&project_id, snapshot_id) {
+        return err_response(StatusCode::BAD_REQUEST, &e).into_response();
+    }
+
+    let mut name = source_name.unwrap_or_else(|| "upload.txt".to_string());
+    if name.trim().is_empty() {
+        name = "upload.txt".to_string();
+    }
+
+    let import = match service.create_knowledge_import(&project_id, name, text) {
+        Ok(i) => i,
+        Err(e) => return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+
+    let payload = serde_json::json!({
+        "config_snapshot_id": snapshot_id,
+        "knowledge_import_id": import.id,
+    });
+    let job = match service.create_job(
+        &project_id,
+        user.id,
+        "n10_knowledge",
+        "import_knowledge",
+        None,
+        payload.clone(),
+    ) {
+        Ok(j) => j,
+        Err(e) => return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+
+    let envelope = build_envelope(
+        &project_id,
+        &job,
+        "n10_knowledge",
+        NovelWorkerTaskType::ImportKnowledge,
+        None,
+        payload,
+    );
+    if let Err(e) = dispatcher.enqueue(&envelope).await {
+        return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
+    }
+
+    knowledge_import_accepted_response(&project_id, job.id, import.id).into_response()
 }
 
 pub async fn list_knowledge_imports(
@@ -1162,6 +1439,7 @@ pub async fn retry_job(
         "run_consistency_check" => NovelWorkerTaskType::RunConsistencyCheck,
         "clear_memory" => NovelWorkerTaskType::ClearMemory,
         "batch_generate_chapters" => NovelWorkerTaskType::BatchGenerateChapters,
+        "import_knowledge" => NovelWorkerTaskType::ImportKnowledge,
         other => {
             let msg = format!("unknown task_type for retry: {other}");
             return err_response(StatusCode::BAD_REQUEST, &msg).into_response();
