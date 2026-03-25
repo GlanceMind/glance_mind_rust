@@ -41,6 +41,25 @@ pub fn routes(
             .wallet_service
             .spawn_recharge_reconciliation_loop();
 
+        let drama_stream_hub = crate::service::drama_stream_hub::DramaStreamHub::new();
+        let drama_worker_dispatcher =
+            match crate::service::drama_worker_dispatcher::DramaWorkerDispatcher::from_env() {
+                Ok(dispatcher) => Some(dispatcher),
+                Err(e) => {
+                    tracing::warn!("Drama worker dispatcher unavailable: {e}");
+                    None
+                }
+            };
+
+        let novel_worker_dispatcher =
+            match crate::service::novel_worker_dispatcher::NovelWorkerDispatcher::from_env() {
+                Ok(dispatcher) => Some(dispatcher),
+                Err(e) => {
+                    tracing::warn!("Novel worker dispatcher unavailable: {e}");
+                    None
+                }
+            };
+
         // /api/v1
         Router::new()
             .nest(
@@ -360,6 +379,62 @@ pub fn routes(
                                 user_state.clone(),
                                 auth_middleware::auth,
                             ))
+                            .layer(axum::Extension(user_state.clone())),
+                    )
+                    .with_state(user_state.clone()),
+            )
+            // AI Short Drama Routes (requires auth, proxies to gm_agent_hub gateway)
+            .nest(
+                "/drama",
+                crate::routes::drama::routes()
+                    .layer(
+                        ServiceBuilder::new()
+                            .layer(middleware::from_fn_with_state(
+                                user_state.clone(),
+                                auth_middleware::auth,
+                            ))
+                            .layer(axum::Extension(
+                                crate::service::drama_facade::DramaFacade::new(),
+                            ))
+                            .layer(axum::Extension(
+                                crate::service::drama_billing::DramaBillingGuard::new(
+                                    &user_state.db,
+                                ),
+                            ))
+                            .layer(axum::Extension(
+                                crate::service::drama_projection::DramaProjectionService::new(
+                                    &user_state.db,
+                                ),
+                            ))
+                            .layer(axum::Extension(drama_worker_dispatcher.clone()))
+                            .layer(axum::Extension(drama_stream_hub.clone()))
+                            .layer(axum::Extension(user_state.clone())),
+                    )
+                    .with_state(user_state.clone()),
+            )
+            // AI Short Drama Internal Callback (no user auth, internal network only)
+            .nest(
+                "/internal/drama",
+                crate::routes::drama::internal_routes()
+                    .layer(axum::Extension(
+                        crate::service::drama_projection::DramaProjectionService::new(
+                            &user_state.db,
+                        ),
+                    ))
+                    .layer(axum::Extension(drama_stream_hub.clone()))
+                    .with_state(user_state.clone()),
+            )
+            // Novel Engine Routes (requires auth)
+            .nest(
+                "/novel",
+                crate::routes::novel::routes()
+                    .layer(
+                        ServiceBuilder::new()
+                            .layer(middleware::from_fn_with_state(
+                                user_state.clone(),
+                                auth_middleware::auth,
+                            ))
+                            .layer(axum::Extension(novel_worker_dispatcher.clone()))
                             .layer(axum::Extension(user_state.clone())),
                     )
                     .with_state(user_state.clone()),

@@ -21,7 +21,13 @@ pub mod social_account_service;
 pub mod social_group_service;
 pub mod template_service;
 // pub mod tikhub_client; // Replaced by laozhang_client
+pub mod drama_billing;
+pub mod drama_facade;
+pub mod drama_projection;
+pub mod drama_stream_hub;
+pub mod drama_worker_dispatcher;
 pub mod nats_dm_service;
+pub mod novel_worker_dispatcher;
 pub mod redis_service;
 pub mod upload_task_service;
 pub mod user_service;
