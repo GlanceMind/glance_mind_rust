@@ -22,6 +22,17 @@ pub struct NovelService {
     pool: DBPool,
 }
 
+struct ParsedChapter {
+    chapter_number: i32,
+    chapter_title: String,
+    chapter_role: String,
+    chapter_purpose: String,
+    suspense_level: String,
+    foreshadowing: String,
+    plot_twist_level: String,
+    chapter_summary: String,
+}
+
 impl NovelService {
     pub fn new(db_conn: &Arc<Database>) -> Self {
         Self {
@@ -749,7 +760,8 @@ impl NovelService {
         raw_text: &str,
     ) -> Result<NovelBlueprint, String> {
         let mut conn = self.pool.get().map_err(|e| e.to_string())?;
-        diesel::update(
+
+        let bp: NovelBlueprint = diesel::update(
             gm_novel_blueprints::table
                 .filter(gm_novel_blueprints::project_id.eq(project_id))
                 .filter(gm_novel_blueprints::is_current.eq(true)),
@@ -759,7 +771,35 @@ impl NovelService {
             gm_novel_blueprints::updated_at.eq(Utc::now()),
         ))
         .get_result::<NovelBlueprint>(&mut conn)
-        .map_err(|e| format!("Blueprint not found: {e}"))
+        .map_err(|e| format!("Blueprint not found: {e}"))?;
+
+        diesel::delete(
+            gm_novel_blueprint_chapters::table
+                .filter(gm_novel_blueprint_chapters::blueprint_id.eq(bp.id)),
+        )
+        .execute(&mut conn)
+        .map_err(|e| format!("Failed to delete old chapters: {e}"))?;
+
+        let parsed = Self::parse_blueprint_chapters(raw_text);
+        for ch in &parsed {
+            diesel::insert_into(gm_novel_blueprint_chapters::table)
+                .values((
+                    gm_novel_blueprint_chapters::blueprint_id.eq(bp.id),
+                    gm_novel_blueprint_chapters::project_id.eq(project_id),
+                    gm_novel_blueprint_chapters::chapter_number.eq(ch.chapter_number),
+                    gm_novel_blueprint_chapters::chapter_title.eq(&ch.chapter_title),
+                    gm_novel_blueprint_chapters::chapter_role.eq(&ch.chapter_role),
+                    gm_novel_blueprint_chapters::chapter_purpose.eq(&ch.chapter_purpose),
+                    gm_novel_blueprint_chapters::suspense_level.eq(&ch.suspense_level),
+                    gm_novel_blueprint_chapters::foreshadowing.eq(&ch.foreshadowing),
+                    gm_novel_blueprint_chapters::plot_twist_level.eq(&ch.plot_twist_level),
+                    gm_novel_blueprint_chapters::chapter_summary.eq(&ch.chapter_summary),
+                ))
+                .execute(&mut conn)
+                .map_err(|e| format!("Failed to insert parsed chapter: {e}"))?;
+        }
+
+        Ok(bp)
     }
 
     pub fn list_blueprint_chapters(
@@ -835,10 +875,16 @@ impl NovelService {
     pub fn list_chapters(
         &self,
         project_id: &str,
+        status: Option<&str>,
     ) -> Result<Vec<NovelChapter>, String> {
         let mut conn = self.pool.get().map_err(|e| e.to_string())?;
-        gm_novel_chapters::table
+        let mut query = gm_novel_chapters::table
             .filter(gm_novel_chapters::project_id.eq(project_id))
+            .into_boxed();
+        if let Some(s) = status {
+            query = query.filter(gm_novel_chapters::status.eq(s));
+        }
+        query
             .order(gm_novel_chapters::chapter_number.asc())
             .load::<NovelChapter>(&mut conn)
             .map_err(|e| e.to_string())
@@ -1113,5 +1159,72 @@ impl NovelService {
             .limit(limit)
             .load::<NovelStageEvent>(&mut conn)
             .map_err(|e| e.to_string())
+    }
+
+    // =========================================================================
+    // Blueprint chapter parsing helpers
+    // =========================================================================
+
+    fn parse_blueprint_chapters(raw_text: &str) -> Vec<ParsedChapter> {
+        let lines: Vec<&str> = raw_text.lines().collect();
+        let mut chapters: Vec<ParsedChapter> = Vec::new();
+        let mut chapter_starts: Vec<(usize, i32, String)> = Vec::new();
+
+        for (i, line) in lines.iter().enumerate() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix('第') {
+                if let Some(pos) = rest.find('章') {
+                    if let Ok(num) = rest[..pos].trim().parse::<i32>() {
+                        let after = rest[pos + '章'.len_utf8()..].trim();
+                        let title = after
+                            .trim_start_matches(['-', '—', ':', '：', ' '])
+                            .trim()
+                            .to_string();
+                        chapter_starts.push((i, num, title));
+                    }
+                }
+            }
+        }
+
+        for (idx, &(start, num, ref title)) in chapter_starts.iter().enumerate() {
+            let end = if idx + 1 < chapter_starts.len() {
+                chapter_starts[idx + 1].0
+            } else {
+                lines.len()
+            };
+            let block = &lines[start..end];
+
+            let mut ch = ParsedChapter {
+                chapter_number: num,
+                chapter_title: title.clone(),
+                chapter_role: String::new(),
+                chapter_purpose: String::new(),
+                suspense_level: String::new(),
+                foreshadowing: String::new(),
+                plot_twist_level: String::new(),
+                chapter_summary: String::new(),
+            };
+
+            for line in block {
+                let t = line.trim();
+                if let Some(v) = t.strip_prefix("本章定位:").or_else(|| t.strip_prefix("本章定位：")) {
+                    ch.chapter_role = v.trim().to_string();
+                } else if let Some(v) = t.strip_prefix("核心作用:").or_else(|| t.strip_prefix("核心作用：")) {
+                    ch.chapter_purpose = v.trim().to_string();
+                } else if let Some(v) = t.strip_prefix("悬念密度:").or_else(|| t.strip_prefix("悬念密度：")) {
+                    ch.suspense_level = v.trim().to_string();
+                } else if let Some(v) = t.strip_prefix("伏笔操作:").or_else(|| t.strip_prefix("伏笔操作：")) {
+                    ch.foreshadowing = v.trim().to_string();
+                } else if let Some(v) = t.strip_prefix("认知颠覆:").or_else(|| t.strip_prefix("认知颠覆：")) {
+                    ch.plot_twist_level = v.trim().to_string();
+                } else if let Some(v) = t.strip_prefix("本章简述:").or_else(|| t.strip_prefix("本章简述：")) {
+                    ch.chapter_summary = v.trim().to_string();
+                }
+            }
+
+            chapters.push(ch);
+        }
+
+        chapters
     }
 }

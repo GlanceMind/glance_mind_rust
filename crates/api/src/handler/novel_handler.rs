@@ -168,7 +168,16 @@ pub async fn get_project(
 ) -> impl IntoResponse {
     match service.get_project(&project_id, user.id) {
         Ok(project) => {
-            ok_response(serde_json::to_value(&project).unwrap_or_default()).into_response()
+            let snapshot = service
+                .list_config_snapshots(&project_id)
+                .ok()
+                .and_then(|snaps| snaps.into_iter().find(|s| s.is_current))
+                .map(|s| serde_json::to_value(&s).unwrap_or_default());
+            let mut obj = serde_json::to_value(&project).unwrap_or_default();
+            if let (Some(map), Some(snap_val)) = (obj.as_object_mut(), snapshot) {
+                map.insert("current_config_snapshot".to_string(), snap_val);
+            }
+            ok_response(obj).into_response()
         }
         Err(e) => err_response(StatusCode::NOT_FOUND, &e).into_response(),
     }
@@ -910,9 +919,9 @@ pub async fn list_chapters(
     Extension(_user): Extension<User>,
     Extension(service): Extension<NovelService>,
     Path(project_id): Path<String>,
-    Query(_query): Query<NovelChapterListQuery>,
+    Query(query): Query<NovelChapterListQuery>,
 ) -> impl IntoResponse {
-    match service.list_chapters(&project_id) {
+    match service.list_chapters(&project_id, query.status.as_deref()) {
         Ok(chapters) => {
             ok_response(serde_json::to_value(&chapters).unwrap_or_default()).into_response()
         }
@@ -1416,6 +1425,15 @@ pub async fn retry_job(
         }
         Err(e) => return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
     };
+
+    let retryable = ["failed", "partial_failed", "cancelled"];
+    if !retryable.contains(&original_job.status.as_str()) {
+        return err_response(
+            StatusCode::CONFLICT,
+            &format!("job status '{}' is not retryable (must be failed/partial_failed/cancelled)", original_job.status),
+        )
+        .into_response();
+    }
 
     let new_job = match service.create_job(
         &project_id,

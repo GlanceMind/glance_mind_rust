@@ -349,6 +349,7 @@ mod tests {
             content_type: Some("VIDEO".to_string()),
             author_unique_id: None,
             comment_url: None,
+            comment_user_url: None,
         }
     }
 

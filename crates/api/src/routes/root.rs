@@ -406,6 +406,11 @@ pub fn routes(
                                     &user_state.db,
                                 ),
                             ))
+                            .layer(axum::Extension(
+                                crate::service::drama_project_meta_service::DramaProjectMetaService::new(
+                                    &user_state.db,
+                                ),
+                            ))
                             .layer(axum::Extension(drama_worker_dispatcher.clone()))
                             .layer(axum::Extension(drama_stream_hub.clone()))
                             .layer(axum::Extension(user_state.clone())),

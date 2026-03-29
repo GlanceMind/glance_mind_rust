@@ -233,11 +233,11 @@ def novel_worker_process(suspend_container_novel_worker):
     env = os.environ.copy()
     env["PYTHONPATH"] = (
         "/Users/jacksoom/programer/aihub/glance_mind_worker:"
-        "/Users/jacksoom/programer/aihub/AI_NovelGenerator"
+        "/Users/jacksoom/programer/aihub/gm_ai_novel"
     )
     env["DATABASE_URL"] = os.getenv("DATABASE_URL", "postgresql://aihub_e2e_user:aihub_e2e_password@localhost:5436/aihub_e2e_db")
     env["REDIS_URL"] = E2E_REDIS_URL
-    env["NOVEL_ENGINE_PATH"] = "/Users/jacksoom/programer/aihub/AI_NovelGenerator"
+    env["NOVEL_ENGINE_PATH"] = "/Users/jacksoom/programer/aihub/gm_ai_novel"
 
     proc = subprocess.Popen(
         [sys.executable, "-m", "novel_worker.run"],

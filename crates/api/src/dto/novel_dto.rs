@@ -537,7 +537,7 @@ pub struct NovelChapterPromptResponse {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct NovelChapterDraftGenerateRequest {
-    pub prompt_id: i64,
+    pub prompt_id: Option<i64>,
     pub config_snapshot_id: i64,
 }
 

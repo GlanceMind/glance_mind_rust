@@ -179,6 +179,7 @@ pub struct UnifiedCommentWithConfigDto {
     pub content_type: Option<String>, // Content type: POST/VIDEO/REEL (mainly for Facebook)
     pub author_unique_id: Option<String>, // Author's unique ID (for TikTok URL construction)
     pub comment_url: Option<String>, // Direct URL to the comment
+    pub comment_user_url: Option<String>, // Direct URL to the comment author's profile
 }
 
 // ============================================================
@@ -241,6 +242,7 @@ impl UnifiedCommentWithConfigDto {
                     content_type: c.content_type,
                     author_unique_id: c.author_unique_id,
                     comment_url: c.comment_url,
+                    comment_user_url: c.comment_user_url,
                     // Profile name for task execution (randomly selected from campaign's group)
                     profile_name: c.profile_name,
                 })
@@ -361,6 +363,7 @@ mod tests {
             content_type: Some("POST".to_string()),
             author_unique_id: Some(format!("{}_author_{}", platform, id)),
             comment_url: None,
+            comment_user_url: None,
         }
     }
 

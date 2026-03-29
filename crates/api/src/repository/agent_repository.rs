@@ -918,6 +918,7 @@ impl AgentRepository {
                 content_type: Some("VIDEO".to_string()),
                 author_unique_id,
                 comment_url: None, // TikTok doesn't have direct comment URLs
+                comment_user_url: None,
             });
         }
 
@@ -1021,6 +1022,7 @@ impl AgentRepository {
                 content_type,
                 author_unique_id: post.author_id.clone(), // Facebook author ID
                 comment_url: comment.comment_url.clone(), // Direct comment URL
+                comment_user_url: comment.comment_user_url.clone(), // Author profile URL
             });
         }
 
@@ -1125,6 +1127,7 @@ impl AgentRepository {
                 content_type,
                 author_unique_id: post.owner_username.clone(), // Instagram owner username
                 comment_url: None, // Instagram doesn't have direct comment URLs
+                comment_user_url: None,
             });
         }
 
@@ -1235,6 +1238,7 @@ impl AgentRepository {
                 content_type,
                 author_unique_id: post.author.clone(), // Reddit post author
                 comment_url: None, // Reddit doesn't have direct comment URLs in the same way
+                comment_user_url: None,
             });
         }
 
@@ -1342,6 +1346,7 @@ impl AgentRepository {
                 content_type,
                 author_unique_id: screen_name, // Twitter screen name as author
                 comment_url: None,             // Twitter doesn't have direct comment URLs
+                comment_user_url: None,
             });
         }
 
