@@ -1,7 +1,6 @@
 name: Deploy API
 
 on:
-  # Manual trigger
   workflow_dispatch:
     inputs:
       run_migrations:
@@ -9,34 +8,17 @@ on:
         required: false
         default: "false"
         type: choice
-        options:
-          - "false"
-          - "true"
+        options: ["false", "true"]
       no_cache:
-        description: "Build without cache (for troubleshooting)"
+        description: "Build without cache"
         required: false
         default: "false"
         type: choice
-        options:
-          - "false"
-          - "true"
-      deploy_strategy:
-        description: "Deployment strategy"
-        required: false
-        default: "parallel"
-        type: choice
-        options:
-          - "parallel" # 同时部署到所有服务器
-          - "rolling" # 滚动更新（逐台部署）
+        options: ["false", "true"]
 
-  # Auto trigger on push to release branches
   push:
-    branches:
-      - "release/**"
-      - "main"
-    tags:
-      - "release/**"
-    # Only trigger when api, db or workflow changes
+    branches: ["release/**", "main"]
+    tags: ["release/**"]
     paths:
       - "crates/api/**"
       - "crates/db/**"
@@ -44,15 +26,7 @@ on:
       - "Cargo.lock"
       - ".github/workflows/deploy-api.yml"
 
-env:
-  IMAGE_NAME: aihub_backend
-  # Cache directory for BuildKit on self-hosted runner
-  BUILDKIT_CACHE_DIR: /var/cache/buildkit
-
 jobs:
-  # ==============================================================
-  # Job 1: 检查变更
-  # ==============================================================
   check-changes:
     name: Check for DB changes
     runs-on: ubuntu-latest
@@ -62,295 +36,77 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
-      - name: Check for db changes
+      - name: Check for db migration changes
         id: check
         run: |
           if git diff --name-only HEAD~1 HEAD | grep -q "^crates/db/migrations/"; then
             echo "db_changed=true" >> $GITHUB_OUTPUT
-            echo "Database migrations changed"
           else
             echo "db_changed=false" >> $GITHUB_OUTPUT
-            echo "No database migration changes"
           fi
 
-  # ==============================================================
-  # Job 2: 数据库迁移（只运行一次，在任意一台 runner 上）
-  # ==============================================================
   migrations:
     name: Run Database Migrations
     runs-on: [self-hosted, Linux, backend]
     environment: prod
     needs: check-changes
     if: needs.check-changes.outputs.db_changed == 'true' || github.event.inputs.run_migrations == 'true'
-
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
-
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Install PostgreSQL client library
+        run: sudo apt-get update && sudo apt-get install -y libpq-dev
+      - name: Run migrations
         run: |
-          echo "📦 Installing libpq-dev..."
-          sudo apt-get update
-          sudo apt-get install -y libpq-dev
-
-      - name: Run Database Migrations
-        run: |
-          echo "🗄️ Running database migrations..."
-
-          # Install diesel CLI if not available
           if ! command -v diesel &> /dev/null; then
-            echo "Installing diesel_cli..."
             cargo install diesel_cli --no-default-features --features postgres
           fi
-
-          # Replace host.docker.internal with localhost for non-Docker environment
           MIGRATION_DB_URL="${{ secrets.DATABASE_URL }}"
           MIGRATION_DB_URL="${MIGRATION_DB_URL//host.docker.internal/localhost}"
-
-          # Run migrations
           cd crates/db
           DATABASE_URL="$MIGRATION_DB_URL" diesel migration run
 
-          echo "✅ Migrations completed!"
-
-  # ==============================================================
-  # Job 3: 部署到多台服务器
-  # ==============================================================
   deploy:
-    name: Deploy to ${{ matrix.server }}
+    name: Deploy API
     needs: [check-changes, migrations]
-    # 即使 migrations 被跳过也继续执行
     if: always() && (needs.migrations.result == 'success' || needs.migrations.result == 'skipped')
-    # 仅对真正的部署动作做并发控制：
-    # 同一分支、同一服务器的新任务会取消旧任务，直接运行最新一次部署。
-    concurrency:
-      group: deploy-api-${{ github.ref }}-${{ matrix.server }}
-      cancel-in-progress: true
-
-    strategy:
-      matrix:
-        include:
-          # 服务器 1: VM-0-14-ubuntu
-          - server: prod-1
-            runner: [self-hosted, backend, p1]
-            name: "VM-0-14-ubuntu"
-          # 服务器 2: prod-vm-ubuntu
-          # - server: prod-2
-          #   runner: [self-hosted, prod-2]
-          #   name: "prod-vm-ubuntu"
-
-      # 部署策略
-      # parallel (默认): max-parallel 不设置，同时部署
-      # rolling: max-parallel: 1，逐台部署
-      max-parallel: ${{ github.event.inputs.deploy_strategy == 'rolling' && 1 || 2 }}
-
-      # 一台失败不影响其他服务器
-      fail-fast: false
-
-    runs-on: ${{ matrix.runner }}
-    environment: prod
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Display deployment info
-        run: |
-          echo "=============================================="
-          echo "🚀 Deploying to: ${{ matrix.name }}"
-          echo "   Server ID: ${{ matrix.server }}"
-          echo "   Commit: ${{ github.sha }}"
-          echo "   Strategy: ${{ github.event.inputs.deploy_strategy || 'parallel' }}"
-          echo "=============================================="
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        with:
-          # Use docker-container driver for better caching
-          driver: docker-container
-          driver-opts: |
-            image=moby/buildkit:latest
-            network=host
-
-      - name: Create .env file
-        working-directory: crates/api
-        run: |
-          echo "PORT=${{ vars.PORT }}" >> .env
-          echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> .env
-          echo "JWT_TTL_IN_MINUTES=${{ vars.JWT_TTL_IN_MINUTES }}" >> .env
-          echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" >> .env
-          echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
-          echo "OPENAI_BASE_URL=${{ secrets.OPENAI_BASE_URL }}" >> .env
-          echo "LAOZHANG_API_KEY=${{ secrets.LAOZHANG_API_KEY }}" >> .env
-          echo "LAOZHANG_BASE_URL=${{ secrets.LAOZHANG_BASE_URL }}" >> .env
-          echo "TIKHUB_API_KEY=${{ secrets.TIKHUB_API_KEY }}" >> .env
-          echo "TIKHUB_BASE_URL=${{ secrets.TIKHUB_BASE_URL }}" >> .env
-          echo "RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}" >> .env
-          echo "TURNSTILE_SECRET_KEY=${{ secrets.TURNSTILE_SECRET_KEY }}" >> .env
-          # XunhuPay Recharge
-          echo "XUNHUPAY_APP_ID=${{ secrets.XUNHUPAY_APP_ID }}" >> .env
-          echo "XUNHUPAY_APP_SECRET=${{ secrets.XUNHUPAY_APP_SECRET }}" >> .env
-          echo "XUNHUPAY_GATEWAY_URL=${{ secrets.XUNHUPAY_GATEWAY_URL }}" >> .env
-          echo "API_BASE_URL=${{ secrets.API_BASE_URL }}" >> .env
-          # OSS Configuration
-          echo "OSS_ACCESS_KEY_ID=${{ secrets.OSS_ACCESS_KEY_ID }}" >> .env
-          echo "OSS_ACCESS_KEY_SECRET=${{ secrets.OSS_ACCESS_KEY_SECRET }}" >> .env
-          echo "OSS_ENDPOINT=${{ vars.OSS_ENDPOINT }}" >> .env
-          echo "OSS_BUCKET=${{ vars.OSS_BUCKET }}" >> .env
-          # NATS (DM Group Control — 通过域名连接独立 NATS)
-          echo "NATS_URL=${{ vars.NATS_URL }}" >> .env
-          echo "NATS_TOKEN=${{ secrets.NATS_TOKEN }}" >> .env
-          # Jimeng (Volcengine AI Video 3.0)
-          echo "JIMENG_ACCESS_KEY_ID=${{ secrets.JIMENG_ACCESS_KEY_ID }}" >> .env
-          echo "JIMENG_SECRET_ACCESS_KEY=${{ secrets.JIMENG_SECRET_ACCESS_KEY }}" >> .env
-          # Vidu Video Generation API
-          echo "VIDU_API_KEY=${{ secrets.VIDU_API_KEY }}" >> .env
-          echo "VIDU_BASE_URL=${VIDU_BASE_URL:-https://api.vidu.cn}" >> .env
-
-      - name: Create BuildKit cache directory
-        run: |
-          sudo mkdir -p ${{ env.BUILDKIT_CACHE_DIR }}
-          sudo chown -R $USER:$USER ${{ env.BUILDKIT_CACHE_DIR }}
-
-      - name: Build Docker Image with Cache
-        run: |
-          echo "🔨 Building Docker image..."
-
-          # Determine cache flags
-          CACHE_FROM=""
-          CACHE_TO=""
-
-          if [ "${{ github.event.inputs.no_cache }}" != "true" ]; then
-            # Use local cache directory for self-hosted runner
-            CACHE_FROM="--cache-from=type=local,src=${{ env.BUILDKIT_CACHE_DIR }}"
-            CACHE_TO="--cache-to=type=local,dest=${{ env.BUILDKIT_CACHE_DIR }},mode=max"
-            echo "📦 Using BuildKit cache at ${{ env.BUILDKIT_CACHE_DIR }}"
-          else
-            echo "⚠️ Building without cache (no_cache=true)"
-          fi
-
-          # Build with buildx
-          docker buildx build \
-            --file Dockerfile.api \
-            --tag ${{ env.IMAGE_NAME }}:latest \
-            --tag ${{ env.IMAGE_NAME }}:${{ github.sha }} \
-            $CACHE_FROM \
-            $CACHE_TO \
-            --load \
-            --progress=plain \
-            .
-
-          echo "✅ Build complete!"
-
-      - name: Deploy Application
-        working-directory: crates/api
-        run: |
-          # Try to use docker-compose (v1) or fall back to docker compose (v2)
-          if command -v docker-compose &> /dev/null; then
-            COMPOSE_CMD="docker-compose"
-          else
-            COMPOSE_CMD="docker compose"
-          fi
-
-          echo "Using compose command: $COMPOSE_CMD"
-
-          # Step 1: Stop old containers
-          echo "🛑 Stopping old containers..."
-          $COMPOSE_CMD -f docker-compose.prod.yml down || true
-
-          # Step 2: Start new containers with the pre-built image
-          echo "🚀 Starting new containers..."
-          $COMPOSE_CMD -f docker-compose.prod.yml up -d
-
-          echo "✅ Deployment complete!"
-
-      - name: Verify Deployment
-        id: verify
-        run: |
-          echo "🔍 Verifying deployment on ${{ matrix.name }}..."
-          sleep 5
-
-          # Check if container is running
-          if docker ps | grep -q "${{ env.IMAGE_NAME }}"; then
-            echo "✅ Container is running on ${{ matrix.name }}"
-            echo "status=success" >> $GITHUB_OUTPUT
-            
-            # Show container info
-            echo ""
-            echo "📦 Container Status:"
-            docker ps --filter "name=${{ env.IMAGE_NAME }}" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-          else
-            echo "❌ Container is not running on ${{ matrix.name }}!"
-            echo "status=failed" >> $GITHUB_OUTPUT
-            docker logs $(docker ps -a --filter "name=${{ env.IMAGE_NAME }}" -q --latest) || true
-            exit 1
-          fi
-
-      - name: Health Check
-        run: |
-          echo "🏥 Running health check..."
-
-          # Wait for service to be ready
-          MAX_RETRIES=10
-          RETRY_INTERVAL=3
-
-          for i in $(seq 1 $MAX_RETRIES); do
-            if curl -sf http://localhost:${{ vars.PORT }}/health > /dev/null 2>&1; then
-              echo "✅ Health check passed on ${{ matrix.name }}"
-              exit 0
-            fi
-            echo "⏳ Attempt $i/$MAX_RETRIES - waiting ${RETRY_INTERVAL}s..."
-            sleep $RETRY_INTERVAL
-          done
-
-          echo "⚠️ Health check endpoint not responding (may not be implemented)"
-          # Don't fail the deployment if health endpoint doesn't exist
-
-      - name: Show Cache Stats
-        if: always()
-        run: |
-          echo "📊 BuildKit Cache Stats on ${{ matrix.name }}:"
-          if [ -d "${{ env.BUILDKIT_CACHE_DIR }}" ]; then
-            du -sh ${{ env.BUILDKIT_CACHE_DIR }} || echo "Could not get cache size"
-            ls -la ${{ env.BUILDKIT_CACHE_DIR }} || echo "Could not list cache"
-          else
-            echo "Cache directory does not exist"
-          fi
-
-  # ==============================================================
-  # Job 4: 部署摘要
-  # ==============================================================
-  summary:
-    name: Deployment Summary
-    runs-on: ubuntu-latest
-    needs: [deploy]
-    if: always()
-
-    steps:
-      - name: Generate Summary
-        run: |
-          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Server | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|--------|" >> $GITHUB_STEP_SUMMARY
-
-          # Check deploy job results
-          if [ "${{ needs.deploy.result }}" == "success" ]; then
-            echo "| All Servers | ✅ Success |" >> $GITHUB_STEP_SUMMARY
-          elif [ "${{ needs.deploy.result }}" == "failure" ]; then
-            echo "| Some Servers | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "| Status | ⚠️ ${{ needs.deploy.result }} |" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Branch:** \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Strategy:** ${{ github.event.inputs.deploy_strategy || 'parallel' }}" >> $GITHUB_STEP_SUMMARY
+    uses: GlanceMind/platform-infra/.github/workflows/deploy-service.yml@main
+    with:
+      service_name: glance-mind-api
+      image_name: aihub_backend
+      dockerfile: Dockerfile.api
+      compose_file: crates/api/docker-compose.prod.yml
+      env_file_dir: crates/api
+      runner_labels: '["self-hosted", "backend", "p1"]'
+      use_buildx: true
+      no_cache: ${{ github.event.inputs.no_cache == 'true' }}
+      health_check_url: "http://localhost:8000/health"
+      container_name_filter: aihub_backend
+    secrets:
+      ENV_FILE: |
+        PORT=${{ vars.PORT }}
+        JWT_SECRET=${{ secrets.JWT_SECRET }}
+        JWT_TTL_IN_MINUTES=${{ vars.JWT_TTL_IN_MINUTES || '30' }}
+        DATABASE_URL=${{ secrets.DATABASE_URL }}
+        OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+        OPENAI_BASE_URL=${{ secrets.OPENAI_BASE_URL }}
+        LAOZHANG_API_KEY=${{ secrets.LAOZHANG_API_KEY }}
+        LAOZHANG_BASE_URL=${{ secrets.LAOZHANG_BASE_URL }}
+        TIKHUB_API_KEY=${{ secrets.TIKHUB_API_KEY }}
+        TIKHUB_BASE_URL=${{ secrets.TIKHUB_BASE_URL }}
+        RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
+        TURNSTILE_SECRET_KEY=${{ secrets.TURNSTILE_SECRET_KEY }}
+        XUNHUPAY_APP_ID=${{ secrets.XUNHUPAY_APP_ID }}
+        XUNHUPAY_APP_SECRET=${{ secrets.XUNHUPAY_APP_SECRET }}
+        XUNHUPAY_GATEWAY_URL=${{ secrets.XUNHUPAY_GATEWAY_URL }}
+        API_BASE_URL=${{ secrets.API_BASE_URL }}
+        OSS_ACCESS_KEY_ID=${{ secrets.OSS_ACCESS_KEY_ID }}
+        OSS_ACCESS_KEY_SECRET=${{ secrets.OSS_ACCESS_KEY_SECRET }}
+        OSS_ENDPOINT=${{ vars.OSS_ENDPOINT }}
+        OSS_BUCKET=${{ vars.OSS_BUCKET }}
+        NATS_URL=${{ vars.NATS_URL }}
+        NATS_TOKEN=${{ secrets.NATS_TOKEN }}
+        JIMENG_ACCESS_KEY_ID=${{ secrets.JIMENG_ACCESS_KEY_ID }}
+        JIMENG_SECRET_ACCESS_KEY=${{ secrets.JIMENG_SECRET_ACCESS_KEY }}
+        VIDU_API_KEY=${{ secrets.VIDU_API_KEY }}
