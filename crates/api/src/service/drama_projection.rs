@@ -510,7 +510,14 @@ impl DramaProjectionService {
                 diesel::sql_query(
                     "INSERT INTO gm_drama.assets \
                      (project_id, name, type, bucket, object_key, public_url, format, file_size, duration_seconds, metadata, source_job_id, created_at, updated_at) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())",
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW()) \
+                     ON CONFLICT (bucket, object_key) DO UPDATE SET \
+                       public_url = EXCLUDED.public_url, \
+                       format = EXCLUDED.format, \
+                       file_size = EXCLUDED.file_size, \
+                       duration_seconds = EXCLUDED.duration_seconds, \
+                       metadata = EXCLUDED.metadata, \
+                       updated_at = NOW()",
                 )
                 .bind::<Text, _>(&event.project_id)
                 .bind::<Text, _>(artifact_name)

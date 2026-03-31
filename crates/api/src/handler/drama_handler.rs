@@ -11,13 +11,14 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::dto::drama_dto::*;
+use crate::dto::drama_dto::DramaChapterSceneAssetsRequest;
 use crate::dto::oss_dto::UploadImageResponse;
 use crate::error::{api_error::ApiError, business_error::BusinessError};
 use crate::response::api_result::ApiResult;
 use crate::service::drama_billing::DramaBillingGuard;
 use crate::service::drama_facade::{DramaFacade, FacadeError};
 use crate::service::drama_private_assets_service::{
-    DramaPrivateAssetsService, ProjectResourcesError,
+    ChapterSceneAssetsError, DramaPrivateAssetsService, ProjectResourcesError,
 };
 use crate::service::drama_project_meta_service::{DramaProjectMetaRow, DramaProjectMetaService};
 use crate::service::drama_projection::{DramaProjectionService, ProjectionRow};
@@ -955,6 +956,81 @@ pub async fn put_project_resources(
     }
 }
 
+pub async fn get_chapter_scene_assets(
+    Extension(user): Extension<User>,
+    Extension(projection): Extension<DramaProjectionService>,
+    Extension(user_state): Extension<UserState>,
+    Path((project_id, chapter_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let projection_row = match projection.get_projection(&project_id) {
+        Ok(row) => row,
+        Err(e) => {
+            tracing::error!("Projection read failed: {}", e);
+            return internal_error_response("failed to read drama project", "读取短剧项目失败");
+        }
+    };
+    if let Err(resp) = check_projection_access(projection_row, &user) {
+        return resp;
+    }
+
+    let service = private_assets_service(&user_state);
+    match service.get_chapter_scene_assets(&project_id, &chapter_id, i64::from(user.id)) {
+        Ok(result) => gateway_response(200, serde_json::to_value(result).unwrap_or_default()),
+        Err(ChapterSceneAssetsError::ForbiddenSceneAssetAssociation { invalid_scene_asset_ids }) => (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "code": 403,
+                "msg": "one or more scene_asset_ids do not belong to current user",
+                "msg_cn": "存在不属于当前用户的 scene_asset_ids",
+                "invalid_scene_asset_ids": invalid_scene_asset_ids,
+            })),
+        )
+            .into_response(),
+        Err(ChapterSceneAssetsError::Database(e)) => {
+            tracing::error!("Get chapter scene assets failed: {}", e);
+            internal_error_response("failed to read chapter scene assets", "读取章节场景资产失败")
+        }
+    }
+}
+
+pub async fn put_chapter_scene_assets(
+    Extension(user): Extension<User>,
+    Extension(projection): Extension<DramaProjectionService>,
+    Extension(user_state): Extension<UserState>,
+    Path((project_id, chapter_id)): Path<(String, String)>,
+    Json(req): Json<DramaChapterSceneAssetsRequest>,
+) -> impl IntoResponse {
+    let projection_row = match projection.get_projection(&project_id) {
+        Ok(row) => row,
+        Err(e) => {
+            tracing::error!("Projection read failed: {}", e);
+            return internal_error_response("failed to read drama project", "读取短剧项目失败");
+        }
+    };
+    if let Err(resp) = check_projection_access(projection_row, &user) {
+        return resp;
+    }
+
+    let service = private_assets_service(&user_state);
+    match service.put_chapter_scene_assets(&project_id, &chapter_id, i64::from(user.id), &req.scene_asset_ids) {
+        Ok(result) => gateway_response(200, serde_json::to_value(result).unwrap_or_default()),
+        Err(ChapterSceneAssetsError::ForbiddenSceneAssetAssociation { invalid_scene_asset_ids }) => (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "code": 403,
+                "msg": "one or more scene_asset_ids do not belong to current user",
+                "msg_cn": "存在不属于当前用户的 scene_asset_ids",
+                "invalid_scene_asset_ids": invalid_scene_asset_ids,
+            })),
+        )
+            .into_response(),
+        Err(ChapterSceneAssetsError::Database(e)) => {
+            tracing::error!("Put chapter scene assets failed: {}", e);
+            internal_error_response("failed to save chapter scene assets", "保存章节场景资产失败")
+        }
+    }
+}
+
 pub async fn upsert_project_meta(
     Extension(user): Extension<User>,
     Extension(projection): Extension<DramaProjectionService>,
@@ -1697,10 +1773,22 @@ pub async fn get_fallbacks(
 
 pub async fn script_feedback(
     Extension(user): Extension<User>,
+    Extension(projection): Extension<DramaProjectionService>,
     Extension(facade): Extension<DramaFacade>,
     Path(project_id): Path<String>,
     Json(req): Json<serde_json::Value>,
 ) -> Response<BoxBody> {
+    let projection_row = match projection.get_projection(&project_id) {
+        Ok(row) => row,
+        Err(e) => {
+            tracing::error!("Projection read failed: {}", e);
+            return internal_error_response("failed to read drama project", "读取短剧项目失败");
+        }
+    };
+    if let Err(resp) = check_projection_access(projection_row, &user) {
+        return resp;
+    }
+
     match facade.post_script_feedback(&project_id, req, &user).await {
         Ok((status, body)) => gateway_response(status, body),
         Err(e) => map_facade_err(e),
@@ -1709,9 +1797,21 @@ pub async fn script_feedback(
 
 pub async fn retry_project(
     Extension(user): Extension<User>,
+    Extension(projection): Extension<DramaProjectionService>,
     Extension(facade): Extension<DramaFacade>,
     Path(project_id): Path<String>,
 ) -> Response<BoxBody> {
+    let projection_row = match projection.get_projection(&project_id) {
+        Ok(row) => row,
+        Err(e) => {
+            tracing::error!("Projection read failed: {}", e);
+            return internal_error_response("failed to read drama project", "读取短剧项目失败");
+        }
+    };
+    if let Err(resp) = check_projection_access(projection_row, &user) {
+        return resp;
+    }
+
     let body = serde_json::json!({"project_id": project_id});
     match facade.retry(&project_id, body, &user).await {
         Ok((status, body)) => gateway_response(status, body),
@@ -1721,9 +1821,21 @@ pub async fn retry_project(
 
 pub async fn clone_project(
     Extension(user): Extension<User>,
+    Extension(projection): Extension<DramaProjectionService>,
     Extension(facade): Extension<DramaFacade>,
     Path(project_id): Path<String>,
 ) -> Response<BoxBody> {
+    let projection_row = match projection.get_projection(&project_id) {
+        Ok(row) => row,
+        Err(e) => {
+            tracing::error!("Projection read failed: {}", e);
+            return internal_error_response("failed to read drama project", "读取短剧项目失败");
+        }
+    };
+    if let Err(resp) = check_projection_access(projection_row, &user) {
+        return resp;
+    }
+
     let body = serde_json::json!({"source_project_id": project_id});
     match facade.clone_project(&project_id, body, &user).await {
         Ok((status, body)) => gateway_response(status, body),
@@ -1733,9 +1845,21 @@ pub async fn clone_project(
 
 pub async fn scene_rerun(
     Extension(user): Extension<User>,
+    Extension(projection): Extension<DramaProjectionService>,
     Extension(facade): Extension<DramaFacade>,
     Path((project_id, scene_id)): Path<(String, String)>,
 ) -> Response<BoxBody> {
+    let projection_row = match projection.get_projection(&project_id) {
+        Ok(row) => row,
+        Err(e) => {
+            tracing::error!("Projection read failed: {}", e);
+            return internal_error_response("failed to read drama project", "读取短剧项目失败");
+        }
+    };
+    if let Err(resp) = check_projection_access(projection_row, &user) {
+        return resp;
+    }
+
     let body = serde_json::json!({"scene_id": scene_id});
     match facade.scene_rerun(&project_id, body, &user).await {
         Ok((status, body)) => gateway_response(status, body),

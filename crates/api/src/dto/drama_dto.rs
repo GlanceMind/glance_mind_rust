@@ -326,6 +326,20 @@ pub struct DramaProjectResourcesResponse {
     pub primary_style_asset_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DramaChapterSceneAssetsRequest {
+    #[serde(default)]
+    pub scene_asset_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DramaChapterSceneAssetsResponse {
+    pub project_id: String,
+    pub chapter_id: String,
+    #[serde(default)]
+    pub scene_asset_ids: Vec<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DramaCostSummary {
     pub reserve_cents: i64,

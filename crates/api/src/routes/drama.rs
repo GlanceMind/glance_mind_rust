@@ -50,6 +50,10 @@ pub fn routes() -> Router<UserState> {
             "/projects/:id/resources",
             get(drama_handler::get_project_resources).put(drama_handler::put_project_resources),
         )
+        .route(
+            "/projects/:project_id/chapters/:chapter_id/scene-assets",
+            get(drama_handler::get_chapter_scene_assets).put(drama_handler::put_chapter_scene_assets),
+        )
         .route("/projects/:id/clarify", post(drama_handler::clarify))
         .route(
             "/projects/:id/stages/strategy/select",

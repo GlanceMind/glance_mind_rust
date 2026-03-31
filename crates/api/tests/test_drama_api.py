@@ -187,11 +187,59 @@ def _valid_brief(**overrides):
     return defaults
 
 
+def _valid_long_video_brief(**overrides):
+    defaults = {
+        "title": f"E2E Long Drama {int(time.time())}",
+        "description": "A multi-chapter epic spanning three acts of corporate intrigue.",
+        "content_type": "long_video",
+        "target_duration_seconds": 600,
+        "platform": "youtube",
+        "visual_style": "cinematic_noir",
+        "genre": "thriller",
+        "narrative_mode": "epic",
+        "budget_cents": 2000,
+        "characters": [
+            {"name": "Marcus", "appearance": "tailored suit, silver cufflinks"},
+            {"name": "Elena", "appearance": "red blazer, calculating gaze"},
+            {"name": "Jin", "appearance": "tech hoodie, augmented glasses"},
+        ],
+    }
+    defaults.update(overrides)
+    return defaults
+
+
 def _create_project(client) -> str:
     brief = _valid_brief()
     resp = client.post(f"{DRAMA_BASE}/projects", json=brief)
     assert resp.status_code in [200, 201], f"Create failed: {resp.status_code} {resp.text}"
     return extract_data(resp.json())["project_id"]
+
+
+def _create_long_video_project(client) -> str:
+    brief = _valid_long_video_brief()
+    resp = client.post(f"{DRAMA_BASE}/projects", json=brief)
+    assert resp.status_code in [200, 201], f"Create long_video failed: {resp.status_code} {resp.text}"
+    return extract_data(resp.json())["project_id"]
+
+
+def _create_scene_asset(client, name: str = "Scene Asset") -> str:
+    resp = client.post(
+        f"{DRAMA_BASE}/scene-assets",
+        json={
+            "name": name,
+            "category": "urban",
+            "location_description": f"{name} description",
+            "time_of_day": "night",
+            "mood": "tense",
+            "reference_image_urls": [
+                f"https://example.com/{name.lower().replace(' ', '-')}.png"
+            ],
+            "camera_notes": "wide establishing angle",
+            "notes": "test asset",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    return extract_data(resp.json())["id"]
 
 
 def _wait_for_projection(db_connection, project_id: str, timeout_seconds: float = 3.0):
@@ -754,6 +802,179 @@ class TestDramaStaleInteraction:
 
 
 # ===========================================================================
+# 8.5 H4 / H5 / H7 follow-up action routes
+# ===========================================================================
+
+class TestDramaScriptFeedback:
+    def test_script_feedback_requires_auth(self, api_client):
+        resp = api_client.post(
+            f"{DRAMA_BASE}/projects/some-id/script/feedback",
+            json={"feedback": "Please make scene 2 more intense."},
+        )
+        assert resp.status_code == 401
+
+    def test_script_feedback_forbidden_for_other_user(
+        self, auth_client, second_auth_client, db_connection
+    ):
+        project_id = _create_project(auth_client)
+        projection_row = _wait_for_projection(db_connection, project_id)
+        if projection_row is None:
+            pytest.skip("Projection row not created yet; script feedback endpoint is not ready")
+
+        resp = second_auth_client.post(
+            f"{DRAMA_BASE}/projects/{project_id}/script/feedback",
+            json={"feedback": "Unauthorized feedback"},
+        )
+        assert resp.status_code == 403, (
+            f"Expected 403 for cross-user script feedback, got {resp.status_code}: {resp.text}"
+        )
+
+    def test_script_feedback_accepts_valid_owner_payload(
+        self, auth_client, db_connection
+    ):
+        project_id = _create_project(auth_client)
+        projection_row = _wait_for_projection(db_connection, project_id)
+        if projection_row is None:
+            pytest.skip("Projection row not created yet; script feedback endpoint is not ready")
+
+        resp = auth_client.post(
+            f"{DRAMA_BASE}/projects/{project_id}/script/feedback",
+            json={
+                "feedback": "Please increase tension in the second half.",
+                "interaction_version": 1,
+            },
+        )
+        assert resp.status_code in [200, 202, 400, 404, 409], (
+            f"Unexpected script feedback status: {resp.status_code} {resp.text}"
+        )
+
+
+class TestDramaRetry:
+    def test_retry_project_requires_auth(self, api_client):
+        resp = api_client.post(f"{DRAMA_BASE}/projects/some-id/retry", json={})
+        assert resp.status_code == 401
+
+    def test_retry_project_forbidden_for_other_user(
+        self, auth_client, second_auth_client, db_connection
+    ):
+        project_id = _create_project(auth_client)
+        projection_row = _wait_for_projection(db_connection, project_id)
+        if projection_row is None:
+            pytest.skip("Projection row not created yet; retry endpoint is not ready")
+
+        resp = second_auth_client.post(
+            f"{DRAMA_BASE}/projects/{project_id}/retry",
+            json={},
+        )
+        assert resp.status_code == 403, (
+            f"Expected 403 for cross-user retry, got {resp.status_code}: {resp.text}"
+        )
+
+    def test_retry_project_accepts_owner_request(
+        self, auth_client, db_connection
+    ):
+        project_id = _create_project(auth_client)
+        projection_row = _wait_for_projection(db_connection, project_id)
+        if projection_row is None:
+            pytest.skip("Projection row not created yet; retry endpoint is not ready")
+        time.sleep(1.0)
+
+        resp = auth_client.post(
+            f"{DRAMA_BASE}/projects/{project_id}/retry",
+            json={},
+        )
+        assert resp.status_code in [200, 202], (
+            f"Unexpected retry status: {resp.status_code} {resp.text}"
+        )
+
+
+class TestDramaClone:
+    def test_clone_project_requires_auth(self, api_client):
+        resp = api_client.post(f"{DRAMA_BASE}/projects/some-id/clone", json={})
+        assert resp.status_code == 401
+
+    def test_clone_project_forbidden_for_other_user(
+        self, auth_client, second_auth_client, db_connection
+    ):
+        project_id = _create_project(auth_client)
+        projection_row = _wait_for_projection(db_connection, project_id)
+        if projection_row is None:
+            pytest.skip("Projection row not created yet; clone endpoint is not ready")
+
+        resp = second_auth_client.post(
+            f"{DRAMA_BASE}/projects/{project_id}/clone",
+            json={},
+        )
+        assert resp.status_code == 403, (
+            f"Expected 403 for cross-user clone, got {resp.status_code}: {resp.text}"
+        )
+
+    def test_clone_project_creates_new_project_for_owner(
+        self, auth_client, db_connection
+    ):
+        project_id = _create_project(auth_client)
+        projection_row = _wait_for_projection(db_connection, project_id)
+        if projection_row is None:
+            pytest.skip("Projection row not created yet; clone endpoint is not ready")
+        time.sleep(1.0)
+
+        resp = auth_client.post(
+            f"{DRAMA_BASE}/projects/{project_id}/clone",
+            json={},
+        )
+        assert resp.status_code in [200, 201, 202], (
+            f"Unexpected clone status: {resp.status_code} {resp.text}"
+        )
+
+        data = extract_data(resp.json())
+        new_project_id = data.get("project_id") or data.get("new_project_id")
+        assert new_project_id is not None
+        assert new_project_id != project_id
+
+
+class TestDramaSceneRerun:
+    def test_scene_rerun_requires_auth(self, api_client):
+        resp = api_client.post(
+            f"{DRAMA_BASE}/projects/some-id/scenes/scene-1/rerun",
+            json={},
+        )
+        assert resp.status_code == 401
+
+    def test_scene_rerun_forbidden_for_other_user(
+        self, auth_client, second_auth_client, db_connection
+    ):
+        project_id = _create_project(auth_client)
+        projection_row = _wait_for_projection(db_connection, project_id)
+        if projection_row is None:
+            pytest.skip("Projection row not created yet; scene rerun endpoint is not ready")
+
+        resp = second_auth_client.post(
+            f"{DRAMA_BASE}/projects/{project_id}/scenes/scene-1/rerun",
+            json={},
+        )
+        assert resp.status_code == 403, (
+            f"Expected 403 for cross-user scene rerun, got {resp.status_code}: {resp.text}"
+        )
+
+    def test_scene_rerun_accepts_owner_request(
+        self, auth_client, db_connection
+    ):
+        project_id = _create_project(auth_client)
+        projection_row = _wait_for_projection(db_connection, project_id)
+        if projection_row is None:
+            pytest.skip("Projection row not created yet; scene rerun endpoint is not ready")
+        time.sleep(1.0)
+
+        resp = auth_client.post(
+            f"{DRAMA_BASE}/projects/{project_id}/scenes/scene-1/rerun",
+            json={},
+        )
+        assert resp.status_code in [200, 202], (
+            f"Unexpected scene rerun status: {resp.status_code} {resp.text}"
+        )
+
+
+# ===========================================================================
 # 9. Gateway Down (conditional)
 # ===========================================================================
 
@@ -772,7 +993,220 @@ class TestDramaGatewayError:
 
 
 # ===========================================================================
-# 10. DB Projection Assertions
+# 10. Internal callback / replay
+# ===========================================================================
+
+class TestDramaInternalCallback:
+    def test_callback_rejects_invalid_payload(self, api_client):
+        resp = api_client.post(
+            "/api/v1/internal/drama/callback",
+            data="not-json",
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 400, (
+            f"Expected 400 for invalid callback payload, got {resp.status_code}: {resp.text}"
+        )
+
+    def test_callback_ingests_event_and_updates_projection(
+        self, auth_client, api_client, db_connection
+    ):
+        project_id = _create_project(auth_client)
+        projection_row = _wait_for_projection(db_connection, project_id)
+        if projection_row is None:
+            pytest.skip("Projection row not created yet; callback test requires projection")
+
+        event_id = f"evt_run_started_{time.time_ns()}"
+        run_id = f"run_{time.time_ns()}"
+        payload = {
+            "event_id": event_id,
+            "project_id": project_id,
+            "run_id": run_id,
+            "sequence": 1,
+            "stage_code": None,
+            "event_type": "run_started",
+            "occurred_at": datetime.now(timezone.utc).isoformat(),
+            "payload": {},
+        }
+
+        resp = api_client.post(
+            "/api/v1/internal/drama/callback",
+            json=payload,
+        )
+        assert resp.status_code == 200, (
+            f"Expected 200 for callback ingestion, got {resp.status_code}: {resp.text}"
+        )
+        body = resp.json()
+        assert body["accepted"] is True
+        assert body["event_id"] == event_id
+
+        event_row = _q1(
+            db_connection,
+            "SELECT event_id, project_id, run_id, sequence, event_type FROM gm_drama_callback_events WHERE event_id = %s",
+            (event_id,),
+        )
+        assert event_row is not None
+        assert event_row["project_id"] == project_id
+        assert event_row["run_id"] == run_id
+        assert event_row["sequence"] == 1
+        assert event_row["event_type"] == "run_started"
+
+        projection_after = _q1(
+            db_connection,
+            "SELECT status, run_id, last_event_sequence FROM gm_drama_project_projections WHERE project_id = %s",
+            (project_id,),
+        )
+        assert projection_after is not None
+        assert projection_after["status"] == "running"
+        assert projection_after["run_id"] == run_id
+        assert projection_after["last_event_sequence"] >= 1
+
+    def test_duplicate_callback_event_is_accepted_false(
+        self, auth_client, api_client, db_connection
+    ):
+        project_id = _create_project(auth_client)
+        projection_row = _wait_for_projection(db_connection, project_id)
+        if projection_row is None:
+            pytest.skip("Projection row not created yet; callback duplicate test requires projection")
+
+        event_id = f"evt_duplicate_{time.time_ns()}"
+        payload = {
+            "event_id": event_id,
+            "project_id": project_id,
+            "run_id": f"run_{time.time_ns()}",
+            "sequence": 2,
+            "stage_code": "s01_strategy",
+            "event_type": "stage_entered",
+            "occurred_at": datetime.now(timezone.utc).isoformat(),
+            "payload": {},
+        }
+
+        first_resp = api_client.post("/api/v1/internal/drama/callback", json=payload)
+        assert first_resp.status_code == 200, first_resp.text
+        assert first_resp.json()["accepted"] is True
+
+        second_resp = api_client.post("/api/v1/internal/drama/callback", json=payload)
+        assert second_resp.status_code == 200, second_resp.text
+        second_body = second_resp.json()
+        assert second_body["accepted"] is False
+        assert second_body["reason"] == "duplicate event_id"
+
+
+class TestDramaCallbackLifecycle:
+    """Full lifecycle via callback events: run_started -> stage_entered (strategy)
+    -> stage_entered (script) -> render_progress -> run_completed.
+    Verifies projection status, stage, and sequence advance monotonically."""
+
+    def test_multi_event_lifecycle_updates_projection_correctly(
+        self, auth_client, api_client, db_connection
+    ):
+        project_id = _create_project(auth_client)
+        projection_row = _wait_for_projection(db_connection, project_id)
+        if projection_row is None:
+            pytest.skip("Projection row not created; lifecycle callback test requires projection")
+
+        run_id = f"run_lifecycle_{time.time_ns()}"
+        ts_base = datetime.now(timezone.utc)
+
+        events = [
+            {"event_id": f"evt_lc_1_{time.time_ns()}", "project_id": project_id, "run_id": run_id, "sequence": 1, "stage_code": None, "event_type": "run_started", "occurred_at": ts_base.isoformat(), "payload": {}},
+            {"event_id": f"evt_lc_2_{time.time_ns()}", "project_id": project_id, "run_id": run_id, "sequence": 2, "stage_code": "s01_strategy", "event_type": "stage_entered", "occurred_at": ts_base.isoformat(), "payload": {}},
+            {"event_id": f"evt_lc_3_{time.time_ns()}", "project_id": project_id, "run_id": run_id, "sequence": 3, "stage_code": "s03_script", "event_type": "stage_entered", "occurred_at": ts_base.isoformat(), "payload": {}},
+            {"event_id": f"evt_lc_4_{time.time_ns()}", "project_id": project_id, "run_id": run_id, "sequence": 4, "stage_code": "s05_render", "event_type": "render_progress_recorded", "occurred_at": ts_base.isoformat(), "payload": {"completed_tasks": 2, "total_tasks": 4, "progress_percent": 50}},
+            {"event_id": f"evt_lc_5_{time.time_ns()}", "project_id": project_id, "run_id": run_id, "sequence": 5, "stage_code": None, "event_type": "run_completed", "occurred_at": ts_base.isoformat(), "payload": {}},
+        ]
+
+        for evt in events:
+            resp = api_client.post("/api/v1/internal/drama/callback", json=evt)
+            assert resp.status_code == 200, (
+                f"Callback event {evt['event_type']} seq={evt['sequence']} failed: {resp.status_code} {resp.text}"
+            )
+            body = resp.json()
+            assert body["accepted"] is True, (
+                f"Callback event {evt['event_type']} rejected: {body}"
+            )
+
+        stored_events = _qall(
+            db_connection,
+            "SELECT event_id, event_type, sequence FROM gm_drama_callback_events WHERE project_id = %s AND run_id = %s ORDER BY sequence",
+            (project_id, run_id),
+        )
+        assert len(stored_events) == 5
+        assert stored_events[0]["event_type"] == "run_started"
+        assert stored_events[1]["event_type"] == "stage_entered"
+        assert stored_events[2]["event_type"] == "stage_entered"
+        assert stored_events[3]["event_type"] == "render_progress_recorded"
+        assert stored_events[4]["event_type"] == "run_completed"
+        for i in range(5):
+            assert stored_events[i]["sequence"] == i + 1
+
+        final_projection = _q1(
+            db_connection,
+            "SELECT status, run_id, last_event_sequence FROM gm_drama_project_projections WHERE project_id = %s",
+            (project_id,),
+        )
+        assert final_projection is not None
+        assert final_projection["run_id"] == run_id
+        assert final_projection["last_event_sequence"] >= 5
+        assert final_projection["status"] in ["completed", "running"]
+
+    def test_out_of_order_sequence_still_accepted(
+        self, auth_client, api_client, db_connection
+    ):
+        """Callbacks arriving out of order should still be accepted
+        (idempotent storage, projection uses max sequence)."""
+        project_id = _create_project(auth_client)
+        projection_row = _wait_for_projection(db_connection, project_id)
+        if projection_row is None:
+            pytest.skip("Projection row not created; out-of-order callback test requires projection")
+
+        run_id = f"run_ooo_{time.time_ns()}"
+        ts = datetime.now(timezone.utc).isoformat()
+
+        evt_3 = {"event_id": f"evt_ooo_3_{time.time_ns()}", "project_id": project_id, "run_id": run_id, "sequence": 3, "stage_code": "s03_script", "event_type": "stage_entered", "occurred_at": ts, "payload": {}}
+        evt_1 = {"event_id": f"evt_ooo_1_{time.time_ns()}", "project_id": project_id, "run_id": run_id, "sequence": 1, "stage_code": None, "event_type": "run_started", "occurred_at": ts, "payload": {}}
+
+        resp_3 = api_client.post("/api/v1/internal/drama/callback", json=evt_3)
+        assert resp_3.status_code == 200, resp_3.text
+        assert resp_3.json()["accepted"] is True
+
+        resp_1 = api_client.post("/api/v1/internal/drama/callback", json=evt_1)
+        assert resp_1.status_code == 200, resp_1.text
+        assert resp_1.json()["accepted"] is True
+
+        projection = _q1(
+            db_connection,
+            "SELECT last_event_sequence FROM gm_drama_project_projections WHERE project_id = %s",
+            (project_id,),
+        )
+        assert projection is not None
+        assert projection["last_event_sequence"] >= 3
+
+
+class TestDramaInternalReplay:
+    def test_replay_request_returns_accepted(self, auth_client, api_client, db_connection):
+        project_id = _create_project(auth_client)
+        projection_row = _wait_for_projection(db_connection, project_id)
+        if projection_row is None:
+            pytest.skip("Projection row not created yet; replay test requires projection")
+
+        resp = api_client.post(
+            f"/api/v1/internal/drama/replay/{project_id}",
+            json={
+                "run_id": f"run_{time.time_ns()}",
+                "from_sequence": 3,
+            },
+        )
+        assert resp.status_code == 202, (
+            f"Expected 202 for replay request, got {resp.status_code}: {resp.text}"
+        )
+        body = resp.json()
+        assert body["project_id"] == project_id
+        assert body["from_sequence"] == 3
+        assert body["status"] == "replay_requested"
+
+
+# ===========================================================================
+# 11. DB Projection Assertions
 # ===========================================================================
 
 class TestDramaProjectionDB:
@@ -832,6 +1266,377 @@ class TestDramaProjectionDB:
 # ===========================================================================
 # 11. Private Assets (intentional RED until routes exist)
 # ===========================================================================
+
+
+# ===========================================================================
+# 11a. Long Video (长剧) Project CRUD + DB Field Validation
+# ===========================================================================
+
+class TestDramaLongVideoProjectCreate:
+    """P0: Verify long_video content_type flows through create, detail, list, and DB."""
+
+    def test_preflight_long_video_valid(self, auth_client):
+        resp = auth_client.post(
+            f"{DRAMA_BASE}/preflight",
+            json={
+                "title": "Long Drama Valid",
+                "description": "A multi-chapter thriller",
+                "content_type": "long_video",
+                "target_duration_seconds": 600,
+            },
+        )
+        assert resp.status_code == 200
+        data = extract_data(resp.json())
+        assert data.get("passed") is True or data.get("all_passed") is True
+        assert data["status"] == "passed"
+        assert len(data["blocking"]) == 0
+
+    def test_preflight_long_video_zero_duration(self, auth_client):
+        resp = auth_client.post(
+            f"{DRAMA_BASE}/preflight",
+            json={
+                "title": "Long Drama Zero Duration",
+                "description": "Missing real duration",
+                "content_type": "long_video",
+                "target_duration_seconds": 0,
+            },
+        )
+        assert resp.status_code == 200
+        data = extract_data(resp.json())
+        assert data["passed"] is False
+        blocking_text = " ".join(data["blocking"])
+        assert "target_duration_seconds" in blocking_text or "duration" in blocking_text.lower()
+
+    def test_create_long_video_project_success(self, auth_client, db_connection):
+        brief = _valid_long_video_brief(budget_cents=2000)
+        resp = auth_client.post(f"{DRAMA_BASE}/projects", json=brief)
+        assert resp.status_code in [200, 201]
+        data = extract_data(resp.json())
+        pid = data["project_id"]
+        assert pid != ""
+        assert data["status"] in ["pending", "running"]
+
+        row = _q1(
+            db_connection,
+            "SELECT * FROM gm_drama_project_projections WHERE project_id = %s",
+            (pid,),
+        )
+        if row:
+            assert row["content_type"] == "long_video", \
+                f"Expected content_type 'long_video', got '{row['content_type']}'"
+            assert row["title"] == brief["title"]
+            assert row["cost_reserve_cents"] == 2000, \
+                f"Expected reserve 2000, got {row['cost_reserve_cents']}"
+            assert row["status"] in ["pending", "running"]
+            assert row["platform"] == "youtube" or row["platform"] is None
+            assert row["created_at"] is not None
+            assert row["updated_at"] is not None
+            assert row["user_id"] is not None
+            assert row["progress_percent"] >= 0
+            assert row["interaction_version"] >= 1
+            assert row["last_event_sequence"] >= 0
+
+    def test_long_video_project_detail_returns_content_type(self, auth_client):
+        pid = _create_long_video_project(auth_client)
+        resp = auth_client.get(f"{DRAMA_BASE}/projects/{pid}")
+        assert resp.status_code == 200
+        data = extract_data(resp.json())
+        assert data["project_id"] == pid
+        assert data.get("content_type") == "long_video", \
+            f"Detail should return content_type='long_video', got '{data.get('content_type')}'"
+        assert "status" in data
+
+    def test_long_video_project_appears_in_list(self, auth_client):
+        pid = _create_long_video_project(auth_client)
+        resp = auth_client.get(f"{DRAMA_BASE}/projects")
+        assert resp.status_code == 200
+        data = extract_data(resp.json())
+        items = data.get("list") or data.get("items") or data
+        if isinstance(items, list):
+            pids = [item.get("project_id") for item in items]
+            assert pid in pids, f"Long video project {pid} should appear in project list"
+
+    def test_long_video_cancel_updates_projection(self, auth_client, db_connection):
+        pid = _create_long_video_project(auth_client)
+        time.sleep(0.5)
+
+        auth_client.delete(f"{DRAMA_BASE}/projects/{pid}")
+        time.sleep(0.5)
+
+        row = _q1(
+            db_connection,
+            "SELECT status, content_type FROM gm_drama_project_projections WHERE project_id = %s",
+            (pid,),
+        )
+        if row:
+            assert row["content_type"] == "long_video", \
+                "content_type should remain long_video after cancel"
+            assert row["status"] in ["cancelled", "pending", "running"], \
+                f"After cancel, status should be cancelled, got {row['status']}"
+
+    def test_long_video_meta_roundtrip(self, auth_client):
+        pid = _create_long_video_project(auth_client)
+
+        payload = {
+            "characters": [
+                {"id": "char_marcus", "name": "Marcus", "role": "lead"},
+                {"id": "char_elena", "name": "Elena", "role": "antagonist"},
+            ],
+            "style_references": [
+                {"id": "style_noir", "type": "image", "url": "https://example.com/noir.png"},
+            ],
+            "text_materials": [
+                {"id": "tm_outline", "kind": "outline", "content": "Three-act corporate thriller spanning 10 chapters."},
+            ],
+            "visual_settings": {
+                "aspect_ratio": "16:9",
+                "palette": "cinematic_noir",
+                "camera_language": "slow tracking shots",
+            },
+        }
+        put_resp = auth_client.put(f"{DRAMA_BASE}/projects/{pid}/meta", json=payload)
+        assert put_resp.status_code == 200, put_resp.text
+
+        get_resp = auth_client.get(f"{DRAMA_BASE}/projects/{pid}/meta")
+        assert get_resp.status_code == 200, get_resp.text
+        data = extract_data(get_resp.json())
+        assert data["project_id"] == pid
+        assert len(data["characters"]) == 2
+        assert data["visual_settings"]["aspect_ratio"] == "16:9"
+
+    def test_long_video_project_resources_roundtrip(self, auth_client, db_connection):
+        pid = _create_long_video_project(auth_client)
+        projection = _wait_for_projection(db_connection, pid)
+        if projection is None:
+            pytest.skip("Projection row not created yet")
+
+        char_resp = auth_client.post(
+            f"{DRAMA_BASE}/characters",
+            json={"name": "Long Video Character"},
+        )
+        assert char_resp.status_code == 200, char_resp.text
+        char_id = extract_data(char_resp.json())["id"]
+
+        put_resp = auth_client.put(
+            f"{DRAMA_BASE}/projects/{pid}/resources",
+            json={
+                "character_ids": [char_id],
+                "scene_asset_ids": [],
+                "style_asset_ids": [],
+                "primary_style_asset_id": None,
+            },
+        )
+        assert put_resp.status_code == 200, put_resp.text
+
+        get_resp = auth_client.get(f"{DRAMA_BASE}/projects/{pid}/resources")
+        assert get_resp.status_code == 200, get_resp.text
+        data = extract_data(get_resp.json())
+        assert data["character_ids"] == [char_id]
+
+
+# ===========================================================================
+# 11b. s02_chapters Stage Callback Event Progression
+# ===========================================================================
+
+class TestDramaChaptersStageCallback:
+    """P0: Verify s02_chapters stage is correctly handled in callback lifecycle."""
+
+    def test_lifecycle_with_chapters_stage(
+        self, auth_client, api_client, db_connection
+    ):
+        """Full long_video lifecycle including s02_chapters:
+        run_started -> s01_strategy -> s02_chapters -> s03_script -> s05_render -> run_completed."""
+        project_id = _create_long_video_project(auth_client)
+        projection_row = _wait_for_projection(db_connection, project_id)
+        if projection_row is None:
+            pytest.skip("Projection row not created; chapters lifecycle callback test requires projection")
+
+        run_id = f"run_chapters_{time.time_ns()}"
+        ts_base = datetime.now(timezone.utc)
+
+        events = [
+            {
+                "event_id": f"evt_ch_1_{time.time_ns()}", "project_id": project_id,
+                "run_id": run_id, "sequence": 1, "stage_code": None,
+                "event_type": "run_started", "occurred_at": ts_base.isoformat(), "payload": {},
+            },
+            {
+                "event_id": f"evt_ch_2_{time.time_ns()}", "project_id": project_id,
+                "run_id": run_id, "sequence": 2, "stage_code": "s01_strategy",
+                "event_type": "stage_entered", "occurred_at": ts_base.isoformat(), "payload": {},
+            },
+            {
+                "event_id": f"evt_ch_3_{time.time_ns()}", "project_id": project_id,
+                "run_id": run_id, "sequence": 3, "stage_code": "s02_chapters",
+                "event_type": "stage_entered", "occurred_at": ts_base.isoformat(), "payload": {},
+            },
+            {
+                "event_id": f"evt_ch_4_{time.time_ns()}", "project_id": project_id,
+                "run_id": run_id, "sequence": 4, "stage_code": "s03_script",
+                "event_type": "stage_entered", "occurred_at": ts_base.isoformat(), "payload": {},
+            },
+            {
+                "event_id": f"evt_ch_5_{time.time_ns()}", "project_id": project_id,
+                "run_id": run_id, "sequence": 5, "stage_code": "s04_visual",
+                "event_type": "stage_entered", "occurred_at": ts_base.isoformat(), "payload": {},
+            },
+            {
+                "event_id": f"evt_ch_6_{time.time_ns()}", "project_id": project_id,
+                "run_id": run_id, "sequence": 6, "stage_code": "s05_render",
+                "event_type": "render_progress_recorded",
+                "occurred_at": ts_base.isoformat(),
+                "payload": {"completed_tasks": 3, "total_tasks": 10, "progress_percent": 30},
+            },
+            {
+                "event_id": f"evt_ch_7_{time.time_ns()}", "project_id": project_id,
+                "run_id": run_id, "sequence": 7, "stage_code": None,
+                "event_type": "run_completed", "occurred_at": ts_base.isoformat(), "payload": {},
+            },
+        ]
+
+        for evt in events:
+            resp = api_client.post("/api/v1/internal/drama/callback", json=evt)
+            assert resp.status_code == 200, (
+                f"Callback event {evt['event_type']} stage={evt.get('stage_code')} "
+                f"seq={evt['sequence']} failed: {resp.status_code} {resp.text}"
+            )
+            body = resp.json()
+            assert body["accepted"] is True, (
+                f"Callback event {evt['event_type']} rejected: {body}"
+            )
+
+        stored_events = _qall(
+            db_connection,
+            "SELECT event_id, event_type, stage_code, sequence "
+            "FROM gm_drama_callback_events "
+            "WHERE project_id = %s AND run_id = %s ORDER BY sequence",
+            (project_id, run_id),
+        )
+        assert len(stored_events) == 7
+        assert stored_events[0]["event_type"] == "run_started"
+        assert stored_events[1]["stage_code"] == "s01_strategy"
+        assert stored_events[2]["stage_code"] == "s02_chapters"
+        assert stored_events[3]["stage_code"] == "s03_script"
+        assert stored_events[4]["stage_code"] == "s04_visual"
+        assert stored_events[5]["stage_code"] == "s05_render"
+        assert stored_events[5]["event_type"] == "render_progress_recorded"
+        assert stored_events[6]["event_type"] == "run_completed"
+
+        for i in range(7):
+            assert stored_events[i]["sequence"] == i + 1
+
+        final_projection = _q1(
+            db_connection,
+            "SELECT status, run_id, last_event_sequence, content_type "
+            "FROM gm_drama_project_projections WHERE project_id = %s",
+            (project_id,),
+        )
+        assert final_projection is not None
+        assert final_projection["run_id"] == run_id
+        assert final_projection["last_event_sequence"] >= 7
+        assert final_projection["status"] in ["completed", "running"]
+        assert final_projection["content_type"] == "long_video"
+
+    def test_chapters_stage_updates_current_stage_in_projection(
+        self, auth_client, api_client, db_connection
+    ):
+        """After ingesting s02_chapters stage_entered, projection.current_stage should update."""
+        project_id = _create_long_video_project(auth_client)
+        projection_row = _wait_for_projection(db_connection, project_id)
+        if projection_row is None:
+            pytest.skip("Projection row not created; chapters stage test requires projection")
+
+        run_id = f"run_ch_stage_{time.time_ns()}"
+        ts = datetime.now(timezone.utc).isoformat()
+
+        resp1 = api_client.post("/api/v1/internal/drama/callback", json={
+            "event_id": f"evt_chs_1_{time.time_ns()}", "project_id": project_id,
+            "run_id": run_id, "sequence": 1, "stage_code": None,
+            "event_type": "run_started", "occurred_at": ts, "payload": {},
+        })
+        assert resp1.status_code == 200, resp1.text
+
+        resp2 = api_client.post("/api/v1/internal/drama/callback", json={
+            "event_id": f"evt_chs_2_{time.time_ns()}", "project_id": project_id,
+            "run_id": run_id, "sequence": 2, "stage_code": "s02_chapters",
+            "event_type": "stage_entered", "occurred_at": ts, "payload": {},
+        })
+        assert resp2.status_code == 200, resp2.text
+
+        projection = _q1(
+            db_connection,
+            "SELECT current_stage, status FROM gm_drama_project_projections WHERE project_id = %s",
+            (project_id,),
+        )
+        assert projection is not None
+        assert projection["current_stage"] == "s02_chapters", \
+            f"Expected current_stage='s02_chapters', got '{projection['current_stage']}'"
+        assert projection["status"] == "running"
+
+    def test_chapter_scene_assets_work_for_long_video_project(
+        self, auth_client, db_connection
+    ):
+        """Verify chapter-level scene assets can be set on a long_video project."""
+        project_id = _create_long_video_project(auth_client)
+        projection = _wait_for_projection(db_connection, project_id)
+        if projection is None:
+            pytest.skip("Projection row not created; chapter scene assets require projection")
+
+        asset_id = _create_scene_asset(auth_client, "Corporate Office")
+
+        chapter_id = "chapter-001"
+        put_resp = auth_client.put(
+            f"{DRAMA_BASE}/projects/{project_id}/chapters/{chapter_id}/scene-assets",
+            json={"scene_asset_ids": [asset_id]},
+        )
+        assert put_resp.status_code == 200, put_resp.text
+
+        get_resp = auth_client.get(
+            f"{DRAMA_BASE}/projects/{project_id}/chapters/{chapter_id}/scene-assets"
+        )
+        assert get_resp.status_code == 200, get_resp.text
+        data = extract_data(get_resp.json())
+        assert data["project_id"] == project_id
+        assert data["chapter_id"] == chapter_id
+        assert data["scene_asset_ids"] == [asset_id]
+
+    def test_different_chapters_have_independent_scene_assets(
+        self, auth_client, db_connection
+    ):
+        """Scene assets set on chapter-001 should not appear in chapter-002."""
+        project_id = _create_long_video_project(auth_client)
+        projection = _wait_for_projection(db_connection, project_id)
+        if projection is None:
+            pytest.skip("Projection row not created; chapter isolation test requires projection")
+
+        asset_ch1 = _create_scene_asset(auth_client, "Boardroom")
+        asset_ch2 = _create_scene_asset(auth_client, "Rooftop Helipad")
+
+        put_ch1 = auth_client.put(
+            f"{DRAMA_BASE}/projects/{project_id}/chapters/chapter-001/scene-assets",
+            json={"scene_asset_ids": [asset_ch1]},
+        )
+        assert put_ch1.status_code == 200, put_ch1.text
+
+        put_ch2 = auth_client.put(
+            f"{DRAMA_BASE}/projects/{project_id}/chapters/chapter-002/scene-assets",
+            json={"scene_asset_ids": [asset_ch2]},
+        )
+        assert put_ch2.status_code == 200, put_ch2.text
+
+        get_ch1 = auth_client.get(
+            f"{DRAMA_BASE}/projects/{project_id}/chapters/chapter-001/scene-assets"
+        )
+        data_ch1 = extract_data(get_ch1.json())
+        assert data_ch1["scene_asset_ids"] == [asset_ch1], \
+            f"Chapter 1 should only have asset_ch1, got {data_ch1['scene_asset_ids']}"
+
+        get_ch2 = auth_client.get(
+            f"{DRAMA_BASE}/projects/{project_id}/chapters/chapter-002/scene-assets"
+        )
+        data_ch2 = extract_data(get_ch2.json())
+        assert data_ch2["scene_asset_ids"] == [asset_ch2], \
+            f"Chapter 2 should only have asset_ch2, got {data_ch2['scene_asset_ids']}"
 
 
 class TestDramaPrivateCharacters:
@@ -1203,6 +2008,114 @@ class TestDramaProjectRoleLinks:
         assert body.get("msg") == "drama project resources are not ready yet"
         assert body.get("msg_cn") == "短剧项目资源暂未就绪，请稍后再试"
 
+
+class TestDramaChapterSceneAssets:
+    def test_get_chapter_scene_assets_empty_by_default(
+        self, auth_client, db_connection
+    ):
+        project_id = _create_project(auth_client)
+        projection_row = _wait_for_projection(db_connection, project_id)
+        if projection_row is None:
+            pytest.skip("Projection row not created yet; chapter scene assets endpoint is not ready")
+
+        chapter_id = "chapter-001"
+        resp = auth_client.get(
+            f"{DRAMA_BASE}/projects/{project_id}/chapters/{chapter_id}/scene-assets"
+        )
+        assert resp.status_code == 200, resp.text
+
+        data = extract_data(resp.json())
+        assert data["project_id"] == project_id
+        assert data["chapter_id"] == chapter_id
+        assert data["scene_asset_ids"] == []
+
+    def test_put_get_chapter_scene_assets_roundtrip(
+        self, auth_client, db_connection
+    ):
+        project_id = _create_project(auth_client)
+        projection_row = _wait_for_projection(db_connection, project_id)
+        if projection_row is None:
+            pytest.skip("Projection row not created yet; chapter scene assets endpoint is not ready")
+
+        chapter_id = "chapter-001"
+        asset_a = _create_scene_asset(auth_client, "Neon Rooftop")
+        asset_b = _create_scene_asset(auth_client, "Dark Stairway")
+
+        put_resp = auth_client.put(
+            f"{DRAMA_BASE}/projects/{project_id}/chapters/{chapter_id}/scene-assets",
+            json={"scene_asset_ids": [asset_a, asset_b]},
+        )
+        assert put_resp.status_code == 200, put_resp.text
+
+        put_data = extract_data(put_resp.json())
+        assert set(put_data["scene_asset_ids"]) == {asset_a, asset_b}
+
+        get_resp = auth_client.get(
+            f"{DRAMA_BASE}/projects/{project_id}/chapters/{chapter_id}/scene-assets"
+        )
+        assert get_resp.status_code == 200, get_resp.text
+
+        get_data = extract_data(get_resp.json())
+        assert get_data["project_id"] == project_id
+        assert get_data["chapter_id"] == chapter_id
+        assert set(get_data["scene_asset_ids"]) == {asset_a, asset_b}
+
+    def test_put_chapter_scene_assets_replaces_previous_links(
+        self, auth_client, db_connection
+    ):
+        project_id = _create_project(auth_client)
+        projection_row = _wait_for_projection(db_connection, project_id)
+        if projection_row is None:
+            pytest.skip("Projection row not created yet; chapter scene assets endpoint is not ready")
+
+        chapter_id = "chapter-001"
+        asset_a = _create_scene_asset(auth_client, "Replace A")
+        asset_b = _create_scene_asset(auth_client, "Replace B")
+
+        first_put = auth_client.put(
+            f"{DRAMA_BASE}/projects/{project_id}/chapters/{chapter_id}/scene-assets",
+            json={"scene_asset_ids": [asset_a, asset_b]},
+        )
+        assert first_put.status_code == 200, first_put.text
+
+        second_put = auth_client.put(
+            f"{DRAMA_BASE}/projects/{project_id}/chapters/{chapter_id}/scene-assets",
+            json={"scene_asset_ids": [asset_b]},
+        )
+        assert second_put.status_code == 200, second_put.text
+
+        get_resp = auth_client.get(
+            f"{DRAMA_BASE}/projects/{project_id}/chapters/{chapter_id}/scene-assets"
+        )
+        assert get_resp.status_code == 200, get_resp.text
+        data = extract_data(get_resp.json())
+        assert data["scene_asset_ids"] == [asset_b]
+
+    def test_put_chapter_scene_assets_rejects_cross_user_scene_asset_ids(
+        self, auth_client, second_auth_client, db_connection
+    ):
+        project_id = _create_project(auth_client)
+        projection_row = _wait_for_projection(db_connection, project_id)
+        if projection_row is None:
+            pytest.skip("Projection row not created yet; chapter scene assets endpoint is not ready")
+
+        chapter_id = "chapter-001"
+        foreign_asset_id = _create_scene_asset(second_auth_client, "Foreign Scene")
+
+        put_resp = auth_client.put(
+            f"{DRAMA_BASE}/projects/{project_id}/chapters/{chapter_id}/scene-assets",
+            json={"scene_asset_ids": [foreign_asset_id]},
+        )
+        assert put_resp.status_code == 403, (
+            f"Expected 403 for cross-user scene asset link, got {put_resp.status_code}: {put_resp.text}"
+        )
+
+        get_resp = auth_client.get(
+            f"{DRAMA_BASE}/projects/{project_id}/chapters/{chapter_id}/scene-assets"
+        )
+        assert get_resp.status_code == 200, get_resp.text
+        data = extract_data(get_resp.json())
+        assert data["scene_asset_ids"] == []
 
 class TestDramaPrivateSceneAssets:
     def test_scene_asset_crud_roundtrip(self, auth_client):

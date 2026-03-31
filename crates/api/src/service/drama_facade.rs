@@ -203,7 +203,15 @@ impl DramaFacade {
         body: Value,
         user: &User,
     ) -> Result<(u16, Value), FacadeError> {
-        self.post(&format!("/projects/{}/scenes/rerun", project_id), body, user)
+        let scene_id = body
+            .get("scene_id")
+            .and_then(|v| v.as_str())
+            .ok_or(FacadeError::MissingSceneId)?;
+        self.post(
+            &format!("/projects/{}/scenes/{}/rerun", project_id, scene_id),
+            body,
+            user,
+        )
         .await
     }
 
@@ -288,6 +296,7 @@ pub enum FacadeError {
     Upstream(reqwest::Error),
     TokenEncoding(jsonwebtoken::errors::Error),
     MissingUserIdentifier,
+    MissingSceneId,
 }
 
 impl std::fmt::Display for FacadeError {
@@ -296,6 +305,7 @@ impl std::fmt::Display for FacadeError {
             Self::Upstream(e) => write!(f, "gateway unreachable: {}", e),
             Self::TokenEncoding(e) => write!(f, "gateway token encoding failed: {}", e),
             Self::MissingUserIdentifier => write!(f, "user has neither email nor username"),
+            Self::MissingSceneId => write!(f, "scene rerun requires scene_id"),
         }
     }
 }

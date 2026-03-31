@@ -1,5 +1,6 @@
 use crate::config::database::Database;
 use crate::dto::drama_dto::{
+    DramaChapterSceneAssetsResponse,
     DramaPrivateCharacterRequest, DramaPrivateCharacterResponse, DramaPrivateCharacterUpdateRequest,
     DramaPrivateSceneAssetRequest, DramaPrivateSceneAssetResponse,
     DramaPrivateSceneAssetUpdateRequest, DramaPrivateStyleAssetRequest,
@@ -27,6 +28,12 @@ pub enum ProjectResourcesError {
     },
     ForbiddenCharacterAssociation { invalid_character_ids: Vec<String> },
     ForbiddenStyleAssociation { invalid_style_asset_ids: Vec<String> },
+    Database(String),
+}
+
+#[derive(Debug)]
+pub enum ChapterSceneAssetsError {
+    ForbiddenSceneAssetAssociation { invalid_scene_asset_ids: Vec<String> },
     Database(String),
 }
 
@@ -709,6 +716,23 @@ fn style_asset_owned_by_user(
     })
 }
 
+fn scene_asset_owned_by_user(
+    conn: &mut diesel::PgConnection,
+    user_id: i64,
+    id: &str,
+) -> QueryResult<bool> {
+    diesel::sql_query(
+        "SELECT id, name, category, location_description, time_of_day, mood, reference_image_urls, camera_notes, notes, created_at, updated_at \
+         FROM drama_private_scene_assets \
+         WHERE id = $1 AND user_id = $2",
+    )
+    .bind::<Text, _>(id)
+    .bind::<BigInt, _>(user_id)
+    .get_result::<PrivateSceneAssetRow>(conn)
+    .optional()
+    .map(|row| row.is_some())
+}
+
 fn map_character_row(row: PrivateCharacterRow) -> DramaPrivateCharacterResponse {
     DramaPrivateCharacterResponse {
         id: row.id,
@@ -754,6 +778,114 @@ fn map_style_asset_row(row: PrivateStyleAssetRow) -> DramaPrivateStyleAssetRespo
         notes: row.notes,
         created_at: row.created_at.and_utc().to_rfc3339(),
         updated_at: row.updated_at.and_utc().to_rfc3339(),
+    }
+}
+
+#[derive(Debug, QueryableByName)]
+struct ChapterSceneAssetIdRow {
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    scene_asset_id: String,
+}
+
+impl DramaPrivateAssetsService {
+    pub fn get_chapter_scene_assets(
+        &self,
+        project_id: &str,
+        chapter_id: &str,
+        user_id: i64,
+    ) -> Result<DramaChapterSceneAssetsResponse, ChapterSceneAssetsError> {
+        let conn = &mut self
+            .db
+            .pool
+            .get()
+            .map_err(|e| ChapterSceneAssetsError::Database(format!("db pool: {}", e)))?;
+        let scene_asset_ids = diesel::sql_query(
+            "SELECT scene_asset_id \
+             FROM drama_chapter_scene_asset_links \
+             WHERE project_id = $1 AND chapter_id = $2 AND user_id = $3 \
+             ORDER BY created_at ASC, scene_asset_id ASC",
+        )
+        .bind::<diesel::sql_types::Text, _>(project_id)
+        .bind::<diesel::sql_types::Text, _>(chapter_id)
+        .bind::<diesel::sql_types::BigInt, _>(user_id)
+        .load::<ChapterSceneAssetIdRow>(conn)
+        .map_err(|e| ChapterSceneAssetsError::Database(format!("get chapter scene asset links: {}", e)))?
+        .into_iter()
+        .map(|row| row.scene_asset_id)
+        .collect();
+
+        Ok(DramaChapterSceneAssetsResponse {
+            project_id: project_id.to_string(),
+            chapter_id: chapter_id.to_string(),
+            scene_asset_ids,
+        })
+    }
+
+    pub fn put_chapter_scene_assets(
+        &self,
+        project_id: &str,
+        chapter_id: &str,
+        user_id: i64,
+        scene_asset_ids: &[String],
+    ) -> Result<DramaChapterSceneAssetsResponse, ChapterSceneAssetsError> {
+        let conn = &mut self
+            .db
+            .pool
+            .get()
+            .map_err(|e| ChapterSceneAssetsError::Database(format!("db pool: {}", e)))?;
+        let deduped = dedupe_ids(scene_asset_ids);
+
+        let invalid_scene_asset_ids = deduped
+            .iter()
+            .map(|scene_asset_id| {
+                scene_asset_owned_by_user(conn, user_id, scene_asset_id)
+                    .map(|owned| (scene_asset_id.clone(), owned))
+            })
+            .collect::<QueryResult<Vec<(String, bool)>>>()
+            .map_err(|e| ChapterSceneAssetsError::Database(format!("validate scene asset ownership: {}", e)))?
+            .into_iter()
+            .filter_map(|(scene_asset_id, owned)| (!owned).then_some(scene_asset_id))
+            .collect::<Vec<_>>();
+
+        if !invalid_scene_asset_ids.is_empty() {
+            return Err(ChapterSceneAssetsError::ForbiddenSceneAssetAssociation {
+                invalid_scene_asset_ids,
+            });
+        }
+
+        conn.transaction::<_, diesel::result::Error, _>(|conn| {
+            diesel::sql_query(
+                "DELETE FROM drama_chapter_scene_asset_links \
+                 WHERE project_id = $1 AND chapter_id = $2 AND user_id = $3",
+            )
+            .bind::<diesel::sql_types::Text, _>(project_id)
+            .bind::<diesel::sql_types::Text, _>(chapter_id)
+            .bind::<diesel::sql_types::BigInt, _>(user_id)
+            .execute(conn)?;
+
+            for id in &deduped {
+                diesel::sql_query(
+                    "INSERT INTO drama_chapter_scene_asset_links \
+                     (project_id, chapter_id, user_id, scene_asset_id) \
+                     VALUES ($1, $2, $3, $4) \
+                     ON CONFLICT DO NOTHING",
+                )
+                .bind::<diesel::sql_types::Text, _>(project_id)
+                .bind::<diesel::sql_types::Text, _>(chapter_id)
+                .bind::<diesel::sql_types::BigInt, _>(user_id)
+                .bind::<diesel::sql_types::Text, _>(id)
+                .execute(conn)?;
+            }
+
+            Ok(())
+        })
+        .map_err(|e| ChapterSceneAssetsError::Database(format!("put chapter scene asset links: {}", e)))?;
+
+        Ok(DramaChapterSceneAssetsResponse {
+            project_id: project_id.to_string(),
+            chapter_id: chapter_id.to_string(),
+            scene_asset_ids: deduped,
+        })
     }
 }
 
