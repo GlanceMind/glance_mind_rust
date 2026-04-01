@@ -19,7 +19,7 @@ fn ok_response(data: serde_json::Value) -> impl IntoResponse {
     (
         StatusCode::OK,
         Json(serde_json::json!({
-            "code": 0,
+            "code": 1000,
             "msg": "success",
             "msg_cn": "成功",
             "data": data,
@@ -31,7 +31,7 @@ fn created_response(data: serde_json::Value) -> impl IntoResponse {
     (
         StatusCode::CREATED,
         Json(serde_json::json!({
-            "code": 0,
+            "code": 1000,
             "msg": "success",
             "msg_cn": "成功",
             "data": data,
