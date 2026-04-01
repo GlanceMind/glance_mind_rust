@@ -799,6 +799,264 @@ class TestNovelWorkerClosedLoop:
         assert any(e["stage_code"] == "n03_chapter_prompt" and e["event_type"] == "stage_completed" for e in events)
         assert any(e["stage_code"] == "n04_chapter_draft" and e["event_type"] == "stage_completed" for e in events)
 
+    def _run_architecture_and_blueprint_and_draft(self, auth_client, db_connection):
+        """Helper: create project with profiles, run arch -> bp -> prompt -> draft, return (project_id, snapshot_id)."""
+        project_id, snapshot_id = self._create_project_with_profiles(auth_client)
+        _clear_novel_queue()
+
+        for path in [
+            f"{NOVEL_BASE}/projects/{project_id}/architecture/generate",
+            f"{NOVEL_BASE}/projects/{project_id}/blueprint/generate",
+        ]:
+            resp = auth_client.post(path, json={"config_snapshot_id": snapshot_id})
+            assert resp.status_code == 201
+            row = self._wait_job_status(db_connection, extract_data(resp.json())["job_id"])
+            assert row["status"] == "completed"
+
+        resp = auth_client.post(
+            f"{NOVEL_BASE}/projects/{project_id}/chapters/1/prompt/build",
+            json={
+                "config_snapshot_id": snapshot_id,
+                "user_guidance": "A tense opening.",
+                "characters_involved": "Mira",
+                "key_items": "crystal key",
+                "scene_location": "underground vault",
+                "time_constraint": "midnight",
+            },
+        )
+        assert resp.status_code == 201
+        row = self._wait_job_status(db_connection, extract_data(resp.json())["job_id"])
+        assert row["status"] == "completed"
+
+        prompt = _q1(
+            db_connection,
+            "SELECT id FROM gm_novel_chapter_prompts WHERE project_id = %s AND chapter_number = 1 AND is_current = true ORDER BY id DESC LIMIT 1",
+            (project_id,),
+        )
+        assert prompt is not None
+
+        resp = auth_client.post(
+            f"{NOVEL_BASE}/projects/{project_id}/chapters/1/draft/generate",
+            json={"config_snapshot_id": snapshot_id, "prompt_id": prompt["id"]},
+        )
+        assert resp.status_code == 201
+        row = self._wait_job_status(db_connection, extract_data(resp.json())["job_id"])
+        assert row["status"] == "completed"
+
+        return project_id, snapshot_id
+
+    def test_enrich_chapter_consumed_and_persisted(
+        self, auth_client, db_connection, novel_worker_process
+    ):
+        project_id, snapshot_id = self._run_architecture_and_blueprint_and_draft(auth_client, db_connection)
+
+        chapter_before = _q1(
+            db_connection,
+            "SELECT draft_text, draft_word_count, is_enriched FROM gm_novel_chapters WHERE project_id = %s AND chapter_number = 1",
+            (project_id,),
+        )
+        assert chapter_before is not None
+        assert chapter_before["draft_text"] is not None
+        assert chapter_before["is_enriched"] is False
+
+        resp = auth_client.post(
+            f"{NOVEL_BASE}/projects/{project_id}/chapters/1/enrich",
+            json={"config_snapshot_id": snapshot_id, "target_words": 3000},
+        )
+        assert resp.status_code == 201, f"enrich enqueue failed: {resp.status_code} {resp.text}"
+        job_id = extract_data(resp.json())["job_id"]
+
+        row = self._wait_job_status(db_connection, job_id)
+        assert row["status"] == "completed", f"enrich job did not complete, status={row['status']}"
+
+        chapter_after = _q1(
+            db_connection,
+            "SELECT draft_text, draft_word_count, is_enriched, status FROM gm_novel_chapters WHERE project_id = %s AND chapter_number = 1",
+            (project_id,),
+        )
+        assert chapter_after is not None
+        assert chapter_after["is_enriched"] is True
+        assert chapter_after["status"] == "drafted"
+        assert chapter_after["draft_text"] is not None
+        assert len(chapter_after["draft_text"]) > 0
+        assert chapter_after["draft_word_count"] > 0
+
+        events = _qall(
+            db_connection,
+            "SELECT event_type, stage_code FROM gm_novel_stage_events WHERE project_id = %s ORDER BY sequence",
+            (project_id,),
+        )
+        assert any(e["stage_code"] == "n05_enrich" and e["event_type"] == "stage_completed" for e in events)
+
+    def test_finalize_chapter_consumed_and_persisted(
+        self, auth_client, db_connection, novel_worker_process
+    ):
+        project_id, snapshot_id = self._run_architecture_and_blueprint_and_draft(auth_client, db_connection)
+
+        resp = auth_client.post(
+            f"{NOVEL_BASE}/projects/{project_id}/chapters/1/finalize",
+            json={"config_snapshot_id": snapshot_id, "use_current_draft_text": True},
+        )
+        assert resp.status_code == 201, f"finalize enqueue failed: {resp.status_code} {resp.text}"
+        job_id = extract_data(resp.json())["job_id"]
+
+        row = self._wait_job_status(db_connection, job_id)
+        assert row["status"] == "completed", f"finalize job did not complete, status={row['status']}"
+
+        chapter = _q1(
+            db_connection,
+            "SELECT status, final_text, final_word_count, finalized_at FROM gm_novel_chapters WHERE project_id = %s AND chapter_number = 1",
+            (project_id,),
+        )
+        assert chapter is not None
+        assert chapter["status"] == "finalized"
+        assert chapter["final_text"] is not None
+        assert len(chapter["final_text"]) > 0
+        assert chapter["final_word_count"] > 0
+        assert chapter["finalized_at"] is not None
+
+        events = _qall(
+            db_connection,
+            "SELECT event_type, stage_code FROM gm_novel_stage_events WHERE project_id = %s ORDER BY sequence",
+            (project_id,),
+        )
+        assert any(e["stage_code"] == "n06_finalize" and e["event_type"] == "stage_completed" for e in events)
+
+        stage_runs = _qall(
+            db_connection,
+            "SELECT status FROM gm_novel_stage_runs WHERE job_id = %s ORDER BY id",
+            (job_id,),
+        )
+        assert stage_runs
+        assert stage_runs[-1]["status"] == "completed"
+
+    def test_consistency_check_consumed_and_persisted(
+        self, auth_client, db_connection, novel_worker_process
+    ):
+        project_id, snapshot_id = self._run_architecture_and_blueprint_and_draft(auth_client, db_connection)
+
+        resp = auth_client.post(
+            f"{NOVEL_BASE}/projects/{project_id}/chapters/1/consistency-checks",
+            json={"config_snapshot_id": snapshot_id},
+        )
+        assert resp.status_code == 201, f"consistency check enqueue failed: {resp.status_code} {resp.text}"
+        job_id = extract_data(resp.json())["job_id"]
+
+        row = self._wait_job_status(db_connection, job_id)
+        assert row["status"] == "completed", f"consistency check did not complete, status={row['status']}"
+
+        check = _q1(
+            db_connection,
+            "SELECT * FROM gm_novel_consistency_checks WHERE project_id = %s AND chapter_number = 1 ORDER BY id DESC LIMIT 1",
+            (project_id,),
+        )
+        assert check is not None
+        assert check["status"] == "completed"
+        assert check["result_text"] is not None
+        assert len(check["result_text"]) > 0
+        assert check["chapter_text"] is not None
+        assert len(check["chapter_text"]) > 0
+        assert check["novel_setting_text"] is not None
+        assert check["chapter_number"] == 1
+
+        chapter = _q1(
+            db_connection,
+            "SELECT consistency_status FROM gm_novel_chapters WHERE project_id = %s AND chapter_number = 1",
+            (project_id,),
+        )
+        assert chapter is not None
+        assert chapter["consistency_status"] == "checked"
+
+        events = _qall(
+            db_connection,
+            "SELECT event_type, stage_code FROM gm_novel_stage_events WHERE project_id = %s ORDER BY sequence",
+            (project_id,),
+        )
+        assert any(e["stage_code"] == "n08_consistency" and e["event_type"] == "stage_completed" for e in events)
+
+    def test_clear_memory_consumed_and_persisted(
+        self, auth_client, db_connection, novel_worker_process
+    ):
+        project_id, snapshot_id = self._create_project_with_profiles(auth_client)
+        _clear_novel_queue()
+
+        resp = auth_client.post(
+            f"{NOVEL_BASE}/projects/{project_id}/memory/clear",
+            json={},
+        )
+        assert resp.status_code == 201, f"clear memory enqueue failed: {resp.status_code} {resp.text}"
+        job_id = extract_data(resp.json())["job_id"]
+
+        row = self._wait_job_status(db_connection, job_id)
+        assert row["status"] == "completed", f"clear memory did not complete, status={row['status']}"
+
+        ops = _qall(
+            db_connection,
+            "SELECT operation_type, status FROM hb_novel_vector_operations WHERE project_id = %s ORDER BY id DESC",
+            (project_id,),
+        )
+        assert any(op["operation_type"] == "clear" and op["status"] == "completed" for op in ops)
+
+        events = _qall(
+            db_connection,
+            "SELECT event_type, stage_code FROM gm_novel_stage_events WHERE project_id = %s ORDER BY sequence",
+            (project_id,),
+        )
+        assert any(e["stage_code"] == "n09_memory" and e["event_type"] == "stage_completed" for e in events)
+
+    def test_enrich_then_finalize_full_chain(
+        self, auth_client, db_connection, novel_worker_process
+    ):
+        """Full chain: arch -> bp -> prompt -> draft -> enrich -> finalize, verifying all artifacts."""
+        project_id, snapshot_id = self._run_architecture_and_blueprint_and_draft(auth_client, db_connection)
+
+        resp = auth_client.post(
+            f"{NOVEL_BASE}/projects/{project_id}/chapters/1/enrich",
+            json={"config_snapshot_id": snapshot_id, "target_words": 2000},
+        )
+        assert resp.status_code == 201
+        row = self._wait_job_status(db_connection, extract_data(resp.json())["job_id"])
+        assert row["status"] == "completed"
+
+        enriched = _q1(
+            db_connection,
+            "SELECT draft_text, is_enriched FROM gm_novel_chapters WHERE project_id = %s AND chapter_number = 1",
+            (project_id,),
+        )
+        assert enriched["is_enriched"] is True
+
+        resp = auth_client.post(
+            f"{NOVEL_BASE}/projects/{project_id}/chapters/1/finalize",
+            json={"config_snapshot_id": snapshot_id, "use_current_draft_text": True},
+        )
+        assert resp.status_code == 201
+        row = self._wait_job_status(db_connection, extract_data(resp.json())["job_id"])
+        assert row["status"] == "completed"
+
+        final_chapter = _q1(
+            db_connection,
+            "SELECT status, final_text, final_word_count, finalized_at FROM gm_novel_chapters WHERE project_id = %s AND chapter_number = 1",
+            (project_id,),
+        )
+        assert final_chapter["status"] == "finalized"
+        assert final_chapter["final_text"] is not None
+        assert len(final_chapter["final_text"]) > 0
+        assert final_chapter["final_word_count"] > 0
+        assert final_chapter["finalized_at"] is not None
+
+        jobs = _qall(
+            db_connection,
+            "SELECT stage_code, task_type, status FROM gm_novel_jobs WHERE project_id = %s ORDER BY id",
+            (project_id,),
+        )
+        task_types_completed = [j["task_type"] for j in jobs if j["status"] == "completed"]
+        assert "generate_architecture" in task_types_completed
+        assert "generate_blueprint" in task_types_completed
+        assert "build_chapter_prompt" in task_types_completed
+        assert "generate_chapter_draft" in task_types_completed
+        assert "enrich_chapter" in task_types_completed or "enrich_chapter_text" in task_types_completed
+        assert "finalize_chapter" in task_types_completed
+
     def test_list_jobs_initially_empty(self, auth_client):
         project_id = _create_project(auth_client)
         resp = auth_client.get(f"{NOVEL_BASE}/projects/{project_id}/jobs")
