@@ -361,29 +361,23 @@ impl NovelService {
             .map_err(|e| e.to_string())?;
 
         if let Some(row) = existing {
-            if row.deleted_at.is_some() {
-                return diesel::update(
-                    gm_novel_llm_profiles::table.filter(gm_novel_llm_profiles::id.eq(row.id)),
-                )
-                .set((
-                    gm_novel_llm_profiles::interface_format.eq(&req.interface_format),
-                    gm_novel_llm_profiles::base_url.eq(&req.base_url),
-                    gm_novel_llm_profiles::api_key.eq(&req.api_key),
-                    gm_novel_llm_profiles::model_name.eq(&req.model_name),
-                    gm_novel_llm_profiles::temperature.eq(req.temperature),
-                    gm_novel_llm_profiles::max_tokens.eq(req.max_tokens),
-                    gm_novel_llm_profiles::timeout_seconds.eq(req.timeout_seconds),
-                    gm_novel_llm_profiles::is_active.eq(true),
-                    gm_novel_llm_profiles::deleted_at.eq(None::<DateTime<Utc>>),
-                    gm_novel_llm_profiles::updated_at.eq(Utc::now()),
-                ))
-                .get_result::<NovelLlmProfile>(&mut conn)
-                .map_err(|e| e.to_string());
-            }
-            return Err(format!(
-                "LLM profile with name '{}' already exists",
-                req.name
-            ));
+            return diesel::update(
+                gm_novel_llm_profiles::table.filter(gm_novel_llm_profiles::id.eq(row.id)),
+            )
+            .set((
+                gm_novel_llm_profiles::interface_format.eq(&req.interface_format),
+                gm_novel_llm_profiles::base_url.eq(&req.base_url),
+                gm_novel_llm_profiles::api_key.eq(&req.api_key),
+                gm_novel_llm_profiles::model_name.eq(&req.model_name),
+                gm_novel_llm_profiles::temperature.eq(req.temperature),
+                gm_novel_llm_profiles::max_tokens.eq(req.max_tokens),
+                gm_novel_llm_profiles::timeout_seconds.eq(req.timeout_seconds),
+                gm_novel_llm_profiles::is_active.eq(true),
+                gm_novel_llm_profiles::deleted_at.eq(None::<DateTime<Utc>>),
+                gm_novel_llm_profiles::updated_at.eq(Utc::now()),
+            ))
+            .get_result::<NovelLlmProfile>(&mut conn)
+            .map_err(|e| e.to_string());
         }
 
         let new = NewNovelLlmProfile {
@@ -502,6 +496,33 @@ impl NovelService {
         req: &NovelEmbeddingProfileCreateRequest,
     ) -> Result<NovelEmbeddingProfile, String> {
         let mut conn = self.pool.get().map_err(|e| e.to_string())?;
+
+        let existing = gm_novel_embedding_profiles::table
+            .filter(gm_novel_embedding_profiles::user_id.eq(user_id))
+            .filter(gm_novel_embedding_profiles::name.eq(&req.name))
+            .first::<NovelEmbeddingProfile>(&mut conn)
+            .optional()
+            .map_err(|e| e.to_string())?;
+
+        if let Some(row) = existing {
+            return diesel::update(
+                gm_novel_embedding_profiles::table
+                    .filter(gm_novel_embedding_profiles::id.eq(row.id)),
+            )
+            .set((
+                gm_novel_embedding_profiles::interface_format.eq(&req.interface_format),
+                gm_novel_embedding_profiles::base_url.eq(&req.base_url),
+                gm_novel_embedding_profiles::api_key.eq(&req.api_key),
+                gm_novel_embedding_profiles::model_name.eq(&req.model_name),
+                gm_novel_embedding_profiles::retrieval_k.eq(req.retrieval_k),
+                gm_novel_embedding_profiles::is_active.eq(true),
+                gm_novel_embedding_profiles::deleted_at.eq(None::<DateTime<Utc>>),
+                gm_novel_embedding_profiles::updated_at.eq(Utc::now()),
+            ))
+            .get_result::<NovelEmbeddingProfile>(&mut conn)
+            .map_err(|e| e.to_string());
+        }
+
         let new = NewNovelEmbeddingProfile {
             user_id,
             name: req.name.clone(),

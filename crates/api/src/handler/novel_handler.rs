@@ -296,9 +296,6 @@ pub async fn create_llm_profile(
         Ok(profile) => {
             created_response(serde_json::to_value(&profile).unwrap_or_default()).into_response()
         }
-        Err(e) if e.contains("already exists") => {
-            err_response(StatusCode::CONFLICT, &e).into_response()
-        }
         Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
     }
 }
@@ -423,9 +420,6 @@ pub async fn create_embedding_profile(
     match service.create_embedding_profile(user.id, &req) {
         Ok(profile) => {
             created_response(serde_json::to_value(&profile).unwrap_or_default()).into_response()
-        }
-        Err(e) if e.contains("already exists") => {
-            err_response(StatusCode::CONFLICT, &e).into_response()
         }
         Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
     }
