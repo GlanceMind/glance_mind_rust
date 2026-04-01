@@ -353,6 +353,21 @@ impl NovelService {
     ) -> Result<NovelLlmProfile, String> {
         let mut conn = self.pool.get().map_err(|e| e.to_string())?;
 
+        let base_url = if req.base_url.trim().is_empty() {
+            std::env::var("LAOZHANG_BASE_URL")
+                .or_else(|_| std::env::var("OPENAI_BASE_URL"))
+                .unwrap_or_default()
+        } else {
+            req.base_url.clone()
+        };
+        let api_key = if req.api_key.trim().is_empty() {
+            std::env::var("LAOZHANG_API_KEY")
+                .or_else(|_| std::env::var("OPENAI_API_KEY"))
+                .unwrap_or_default()
+        } else {
+            req.api_key.clone()
+        };
+
         let existing = gm_novel_llm_profiles::table
             .filter(gm_novel_llm_profiles::user_id.eq(user_id))
             .filter(gm_novel_llm_profiles::name.eq(&req.name))
@@ -366,8 +381,8 @@ impl NovelService {
             )
             .set((
                 gm_novel_llm_profiles::interface_format.eq(&req.interface_format),
-                gm_novel_llm_profiles::base_url.eq(&req.base_url),
-                gm_novel_llm_profiles::api_key.eq(&req.api_key),
+                gm_novel_llm_profiles::base_url.eq(&base_url),
+                gm_novel_llm_profiles::api_key.eq(&api_key),
                 gm_novel_llm_profiles::model_name.eq(&req.model_name),
                 gm_novel_llm_profiles::temperature.eq(req.temperature),
                 gm_novel_llm_profiles::max_tokens.eq(req.max_tokens),
@@ -384,8 +399,8 @@ impl NovelService {
             user_id,
             name: req.name.clone(),
             interface_format: req.interface_format.clone(),
-            base_url: req.base_url.clone(),
-            api_key: req.api_key.clone(),
+            base_url,
+            api_key,
             model_name: req.model_name.clone(),
             temperature: req.temperature,
             max_tokens: req.max_tokens,
