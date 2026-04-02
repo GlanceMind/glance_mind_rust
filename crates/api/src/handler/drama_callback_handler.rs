@@ -255,9 +255,12 @@ mod tests {
     #[test]
     fn parse_event_all_event_types() {
         let event_types = [
-            "run_started", "run_completed", "run_failed", "run_cancelled",
+            "run_started", "run_completed", "run_completed_with_fallback",
+            "run_failed", "run_cancelled",
             "stage_entered", "stage_completed",
-            "clarification_required", "strategy_package_ready",
+            "clarification_required", "clarification_resolved",
+            "strategy_package_ready", "script_package_ready",
+            "render_progress_recorded",
             "cost_recorded", "fallback_recorded", "artifact_uploaded",
         ];
         for et in &event_types {

@@ -88,6 +88,18 @@ pub struct CostLedgerRow {
 }
 
 #[derive(Debug, QueryableByName)]
+pub struct RenderEventRow {
+    #[diesel(sql_type = Text)]
+    pub event_id: String,
+    #[diesel(sql_type = BigInt)]
+    pub sequence: i64,
+    #[diesel(sql_type = Jsonb)]
+    pub payload: Value,
+    #[diesel(sql_type = Timestamptz)]
+    pub occurred_at: NaiveDateTime,
+}
+
+#[derive(Debug, QueryableByName)]
 pub struct FallbackEventRow {
     #[diesel(sql_type = Nullable<Text>)]
     pub stage_code: Option<String>,
@@ -227,6 +239,27 @@ impl DramaProjectionService {
                 .bind::<Text, _>(stage)
                 .execute(conn)
                 .map_err(|e| format!("apply canonical stage_entered: {}", e))?;
+            }
+            "stage_completed" => {
+                sync_job_status(conn, event, "completed")?;
+                diesel::sql_query(
+                    "UPDATE gm_drama_project_projections \
+                     SET last_event_sequence = $2, updated_at = NOW() \
+                     WHERE project_id = $1 AND last_event_sequence < $2",
+                )
+                .bind::<Text, _>(&event.project_id)
+                .bind::<BigInt, _>(event.sequence)
+                .execute(conn)
+                .map_err(|e| format!("apply stage_completed: {}", e))?;
+
+                diesel::sql_query(
+                    "UPDATE gm_drama.projects \
+                     SET updated_at = NOW() \
+                     WHERE project_id = $1",
+                )
+                .bind::<Text, _>(&event.project_id)
+                .execute(conn)
+                .map_err(|e| format!("apply canonical stage_completed: {}", e))?;
             }
             "clarification_required" => {
                 sync_job_status(conn, event, "completed")?;
@@ -556,6 +589,36 @@ impl DramaProjectionService {
                 .execute(conn)
                 .map_err(|e| format!("apply canonical run_completed: {}", e))?;
             }
+            "run_completed_with_fallback" => {
+                sync_job_status(conn, event, "completed")?;
+                let msg = event
+                    .payload
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("partial completion with fallback");
+                diesel::sql_query(
+                    "UPDATE gm_drama_project_projections \
+                     SET status = 'completed_with_fallback', error_message = $2, pending_stage = NULL, \
+                         last_event_sequence = $3, completed_at = NOW(), updated_at = NOW() \
+                     WHERE project_id = $1 AND last_event_sequence < $3",
+                )
+                .bind::<Text, _>(&event.project_id)
+                .bind::<Text, _>(msg)
+                .bind::<BigInt, _>(event.sequence)
+                .execute(conn)
+                .map_err(|e| format!("apply run_completed_with_fallback: {}", e))?;
+
+                diesel::sql_query(
+                    "UPDATE gm_drama.projects \
+                     SET status = 'completed_with_fallback', error_message = $2, pending_stage = NULL, \
+                         completed_at = NOW(), updated_at = NOW() \
+                     WHERE project_id = $1",
+                )
+                .bind::<Text, _>(&event.project_id)
+                .bind::<Text, _>(msg)
+                .execute(conn)
+                .map_err(|e| format!("apply canonical run_completed_with_fallback: {}", e))?;
+            }
             "run_failed" => {
                 sync_job_status(conn, event, "failed")?;
                 let msg = event
@@ -695,6 +758,19 @@ impl DramaProjectionService {
         .bind::<Text, _>(project_id)
         .load::<CostLedgerRow>(conn)
         .map_err(|e| format!("list cost ledger: {}", e))
+    }
+
+    pub fn list_render_events(&self, project_id: &str) -> Result<Vec<RenderEventRow>, String> {
+        let conn = &mut self.db.pool.get().map_err(|e| format!("db pool: {}", e))?;
+        diesel::sql_query(
+            "SELECT event_id, sequence, payload, occurred_at \
+             FROM gm_drama_callback_events \
+             WHERE project_id = $1 AND event_type = 'render_progress_recorded' \
+             ORDER BY sequence ASC",
+        )
+        .bind::<Text, _>(project_id)
+        .load::<RenderEventRow>(conn)
+        .map_err(|e| format!("list render events: {}", e))
     }
 
     pub fn list_fallback_events(&self, project_id: &str) -> Result<Vec<FallbackEventRow>, String> {

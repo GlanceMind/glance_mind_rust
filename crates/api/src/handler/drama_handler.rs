@@ -1207,7 +1207,8 @@ pub async fn clarify(
                     .into_response();
             }
         };
-        if let Err(e) = projection.mark_running(&row.project_id, row.current_stage.as_deref()) {
+        let stage = row.current_stage.as_deref().unwrap_or("s01_strategy");
+        if let Err(e) = projection.mark_running(&row.project_id, Some(stage)) {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": e })),
@@ -1221,13 +1222,19 @@ pub async fn clarify(
             "clarification_resolved": true,
             "source": "direct_worker_mode"
         });
+        let task_type = match stage {
+            "s03_script" => DramaWorkerTaskType::GenerateEpisodeScripts,
+            "s04_visual" => DramaWorkerTaskType::GenerateStoryboards,
+            "s05_render" => DramaWorkerTaskType::GenerateVideos,
+            _ => DramaWorkerTaskType::GenerateOutline,
+        };
         let result = dispatch_followup_task(
             dispatcher,
             &projection,
             &row,
             &row.project_id,
-            DramaWorkerTaskType::GenerateOutline,
-            row.current_stage.as_deref().unwrap_or("s01_strategy"),
+            task_type,
+            stage,
             "resume_after_clarify",
             row.interaction_version as i64,
             payload,
@@ -1563,11 +1570,30 @@ pub async fn get_render(
                     Ok(row) => row,
                     Err(resp) => return resp,
                 };
+
+                let render_tasks: Vec<Value> = projection
+                    .list_render_events(&row.project_id)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|evt| {
+                        let segment_index = evt.payload.get("segment_index").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let total_segments = evt.payload.get("total_segments").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let segment_status = evt.payload.get("segment_status").and_then(|v| v.as_str()).unwrap_or("unknown");
+                        serde_json::json!({
+                            "task_id": format!("render-seg{}", segment_index),
+                            "shot_id": format!("shot-{}", segment_index),
+                            "status": segment_status,
+                            "segment_index": segment_index,
+                            "total_segments": total_segments,
+                        })
+                    })
+                    .collect();
+
                 return gateway_response(
                     200,
                     serde_json::json!({
                         "project_id": row.project_id,
-                        "render_tasks": [],
+                        "render_tasks": render_tasks,
                         "progress_percent": row.progress_percent
                     }),
                 )
