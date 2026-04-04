@@ -1,4 +1,4 @@
-use crate::config::database::Database;
+use crate::config::database::{DBPool, Database};
 use crate::dto::campaign_dto::{
     CampaignCreateDto, CampaignLogDto, CampaignReadDto, CampaignStatus, CampaignUpdateDto,
 };
@@ -9,12 +9,12 @@ use diesel::result::Error as DieselError;
 use glance_mind_db::entity::campaign::{Campaign, NewCampaign};
 use std::sync::Arc;
 
-#[allow(unused_imports)]
 use bigdecimal::BigDecimal;
 
 #[derive(Clone)]
 pub struct CampaignService {
     repo: CampaignRepository,
+    pool: DBPool,
     #[allow(dead_code)]
     wallet_repo: WalletRepository,
 }
@@ -23,6 +23,7 @@ impl CampaignService {
     pub fn new(db: &Arc<Database>) -> Self {
         Self {
             repo: CampaignRepository::new(db.pool.clone()),
+            pool: db.pool.clone(),
             wallet_repo: WalletRepository::new(db.pool.clone()),
         }
     }
@@ -32,6 +33,27 @@ impl CampaignService {
         user_id: i32,
         dto: CampaignCreateDto,
     ) -> Result<CampaignReadDto, ApiError> {
+        // Validate max_scan_count
+        let scan_count = dto.max_scan_count.unwrap_or(0);
+        if scan_count <= 0 {
+            return Err(ApiError::BadRequest(
+                "max_scan_count must be greater than 0 / 最大扫描数量必须大于 0".to_string(),
+            ));
+        }
+
+        // Validate budget_cap against minimum cost using DB stored procedure
+        if let Some(ref cap) = dto.budget_cap {
+            let min_cost = self
+                .calculate_min_cost(dto.platform_id, scan_count, dto.ai_model_id)
+                .await?;
+            if cap < &min_cost {
+                return Err(ApiError::BadRequest(format!(
+                    "Budget too low: minimum {} points required / 预算不足：最低需要 {} 积分",
+                    min_cost, min_cost
+                )));
+            }
+        }
+
         // Create campaign in DRAFT status (budget not frozen yet)
         let new_campaign = NewCampaign {
             user_id,
@@ -390,4 +412,44 @@ impl CampaignService {
             search_options: campaign.search_options,
         }
     }
+
+    async fn calculate_min_cost(
+        &self,
+        platform_id: i32,
+        scan_count: i32,
+        ai_model_id: i32,
+    ) -> Result<BigDecimal, ApiError> {
+        use diesel::prelude::*;
+
+        let model_id_sql = if ai_model_id > 0 {
+            ai_model_id.to_string()
+        } else {
+            "NULL".to_string()
+        };
+
+        let query = format!(
+            "SELECT calculate_min_campaign_cost({}, {}, {})",
+            platform_id, scan_count, model_id_sql
+        );
+
+        let mut conn = self.pool.get().map_err(|e| {
+            ApiError::InternalServerError(format!("DB pool error: {}", e))
+        })?;
+
+        let result: BigDecimal = diesel::sql_query(&query)
+            .get_result::<MinCostRow>(&mut conn)
+            .map_err(|e| {
+                tracing::warn!("calculate_min_campaign_cost failed: {}, using fallback", e);
+                ApiError::InternalServerError(format!("Cost calculation failed: {}", e))
+            })
+            .map(|row| row.calculate_min_campaign_cost)?;
+
+        Ok(result)
+    }
+}
+
+#[derive(diesel::QueryableByName)]
+struct MinCostRow {
+    #[diesel(sql_type = diesel::sql_types::Numeric)]
+    calculate_min_campaign_cost: BigDecimal,
 }
