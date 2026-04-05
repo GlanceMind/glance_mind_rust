@@ -35,14 +35,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
       - name: Check for db migration changes
         id: check
         run: |
-          if git diff --name-only HEAD~1 HEAD | grep -q "^crates/db/migrations/"; then
+          # Compare all commits in this push, not just HEAD~1
+          BEFORE="${{ github.event.before }}"
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            # First push or force push — check HEAD~1 as fallback
+            BEFORE="HEAD~1"
+          fi
+          if git diff --name-only "$BEFORE" HEAD | grep -q "^crates/db/migrations/"; then
             echo "db_changed=true" >> $GITHUB_OUTPUT
+            echo "Migration files changed between $BEFORE and HEAD"
           else
             echo "db_changed=false" >> $GITHUB_OUTPUT
+            echo "No migration file changes between $BEFORE and HEAD"
           fi
 
   migrations:
