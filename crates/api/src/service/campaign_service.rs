@@ -415,36 +415,40 @@ impl CampaignService {
 
     async fn calculate_min_cost(
         &self,
-        platform_id: i32,
+        _platform_id: i32,
         scan_count: i32,
-        ai_model_id: i32,
+        _ai_model_id: i32,
     ) -> Result<BigDecimal, ApiError> {
         use diesel::prelude::*;
 
-        let model_id_sql = if ai_model_id > 0 {
-            ai_model_id.to_string()
+        let model_id_sql = if _ai_model_id > 0 {
+            _ai_model_id.to_string()
         } else {
             "NULL".to_string()
         };
 
         let query = format!(
             "SELECT calculate_min_campaign_cost({}, {}, {})",
-            platform_id, scan_count, model_id_sql
+            _platform_id, scan_count, model_id_sql
         );
 
         let mut conn = self.pool.get().map_err(|e| {
             ApiError::InternalServerError(format!("DB pool error: {}", e))
         })?;
 
-        let result: BigDecimal = diesel::sql_query(&query)
-            .get_result::<MinCostRow>(&mut conn)
-            .map_err(|e| {
-                tracing::warn!("calculate_min_campaign_cost failed: {}, using fallback", e);
-                ApiError::InternalServerError(format!("Cost calculation failed: {}", e))
-            })
-            .map(|row| row.calculate_min_campaign_cost)?;
-
-        Ok(result)
+        match diesel::sql_query(&query).get_result::<MinCostRow>(&mut conn) {
+            Ok(row) => Ok(row.calculate_min_campaign_cost),
+            Err(e) => {
+                tracing::warn!(
+                    "calculate_min_campaign_cost DB function unavailable: {}, using fallback formula",
+                    e
+                );
+                let scan_cost = BigDecimal::from(5);
+                let ai_cost = BigDecimal::from(2);
+                let effective_scans = BigDecimal::from(std::cmp::max(scan_count, 1));
+                Ok((scan_cost + ai_cost) * effective_scans)
+            }
+        }
     }
 }
 
