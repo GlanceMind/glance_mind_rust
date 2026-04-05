@@ -363,3 +363,29 @@ pub struct PlanStatsDto {
     pub completed: i64,
     pub failed: i64,
 }
+
+// =============================================================================
+// Cost Estimate DTOs
+// =============================================================================
+
+/// Estimate plan cost request
+#[derive(Debug, Deserialize, Validate)]
+pub struct EstimatePlanCostDto {
+    pub chat_model_id: Option<i32>,
+    pub video_model_id: Option<i32>,
+    pub image_model_id: Option<i32>,
+    #[validate(range(min = 1, max = 10000))]
+    pub account_count: Option<i32>,
+}
+
+/// Estimate plan cost response
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanCostEstimateDto {
+    pub chat_unit_cost: BigDecimal,
+    pub video_unit_cost: BigDecimal,
+    pub image_unit_cost: BigDecimal,
+    pub per_account_cost: BigDecimal,
+    pub account_count: i32,
+    pub total_cost: BigDecimal,
+    pub pricing_snapshot: Option<JsonValue>,
+}

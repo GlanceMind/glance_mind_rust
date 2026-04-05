@@ -870,6 +870,35 @@ impl AipubService {
         Ok(result)
     }
 
+    /// Estimate plan cost without creating a plan (pre-submit preview)
+    pub async fn estimate_plan_cost(
+        &self,
+        dto: EstimatePlanCostDto,
+    ) -> Result<PlanCostEstimateDto, ApiError> {
+        let account_count = dto.account_count.unwrap_or(1).max(1);
+
+        let row = self
+            .repo
+            .estimate_plan_cost(
+                dto.chat_model_id,
+                dto.video_model_id,
+                dto.image_model_id,
+                account_count,
+            )
+            .await
+            .map_err(|e| ApiError::from(DbError::SomethingWentWrong(e.to_string())))?;
+
+        Ok(PlanCostEstimateDto {
+            chat_unit_cost: row.chat_unit_cost,
+            video_unit_cost: row.video_unit_cost,
+            image_unit_cost: row.image_unit_cost,
+            per_account_cost: row.per_account_cost,
+            account_count: row.account_count,
+            total_cost: row.total_cost,
+            pricing_snapshot: row.pricing_snapshot,
+        })
+    }
+
     // =========================================================================
     // AI Task Service Methods
     // =========================================================================

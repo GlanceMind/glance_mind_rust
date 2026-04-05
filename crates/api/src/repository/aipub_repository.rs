@@ -638,6 +638,30 @@ impl AipubRepository {
 
         Ok(())
     }
+
+    /// Estimate plan cost without actually freezing budget.
+    /// Calls the stored procedure fn_estimate_aipub_plan_cost.
+    pub async fn estimate_plan_cost(
+        &self,
+        chat_model_id: Option<i32>,
+        video_model_id: Option<i32>,
+        image_model_id: Option<i32>,
+        account_count: i32,
+    ) -> Result<CostEstimateRow, DieselError> {
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|_| DieselError::BrokenTransactionManager)?;
+
+        diesel::sql_query(
+            "SELECT * FROM fn_estimate_aipub_plan_cost($1, $2, $3, $4)",
+        )
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(chat_model_id)
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(video_model_id)
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(image_model_id)
+        .bind::<diesel::sql_types::Integer, _>(account_count)
+        .get_result::<CostEstimateRow>(&mut conn)
+    }
 }
 
 /// Helper struct for reading fn_freeze_budget result
@@ -645,4 +669,23 @@ impl AipubRepository {
 struct FrozenAmountRow {
     #[diesel(sql_type = diesel::sql_types::Numeric)]
     frozen_amount: bigdecimal::BigDecimal,
+}
+
+/// Helper struct for reading fn_estimate_aipub_plan_cost result
+#[derive(diesel::QueryableByName, Debug)]
+pub struct CostEstimateRow {
+    #[diesel(sql_type = diesel::sql_types::Numeric)]
+    pub chat_unit_cost: bigdecimal::BigDecimal,
+    #[diesel(sql_type = diesel::sql_types::Numeric)]
+    pub video_unit_cost: bigdecimal::BigDecimal,
+    #[diesel(sql_type = diesel::sql_types::Numeric)]
+    pub image_unit_cost: bigdecimal::BigDecimal,
+    #[diesel(sql_type = diesel::sql_types::Numeric)]
+    pub per_account_cost: bigdecimal::BigDecimal,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    pub account_count: i32,
+    #[diesel(sql_type = diesel::sql_types::Numeric)]
+    pub total_cost: bigdecimal::BigDecimal,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Jsonb>)]
+    pub pricing_snapshot: Option<serde_json::Value>,
 }

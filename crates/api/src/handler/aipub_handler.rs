@@ -137,6 +137,16 @@ pub async fn get_plan_stats(
     Ok(api_ok!(result))
 }
 
+/// POST /publish_plans/estimate - Estimate plan cost before creation
+pub async fn estimate_plan_cost(
+    State(state): State<UserState>,
+    Extension(_user): Extension<User>,
+    ValidatedRequest(payload): ValidatedRequest<EstimatePlanCostDto>,
+) -> Result<impl IntoResponse, ApiError> {
+    let result = state.aipub_service.estimate_plan_cost(payload).await?;
+    Ok(api_ok!(result))
+}
+
 // =============================================================================
 // Internal AI Task Handlers (for Scheduler)
 // =============================================================================
