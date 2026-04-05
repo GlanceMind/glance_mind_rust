@@ -24,11 +24,13 @@ BEGIN
         v_scan_cost := 5;
     END IF;
 
-    -- Get AI_ANALYZE base cost (per comment analyzed)
+    -- Get AI_ANALYZE base cost for this platform
     SELECT COALESCE(cost_points, 2)
     INTO v_ai_cost
     FROM gm_pricing_rules
     WHERE action_type = 'AI_ANALYZE'
+      AND (platform_id = p_platform_id OR platform_id IS NULL)
+    ORDER BY platform_id DESC NULLS LAST
     LIMIT 1;
 
     IF v_ai_cost IS NULL THEN
