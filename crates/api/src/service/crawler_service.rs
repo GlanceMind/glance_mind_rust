@@ -56,10 +56,9 @@ impl CrawlerService {
                 DieselError::NotFound => {
                     ApiError::NotFound(format!("Crawler task {} not found", task_id))
                 }
-                _ => ApiError::InternalServerError(format!(
-                    "Failed to fetch crawler results: {}",
-                    e
-                )),
+                _ => {
+                    ApiError::InternalServerError(format!("Failed to fetch crawler results: {}", e))
+                }
             })?;
 
         Ok(crate::dto::common::PageResponse::new(

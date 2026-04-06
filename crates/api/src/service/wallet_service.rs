@@ -211,10 +211,11 @@ impl WalletService {
             .ok_or_else(|| ApiError::InternalServerError("API_BASE_URL is not configured".into()))
     }
 
+    #[allow(clippy::cmp_owned)]
     fn validate_amount_string(raw: &str) -> Result<BigDecimal, ApiError> {
         let amount = BigDecimal::from_str(raw)
             .map_err(|_| ApiError::BadRequest("Invalid amount format".into()))?;
-        if amount <= BigDecimal::from(0) {
+        if amount <= BigDecimal::from(0_i32) {
             return Err(ApiError::BadRequest("Amount must be positive".into()));
         }
         let trimmed = raw.trim();

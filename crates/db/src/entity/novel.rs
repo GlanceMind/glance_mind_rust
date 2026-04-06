@@ -1,11 +1,11 @@
 use crate::schema::{
     gm_novel_architecture_checkpoints, gm_novel_architectures, gm_novel_blueprint_chapters,
     gm_novel_blueprints, gm_novel_chapter_prompts, gm_novel_chapters,
-    gm_novel_character_state_snapshots, gm_novel_consistency_checks,
-    gm_novel_embedding_profiles, gm_novel_global_summary_snapshots, gm_novel_jobs,
-    gm_novel_knowledge_chunks, gm_novel_knowledge_imports, gm_novel_llm_profiles,
-    gm_novel_memory_chunks, gm_novel_plot_arc_snapshots, gm_novel_project_config_snapshots,
-    gm_novel_projects, gm_novel_stage_events, gm_novel_stage_runs,
+    gm_novel_character_state_snapshots, gm_novel_consistency_checks, gm_novel_embedding_profiles,
+    gm_novel_global_summary_snapshots, gm_novel_jobs, gm_novel_knowledge_chunks,
+    gm_novel_knowledge_imports, gm_novel_llm_profiles, gm_novel_memory_chunks,
+    gm_novel_plot_arc_snapshots, gm_novel_project_config_snapshots, gm_novel_projects,
+    gm_novel_stage_events, gm_novel_stage_runs,
 };
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;

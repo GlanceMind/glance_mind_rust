@@ -620,7 +620,7 @@ mod tests {
             movement_amplitude: None,
         };
         assert_eq!(params.model, "vidu2.0");
-        let images = vec!["vidu://start".to_string(), "vidu://end".to_string()];
+        let images = ["vidu://start".to_string(), "vidu://end".to_string()];
         assert_eq!(images.len(), 2);
     }
 
@@ -628,7 +628,7 @@ mod tests {
     fn test_reference_to_video_accepts_1_to_3_images() {
         for count in 1..=3 {
             let images: Vec<String> = (0..count).map(|i| format!("vidu://ref{}", i)).collect();
-            assert!(images.len() >= 1 && images.len() <= 3);
+            assert!(!images.is_empty() && images.len() <= 3);
         }
     }
 

@@ -566,12 +566,12 @@ mod tests {
                 rgb.push(150);
             }
         }
-        let rs = ((w * 3 + 3) / 4) * 4;
+        let rs = (w * 3).div_ceil(4) * 4;
         let ps = rs * h;
         let fs = 54 + ps;
         let mut b = Vec::with_capacity(fs as usize);
         b.extend_from_slice(b"BM");
-        b.extend(&(fs as u32).to_le_bytes());
+        b.extend(&fs.to_le_bytes());
         b.extend(&[0u8; 4]);
         b.extend(&54u32.to_le_bytes());
         b.extend(&40u32.to_le_bytes());
@@ -580,7 +580,7 @@ mod tests {
         b.extend(&1u16.to_le_bytes());
         b.extend(&24u16.to_le_bytes());
         b.extend(&0u32.to_le_bytes());
-        b.extend(&(ps as u32).to_le_bytes());
+        b.extend(&ps.to_le_bytes());
         b.extend(&2835u32.to_le_bytes());
         b.extend(&2835u32.to_le_bytes());
         b.extend(&0u32.to_le_bytes());
@@ -593,7 +593,7 @@ mod tests {
                 b.push(rgb[i + 1]);
                 b.push(rgb[i]);
             }
-            b.extend(std::iter::repeat(0u8).take(pad));
+            b.extend(std::iter::repeat_n(0u8, pad));
         }
         b
     }
@@ -922,15 +922,24 @@ mod tests {
             .await
             .expect("Pro I2V submit should succeed");
 
-        println!("  submitted: task_id={}, req_key={}", handle.task_id, handle.req_key);
+        println!(
+            "  submitted: task_id={}, req_key={}",
+            handle.task_id, handle.req_key
+        );
         assert_eq!(handle.req_key, "jimeng_ti2v_v30_pro");
 
         let result = poll_done(&client, &handle, 60, 5)
             .await
             .expect("Pro I2V poll should succeed");
 
-        assert!(result.is_done(), "Pro I2V task should complete, got status={}", result.status);
-        let url = result.get_video_url().expect("Pro I2V should have video URL");
+        assert!(
+            result.is_done(),
+            "Pro I2V task should complete, got status={}",
+            result.status
+        );
+        let url = result
+            .get_video_url()
+            .expect("Pro I2V should have video URL");
         println!("  DONE: {}", &url[..url.len().min(80)]);
     }
 
@@ -943,10 +952,15 @@ mod tests {
     async fn test_real_jimeng_pro_i2v_file() {
         let img_path = std::env::var("JIMENG_TEST_IMAGE")
             .unwrap_or_else(|_| "/Users/jacksoom/Desktop/a.png".to_string());
-        let img_bytes = std::fs::read(&img_path)
-            .unwrap_or_else(|e| panic!("Cannot read {}: {}", img_path, e));
+        let img_bytes =
+            std::fs::read(&img_path).unwrap_or_else(|e| panic!("Cannot read {}: {}", img_path, e));
         let img_b64 = JimengClient::encode_image(&img_bytes);
-        println!("\nImage: {} ({} bytes, base64 len={})", img_path, img_bytes.len(), img_b64.len());
+        println!(
+            "\nImage: {} ({} bytes, base64 len={})",
+            img_path,
+            img_bytes.len(),
+            img_b64.len()
+        );
 
         let client = make_client();
 
@@ -961,13 +975,20 @@ mod tests {
             .await
             .expect("Pro I2V submit should succeed");
 
-        println!("  submitted: task_id={}, req_key={}", handle.task_id, handle.req_key);
+        println!(
+            "  submitted: task_id={}, req_key={}",
+            handle.task_id, handle.req_key
+        );
 
         let result = poll_done(&client, &handle, 60, 5)
             .await
             .expect("Pro I2V poll should succeed");
 
-        assert!(result.is_done(), "Pro I2V should complete, got status={}", result.status);
+        assert!(
+            result.is_done(),
+            "Pro I2V should complete, got status={}",
+            result.status
+        );
         let url = result.get_video_url().expect("Should have video URL");
         println!("\n  ✅ VIDEO URL:\n  {}\n", url);
     }
@@ -987,10 +1008,26 @@ mod tests {
             is_i2v: bool,
         }
         let cases = [
-            Case { label: "720P T2V",  resolution: JimengResolution::V30_720p, is_i2v: false },
-            Case { label: "720P I2V",  resolution: JimengResolution::V30_720p, is_i2v: true  },
-            Case { label: "Pro T2V",   resolution: JimengResolution::V30Pro,   is_i2v: false },
-            Case { label: "Pro I2V",   resolution: JimengResolution::V30Pro,   is_i2v: true  },
+            Case {
+                label: "720P T2V",
+                resolution: JimengResolution::V30_720p,
+                is_i2v: false,
+            },
+            Case {
+                label: "720P I2V",
+                resolution: JimengResolution::V30_720p,
+                is_i2v: true,
+            },
+            Case {
+                label: "Pro T2V",
+                resolution: JimengResolution::V30Pro,
+                is_i2v: false,
+            },
+            Case {
+                label: "Pro I2V",
+                resolution: JimengResolution::V30Pro,
+                is_i2v: true,
+            },
         ];
 
         let mut pass = 0usize;
@@ -1000,31 +1037,51 @@ mod tests {
             println!("\n━━━ [{}/{}] {} ━━━", idx + 1, cases.len(), c.label);
 
             let handle_result = if c.is_i2v {
-                client.create_image_to_video(
-                    "让画面中的场景缓缓动起来，微风吹过树叶轻轻摇摆".into(),
-                    img_b64.clone(), 5, c.resolution,
-                ).await
+                client
+                    .create_image_to_video(
+                        "让画面中的场景缓缓动起来，微风吹过树叶轻轻摇摆".into(),
+                        img_b64.clone(),
+                        5,
+                        c.resolution,
+                    )
+                    .await
             } else {
-                client.create_text_to_video(
-                    "春天的樱花树下，花瓣随风飘落，阳光透过树枝洒下斑驳的光影".into(),
-                    "16:9".into(), 5, c.resolution,
-                ).await
+                client
+                    .create_text_to_video(
+                        "春天的樱花树下，花瓣随风飘落，阳光透过树枝洒下斑驳的光影".into(),
+                        "16:9".into(),
+                        5,
+                        c.resolution,
+                    )
+                    .await
             };
 
             match handle_result {
                 Ok(handle) => {
-                    println!("  submitted: task_id={}, req_key={}", handle.task_id, handle.req_key);
+                    println!(
+                        "  submitted: task_id={}, req_key={}",
+                        handle.task_id, handle.req_key
+                    );
                     match poll_done(&client, &handle, 60, 5).await {
                         Ok(r) if r.is_done() => {
                             let url = r.get_video_url().unwrap_or_default();
                             println!("  DONE: {}", &url[..url.len().min(80)]);
                             pass += 1;
                         }
-                        Ok(r) => { println!("  FAIL: status={}", r.status); fail += 1; }
-                        Err(e) => { println!("  FAIL poll: {}", e); fail += 1; }
+                        Ok(r) => {
+                            println!("  FAIL: status={}", r.status);
+                            fail += 1;
+                        }
+                        Err(e) => {
+                            println!("  FAIL poll: {}", e);
+                            fail += 1;
+                        }
                     }
                 }
-                Err(e) => { println!("  FAIL submit: {:?}", e); fail += 1; }
+                Err(e) => {
+                    println!("  FAIL submit: {:?}", e);
+                    fail += 1;
+                }
             }
 
             if idx + 1 < cases.len() {

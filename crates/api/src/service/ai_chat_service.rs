@@ -15,22 +15,84 @@ fn display_hint_for_tool(tool_name: &str) -> Option<&'static str> {
 }
 
 const PRODUCT_HELP_QUERY_CUES: &[&str] = &[
-    "怎么", "如何", "是什么", "什么是", "哪些", "有哪些", "区别", "支持", "配置", "设置",
-    "入口", "在哪", "在哪里", "计费", "收费", "规则", "教程", "帮助", "文档", "guide",
-    "how to", "what is", "which", "difference", "pricing", "billing", "configure", "setup",
-    "docs", "documentation",
+    "怎么",
+    "如何",
+    "是什么",
+    "什么是",
+    "哪些",
+    "有哪些",
+    "区别",
+    "支持",
+    "配置",
+    "设置",
+    "入口",
+    "在哪",
+    "在哪里",
+    "计费",
+    "收费",
+    "规则",
+    "教程",
+    "帮助",
+    "文档",
+    "guide",
+    "how to",
+    "what is",
+    "which",
+    "difference",
+    "pricing",
+    "billing",
+    "configure",
+    "setup",
+    "docs",
+    "documentation",
 ];
 
 const PRODUCT_HELP_TOPICS: &[&str] = &[
-    "glancemind", "回复模板", "template", "人设", "营销活动", "campaign", "发布计划",
-    "publish plan", "计费", "钱包", "dm", "私信群控", "收件箱", "账号分组", "social group",
-    "平台", "platform", "执行器", "executor", "市场洞察", "ai 智能获客", "获客",
+    "glancemind",
+    "回复模板",
+    "template",
+    "人设",
+    "营销活动",
+    "campaign",
+    "发布计划",
+    "publish plan",
+    "计费",
+    "钱包",
+    "dm",
+    "私信群控",
+    "收件箱",
+    "账号分组",
+    "social group",
+    "平台",
+    "platform",
+    "执行器",
+    "executor",
+    "市场洞察",
+    "ai 智能获客",
+    "获客",
 ];
 
 const GENERIC_WRITING_CUES: &[&str] = &[
-    "生成一个", "写一个", "帮我写", "给我一个", "起草", "润色", "改写", "翻译",
-    "write", "generate", "draft", "compose", "reply template", "caption", "文案", "笔记",
-    "评论回复", "示例", "例子", "网红笔记",
+    "生成一个",
+    "写一个",
+    "帮我写",
+    "给我一个",
+    "起草",
+    "润色",
+    "改写",
+    "翻译",
+    "write",
+    "generate",
+    "draft",
+    "compose",
+    "reply template",
+    "caption",
+    "文案",
+    "笔记",
+    "评论回复",
+    "示例",
+    "例子",
+    "网红笔记",
 ];
 
 const DEFAULT_CHAT_MODEL_KEY: &str = "gpt-5.2";
@@ -56,11 +118,15 @@ fn infer_forced_knowledge_query(content: &str) -> Option<String> {
 fn looks_like_product_help_query(lower: &str) -> bool {
     lower.contains('?')
         || lower.contains('？')
-        || PRODUCT_HELP_QUERY_CUES.iter().any(|cue| lower.contains(cue))
+        || PRODUCT_HELP_QUERY_CUES
+            .iter()
+            .any(|cue| lower.contains(cue))
 }
 
 fn contains_product_help_topic(lower: &str) -> bool {
-    PRODUCT_HELP_TOPICS.iter().any(|topic| lower.contains(topic))
+    PRODUCT_HELP_TOPICS
+        .iter()
+        .any(|topic| lower.contains(topic))
 }
 
 fn looks_like_generic_writing_request(lower: &str) -> bool {
@@ -452,6 +518,7 @@ impl AiChatService {
         Ok(attempts)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn send_message(
         &self,
         conv_id: i32,
@@ -679,7 +746,9 @@ impl AiChatService {
                         continue;
                     }
                     Err(err) => {
-                        return Err(ApiError::AiServiceError(friendly_ai_chat_error_message(&err)));
+                        return Err(ApiError::AiServiceError(friendly_ai_chat_error_message(
+                            &err,
+                        )));
                     }
                 }
             }
@@ -687,7 +756,9 @@ impl AiChatService {
             if let Some(model_key) = successful_model_key {
                 active_model_key = Some(model_key);
             } else if let Some(err) = last_retryable_error {
-                return Err(ApiError::AiServiceError(friendly_ai_chat_error_message(&err)));
+                return Err(ApiError::AiServiceError(friendly_ai_chat_error_message(
+                    &err,
+                )));
             }
 
             if let Some(ref tool_calls) = assembled_tool_calls {
@@ -738,19 +809,17 @@ impl AiChatService {
                             }));
                         }
                         let results = futures::future::join_all(handles).await;
-                        for join_result in results {
-                            if let Ok((tc_id, name, tool_result)) = join_result {
-                                self.process_tool_result(
-                                    conv_id,
-                                    user_id,
-                                    &tc_id,
-                                    &name,
-                                    tool_result,
-                                    &tx,
-                                    &mut messages,
-                                )
-                                .await?;
-                            }
+                        for (tc_id, name, tool_result) in results.into_iter().flatten() {
+                            self.process_tool_result(
+                                conv_id,
+                                user_id,
+                                &tc_id,
+                                &name,
+                                tool_result,
+                                &tx,
+                                &mut messages,
+                            )
+                            .await?;
                         }
                     }
 
@@ -854,6 +923,7 @@ impl AiChatService {
     }
 
     /// Process a single tool result: audit, SSE events, plan creation, message persistence
+    #[allow(clippy::too_many_arguments)]
     async fn process_tool_result(
         &self,
         conv_id: i32,
@@ -1203,7 +1273,10 @@ mod tests {
             infer_forced_knowledge_query("DM 私信群控是什么"),
             Some("DM 私信群控是什么".to_string())
         );
-        assert_eq!(infer_forced_knowledge_query("生成一个网红笔记的回复模板"), None);
+        assert_eq!(
+            infer_forced_knowledge_query("生成一个网红笔记的回复模板"),
+            None
+        );
         assert_eq!(infer_forced_knowledge_query("帮我写一段评论回复文案"), None);
     }
 

@@ -1,11 +1,11 @@
 use crate::config::database::Database;
 use crate::dto::drama_dto::{
-    DramaChapterSceneAssetsResponse,
-    DramaPrivateCharacterRequest, DramaPrivateCharacterResponse, DramaPrivateCharacterUpdateRequest,
-    DramaPrivateSceneAssetRequest, DramaPrivateSceneAssetResponse,
-    DramaPrivateSceneAssetUpdateRequest, DramaPrivateStyleAssetRequest,
-    DramaPrivateStyleAssetResponse, DramaPrivateStyleAssetUpdateRequest,
-    DramaProjectResourcesRequest, DramaProjectResourcesResponse,
+    DramaChapterSceneAssetsResponse, DramaPrivateCharacterRequest, DramaPrivateCharacterResponse,
+    DramaPrivateCharacterUpdateRequest, DramaPrivateSceneAssetRequest,
+    DramaPrivateSceneAssetResponse, DramaPrivateSceneAssetUpdateRequest,
+    DramaPrivateStyleAssetRequest, DramaPrivateStyleAssetResponse,
+    DramaPrivateStyleAssetUpdateRequest, DramaProjectResourcesRequest,
+    DramaProjectResourcesResponse,
 };
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
@@ -26,14 +26,20 @@ pub enum ProjectResourcesError {
     PrimaryStyleMustBeIncluded {
         primary_style_asset_id: String,
     },
-    ForbiddenCharacterAssociation { invalid_character_ids: Vec<String> },
-    ForbiddenStyleAssociation { invalid_style_asset_ids: Vec<String> },
+    ForbiddenCharacterAssociation {
+        invalid_character_ids: Vec<String>,
+    },
+    ForbiddenStyleAssociation {
+        invalid_style_asset_ids: Vec<String>,
+    },
     Database(String),
 }
 
 #[derive(Debug)]
 pub enum ChapterSceneAssetsError {
-    ForbiddenSceneAssetAssociation { invalid_scene_asset_ids: Vec<String> },
+    ForbiddenSceneAssetAssociation {
+        invalid_scene_asset_ids: Vec<String>,
+    },
     Database(String),
 }
 
@@ -544,7 +550,9 @@ impl DramaPrivateAssetsService {
                     .map(|owned| (character_id.clone(), owned))
             })
             .collect::<QueryResult<Vec<(String, bool)>>>()
-            .map_err(|e| ProjectResourcesError::Database(format!("validate character ownership: {}", e)))?
+            .map_err(|e| {
+                ProjectResourcesError::Database(format!("validate character ownership: {}", e))
+            })?
             .into_iter()
             .filter_map(|(character_id, owned)| (!owned).then_some(character_id))
             .collect::<Vec<_>>();
@@ -562,7 +570,9 @@ impl DramaPrivateAssetsService {
                     .map(|owned| (style_asset_id.clone(), owned))
             })
             .collect::<QueryResult<Vec<(String, bool)>>>()
-            .map_err(|e| ProjectResourcesError::Database(format!("validate style ownership: {}", e)))?
+            .map_err(|e| {
+                ProjectResourcesError::Database(format!("validate style ownership: {}", e))
+            })?
             .into_iter()
             .filter_map(|(style_asset_id, owned)| (!owned).then_some(style_asset_id))
             .collect::<Vec<_>>();
@@ -809,7 +819,9 @@ impl DramaPrivateAssetsService {
         .bind::<diesel::sql_types::Text, _>(chapter_id)
         .bind::<diesel::sql_types::BigInt, _>(user_id)
         .load::<ChapterSceneAssetIdRow>(conn)
-        .map_err(|e| ChapterSceneAssetsError::Database(format!("get chapter scene asset links: {}", e)))?
+        .map_err(|e| {
+            ChapterSceneAssetsError::Database(format!("get chapter scene asset links: {}", e))
+        })?
         .into_iter()
         .map(|row| row.scene_asset_id)
         .collect();
@@ -842,7 +854,9 @@ impl DramaPrivateAssetsService {
                     .map(|owned| (scene_asset_id.clone(), owned))
             })
             .collect::<QueryResult<Vec<(String, bool)>>>()
-            .map_err(|e| ChapterSceneAssetsError::Database(format!("validate scene asset ownership: {}", e)))?
+            .map_err(|e| {
+                ChapterSceneAssetsError::Database(format!("validate scene asset ownership: {}", e))
+            })?
             .into_iter()
             .filter_map(|(scene_asset_id, owned)| (!owned).then_some(scene_asset_id))
             .collect::<Vec<_>>();
@@ -879,7 +893,9 @@ impl DramaPrivateAssetsService {
 
             Ok(())
         })
-        .map_err(|e| ChapterSceneAssetsError::Database(format!("put chapter scene asset links: {}", e)))?;
+        .map_err(|e| {
+            ChapterSceneAssetsError::Database(format!("put chapter scene asset links: {}", e))
+        })?;
 
         Ok(DramaChapterSceneAssetsResponse {
             project_id: project_id.to_string(),

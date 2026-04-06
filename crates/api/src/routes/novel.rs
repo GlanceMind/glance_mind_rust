@@ -42,7 +42,10 @@ pub fn routes() -> Router<UserState> {
             "/llm-profiles/:id",
             put(novel_handler::update_llm_profile).delete(novel_handler::delete_llm_profile),
         )
-        .route("/llm-profiles/:id/test", post(novel_handler::test_llm_profile))
+        .route(
+            "/llm-profiles/:id/test",
+            post(novel_handler::test_llm_profile),
+        )
         .route(
             "/embedding-profiles",
             get(novel_handler::list_embedding_profiles)
@@ -155,5 +158,8 @@ pub fn routes() -> Router<UserState> {
             get(novel_handler::get_job),
         )
         .route("/projects/:project_id/jobs", get(novel_handler::list_jobs))
-        .route("/projects/:project_id/events", get(novel_handler::list_events))
+        .route(
+            "/projects/:project_id/events",
+            get(novel_handler::list_events),
+        )
 }

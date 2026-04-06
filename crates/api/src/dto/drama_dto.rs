@@ -565,8 +565,7 @@ mod tests {
             created_at: Utc::now(),
         };
 
-        let serialized =
-            serde_json::to_string(&envelope).expect("serialize worker task envelope");
+        let serialized = serde_json::to_string(&envelope).expect("serialize worker task envelope");
         let deserialized: DramaWorkerTaskEnvelope =
             serde_json::from_str(&serialized).expect("deserialize worker task envelope");
 

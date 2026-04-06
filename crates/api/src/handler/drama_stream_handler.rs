@@ -19,9 +19,9 @@ pub async fn stream_project(
     Extension(hub): Extension<DramaStreamHub>,
     Path(project_id): Path<String>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
-    let snapshot = projection.get_projection(&project_id).map_err(|e| {
-        ApiError::InternalServerError(format!("projection read failed: {}", e))
-    })?;
+    let snapshot = projection
+        .get_projection(&project_id)
+        .map_err(|e| ApiError::InternalServerError(format!("projection read failed: {}", e)))?;
 
     if let Some(ref row) = snapshot {
         if row.user_id != user.id {
@@ -85,9 +85,7 @@ pub async fn stream_project(
 
     let sse_stream = ReceiverStream::new(rx_out).map(|event| {
         let data = serde_json::to_string(&event).unwrap_or_default();
-        Ok(Event::default()
-            .event(&event.event_type)
-            .data(data))
+        Ok(Event::default().event(&event.event_type).data(data))
     });
 
     Ok(Sse::new(sse_stream))

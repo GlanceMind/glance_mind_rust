@@ -16,10 +16,10 @@ impl DramaWorkerDispatcher {
     }
 
     pub fn from_env() -> Result<Self, String> {
-        let redis_url =
-            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://host.docker.internal:6379".into());
-        let client =
-            redis::Client::open(redis_url.as_str()).map_err(|e| format!("Redis client create: {e}"))?;
+        let redis_url = std::env::var("REDIS_URL")
+            .unwrap_or_else(|_| "redis://host.docker.internal:6379".into());
+        let client = redis::Client::open(redis_url.as_str())
+            .map_err(|e| format!("Redis client create: {e}"))?;
         Ok(Self::new(client, DramaWorkerTaskEnvelope::QUEUE_KEY))
     }
 
@@ -101,7 +101,10 @@ mod tests {
             created_at: Utc::now(),
         };
 
-        dispatcher.enqueue(&envelope).await.expect("enqueue worker task");
+        dispatcher
+            .enqueue(&envelope)
+            .await
+            .expect("enqueue worker task");
 
         let values: Vec<String> = redis::cmd("LRANGE")
             .arg(DramaWorkerTaskEnvelope::QUEUE_KEY)

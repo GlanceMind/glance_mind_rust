@@ -1,13 +1,13 @@
+use crate::dto::drama_dto::DramaCallbackEvent;
+use crate::service::drama_projection::DramaProjectionService;
+use crate::service::drama_stream_hub::{DramaSseEvent, DramaStreamHub};
 use axum::{
-    body::Bytes,
     body::BoxBody,
+    body::Bytes,
     http::StatusCode,
     response::{IntoResponse, Response},
     Extension, Json,
 };
-use crate::dto::drama_dto::DramaCallbackEvent;
-use crate::service::drama_projection::DramaProjectionService;
-use crate::service::drama_stream_hub::{DramaSseEvent, DramaStreamHub};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
@@ -255,13 +255,21 @@ mod tests {
     #[test]
     fn parse_event_all_event_types() {
         let event_types = [
-            "run_started", "run_completed", "run_completed_with_fallback",
-            "run_failed", "run_cancelled",
-            "stage_entered", "stage_completed",
-            "clarification_required", "clarification_resolved",
-            "strategy_package_ready", "script_package_ready",
+            "run_started",
+            "run_completed",
+            "run_completed_with_fallback",
+            "run_failed",
+            "run_cancelled",
+            "stage_entered",
+            "stage_completed",
+            "clarification_required",
+            "clarification_resolved",
+            "strategy_package_ready",
+            "script_package_ready",
             "render_progress_recorded",
-            "cost_recorded", "fallback_recorded", "artifact_uploaded",
+            "cost_recorded",
+            "fallback_recorded",
+            "artifact_uploaded",
         ];
         for et in &event_types {
             let raw = serde_json::to_vec(&DramaCallbackEvent {

@@ -216,7 +216,7 @@ fn extract_text_from_html(html: &str) -> String {
 }
 
 pub async fn search(query: &str, top_k: usize) -> Vec<SearchResult> {
-    let chunks = DOC_CACHE.get_or_init(|| init_cache()).await;
+    let chunks = DOC_CACHE.get_or_init(init_cache).await;
     if chunks.is_empty() {
         return vec![];
     }

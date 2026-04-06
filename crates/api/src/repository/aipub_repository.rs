@@ -588,6 +588,7 @@ impl AipubRepository {
 
     /// Freeze estimated budget for a plan. Returns frozen amount.
     /// Stored procedure handles: idempotency, row locking, balance validation.
+    #[allow(clippy::too_many_arguments)]
     pub async fn freeze_budget(
         &self,
         user_id: i32,
@@ -653,14 +654,12 @@ impl AipubRepository {
             .get()
             .map_err(|_| DieselError::BrokenTransactionManager)?;
 
-        diesel::sql_query(
-            "SELECT * FROM fn_estimate_aipub_plan_cost($1, $2, $3, $4)",
-        )
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(chat_model_id)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(video_model_id)
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(image_model_id)
-        .bind::<diesel::sql_types::Integer, _>(account_count)
-        .get_result::<CostEstimateRow>(&mut conn)
+        diesel::sql_query("SELECT * FROM fn_estimate_aipub_plan_cost($1, $2, $3, $4)")
+            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(chat_model_id)
+            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(video_model_id)
+            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(image_model_id)
+            .bind::<diesel::sql_types::Integer, _>(account_count)
+            .get_result::<CostEstimateRow>(&mut conn)
     }
 }
 

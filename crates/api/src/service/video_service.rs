@@ -803,7 +803,7 @@ impl VideoService {
             && task
                 .generation_id
                 .as_deref()
-                .map_or(false, |g| g.starts_with("jimeng_"))
+                .is_some_and(|g| g.starts_with("jimeng_"))
     }
 
     fn is_vidu_pending(task: &VideoGenerationTask) -> bool {
@@ -811,7 +811,7 @@ impl VideoService {
             && task
                 .generation_id
                 .as_deref()
-                .map_or(false, |g| g.starts_with("vidu_"))
+                .is_some_and(|g| g.starts_with("vidu_"))
     }
 
     /// Poll Volcengine for a single Jimeng task, update DB if done/failed.

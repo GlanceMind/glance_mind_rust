@@ -12,9 +12,9 @@ use glance_mind_db::entity::platform::Platform;
 use glance_mind_db::schema::{
     gm_agent_comments, gm_agent_facebook_comments, gm_agent_facebook_posts,
     gm_agent_instagram_comments, gm_agent_instagram_posts, gm_agent_reddit_comments,
-    gm_agent_reddit_posts, gm_agent_twitter_comments, gm_agent_twitter_tweets,
-    gm_agent_videos, gm_campaigns, gm_crawler_results as crawler_results,
-    gm_crawler_tasks as crawler_tasks, gm_platforms,
+    gm_agent_reddit_posts, gm_agent_twitter_comments, gm_agent_twitter_tweets, gm_agent_videos,
+    gm_campaigns, gm_crawler_results as crawler_results, gm_crawler_tasks as crawler_tasks,
+    gm_platforms,
 };
 use std::collections::HashMap;
 
@@ -346,10 +346,7 @@ impl CrawlerRepository {
         let counts: Vec<(i32, i64)> = gm_agent_comments::table
             .filter(gm_agent_comments::video_db_id.eq_any(video_db_ids))
             .group_by(gm_agent_comments::video_db_id)
-            .select((
-                gm_agent_comments::video_db_id,
-                diesel::dsl::count_star(),
-            ))
+            .select((gm_agent_comments::video_db_id, diesel::dsl::count_star()))
             .load(conn)?;
 
         Ok(counts.into_iter().collect())
@@ -702,7 +699,10 @@ impl CrawlerRepository {
         let counts: Vec<(i32, i64)> = gm_agent_reddit_comments::table
             .filter(gm_agent_reddit_comments::post_db_id.eq_any(post_db_ids))
             .group_by(gm_agent_reddit_comments::post_db_id)
-            .select((gm_agent_reddit_comments::post_db_id, diesel::dsl::count_star()))
+            .select((
+                gm_agent_reddit_comments::post_db_id,
+                diesel::dsl::count_star(),
+            ))
             .load(conn)?;
 
         Ok(counts.into_iter().collect())

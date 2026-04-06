@@ -59,7 +59,10 @@ impl DramaFacade {
         let resp = self
             .client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", self.gateway_token(user)?))
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.gateway_token(user)?),
+            )
             .header("X-User-Id", user.id.to_string())
             .send()
             .await
@@ -78,7 +81,10 @@ impl DramaFacade {
         let resp = self
             .client
             .delete(&url)
-            .header("Authorization", format!("Bearer {}", self.gateway_token(user)?))
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.gateway_token(user)?),
+            )
             .header("X-User-Id", user.id.to_string())
             .send()
             .await
@@ -104,7 +110,11 @@ impl DramaFacade {
         body: Value,
         user: &User,
     ) -> Result<(u16, Value), FacadeError> {
-        self.post(&format!("/projects/{}/stages/strategy/select", project_id), body, user)
+        self.post(
+            &format!("/projects/{}/stages/strategy/select", project_id),
+            body,
+            user,
+        )
         .await
     }
 
@@ -123,7 +133,8 @@ impl DramaFacade {
         project_id: &str,
         user: &User,
     ) -> Result<(u16, Value), FacadeError> {
-        self.get(&format!("/projects/{}/script", project_id), user).await
+        self.get(&format!("/projects/{}/script", project_id), user)
+            .await
     }
 
     pub async fn get_shots(
@@ -131,7 +142,8 @@ impl DramaFacade {
         project_id: &str,
         user: &User,
     ) -> Result<(u16, Value), FacadeError> {
-        self.get(&format!("/projects/{}/shots", project_id), user).await
+        self.get(&format!("/projects/{}/shots", project_id), user)
+            .await
     }
 
     pub async fn get_render(
@@ -139,7 +151,8 @@ impl DramaFacade {
         project_id: &str,
         user: &User,
     ) -> Result<(u16, Value), FacadeError> {
-        self.get(&format!("/projects/{}/render", project_id), user).await
+        self.get(&format!("/projects/{}/render", project_id), user)
+            .await
     }
 
     pub async fn get_artifacts(
@@ -156,7 +169,8 @@ impl DramaFacade {
         project_id: &str,
         user: &User,
     ) -> Result<(u16, Value), FacadeError> {
-        self.get(&format!("/projects/{}/cost", project_id), user).await
+        self.get(&format!("/projects/{}/cost", project_id), user)
+            .await
     }
 
     pub async fn get_fallbacks(
@@ -164,7 +178,8 @@ impl DramaFacade {
         project_id: &str,
         user: &User,
     ) -> Result<(u16, Value), FacadeError> {
-        self.get(&format!("/projects/{}/fallbacks", project_id), user).await
+        self.get(&format!("/projects/{}/fallbacks", project_id), user)
+            .await
     }
 
     pub async fn post_script_feedback(
@@ -173,7 +188,11 @@ impl DramaFacade {
         body: Value,
         user: &User,
     ) -> Result<(u16, Value), FacadeError> {
-        self.post(&format!("/projects/{}/script/feedback", project_id), body, user)
+        self.post(
+            &format!("/projects/{}/script/feedback", project_id),
+            body,
+            user,
+        )
         .await
     }
 
@@ -238,7 +257,10 @@ impl DramaFacade {
         let resp = self
             .client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", self.gateway_token(user)?))
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.gateway_token(user)?),
+            )
             .header("X-User-Id", user.id.to_string())
             .send()
             .await
@@ -258,7 +280,10 @@ impl DramaFacade {
         let resp = self
             .client
             .post(&url)
-            .header("Authorization", format!("Bearer {}", self.gateway_token(user)?))
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.gateway_token(user)?),
+            )
             .header("X-User-Id", user.id.to_string())
             .json(&body)
             .send()
@@ -267,6 +292,12 @@ impl DramaFacade {
         let status = resp.status().as_u16();
         let body = resp.json::<Value>().await.unwrap_or(Value::Null);
         Ok((status, body))
+    }
+}
+
+impl Default for DramaFacade {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -70,7 +70,7 @@ pub fn build_video_model_capabilities(model: &AiModel) -> VideoModelCapabilities
     }
 }
 
-pub fn preferred_video_model<'a>(models: &'a [AiModel]) -> Option<&'a AiModel> {
+pub fn preferred_video_model(models: &[AiModel]) -> Option<&AiModel> {
     models
         .iter()
         .find(|model| matches!(model.model_key.as_str(), "sora-2" | "sora2"))

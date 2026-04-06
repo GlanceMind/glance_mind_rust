@@ -295,7 +295,7 @@ pub const MAX_CONTEXT_TOKENS: usize = 24000;
 /// Rough token estimate: ~4 chars per token for mixed content (CJK + JSON)
 pub fn estimate_tokens(text: &str) -> usize {
     let char_count = text.chars().count();
-    (char_count + 3) / 4
+    char_count.div_ceil(4)
 }
 
 /// Compress tool results for LLM context to reduce token usage.
@@ -463,9 +463,7 @@ pub fn compress_tool_result(tool_name: &str, result: &Value) -> String {
                 serde_json::to_string(result).unwrap_or_default()
             }
         }
-        "search_knowledge" => {
-            compress_search_knowledge_result(result)
-        }
+        "search_knowledge" => compress_search_knowledge_result(result),
         _ => {
             let full = serde_json::to_string(result).unwrap_or_default();
             truncate_with_suffix(&full, 2000, "...(truncated)")

@@ -133,21 +133,21 @@ impl AipubService {
                         )));
                     }
                     // reddit_link requires link_url
-                    if pt == PlanType::RedditLink {
-                        if reddit_config["link_url"].as_str().unwrap_or("").is_empty() {
-                            return Err(ApiError::BusinessError(BusinessError::InvalidInput(
-                                "reddit_link plan requires reddit_config.link_url".to_string(),
-                            )));
-                        }
+                    if pt == PlanType::RedditLink
+                        && reddit_config["link_url"].as_str().unwrap_or("").is_empty()
+                    {
+                        return Err(ApiError::BusinessError(BusinessError::InvalidInput(
+                            "reddit_link plan requires reddit_config.link_url".to_string(),
+                        )));
                     }
                     // reddit_image requires either image_prompt (AI gen) or uploaded_image_urls
                     if pt == PlanType::RedditImage {
                         let has_image_prompt = reddit_config["image_prompt"]
                             .as_str()
-                            .map_or(false, |s| !s.is_empty());
+                            .is_some_and(|s| !s.is_empty());
                         let has_uploaded = reddit_config["uploaded_image_urls"]
                             .as_array()
-                            .map_or(false, |a| !a.is_empty());
+                            .is_some_and(|a| !a.is_empty());
                         if !has_image_prompt && !has_uploaded {
                             return Err(ApiError::BusinessError(BusinessError::InvalidInput(
                                 "reddit_image plan requires reddit_config.image_prompt or reddit_config.uploaded_image_urls".to_string(),
@@ -202,7 +202,7 @@ impl AipubService {
                         .ai_input
                         .as_ref()
                         .and_then(|ai| ai["reddit_config"]["image_prompt"].as_str())
-                        .map_or(false, |s| !s.is_empty());
+                        .is_some_and(|s| !s.is_empty());
                     if has_ai_image {
                         Some(vec![
                             AiTaskType::ContentGen.as_str().to_string(),
@@ -384,7 +384,7 @@ impl AipubService {
                         .ai_input
                         .as_ref()
                         .and_then(|ai| ai["reddit_config"]["image_prompt"].as_str())
-                        .map_or(false, |s| !s.is_empty());
+                        .is_some_and(|s| !s.is_empty());
                     let image_count = if has_ai_image { n } else { 0 };
                     if n > 0 {
                         Some(

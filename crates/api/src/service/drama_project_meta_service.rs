@@ -34,7 +34,11 @@ impl DramaProjectMetaService {
         Self { db: db.clone() }
     }
 
-    pub fn get(&self, project_id: &str, user_id: i64) -> Result<Option<DramaProjectMetaRow>, String> {
+    pub fn get(
+        &self,
+        project_id: &str,
+        user_id: i64,
+    ) -> Result<Option<DramaProjectMetaRow>, String> {
         let conn = &mut self.db.pool.get().map_err(|e| format!("db pool: {}", e))?;
         diesel::sql_query(
             "SELECT project_id, user_id, characters, style_references, text_materials, visual_settings, created_at, updated_at \

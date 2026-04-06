@@ -10,8 +10,8 @@ use glance_mind_db::entity::user::User;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::dto::drama_dto::*;
 use crate::dto::drama_dto::DramaChapterSceneAssetsRequest;
+use crate::dto::drama_dto::*;
 use crate::dto::oss_dto::UploadImageResponse;
 use crate::error::{api_error::ApiError, business_error::BusinessError};
 use crate::response::api_result::ApiResult;
@@ -312,6 +312,7 @@ async fn dispatch_initial_outline_task(
     Ok((job_id, envelope))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn dispatch_followup_task(
     dispatcher: &DramaWorkerDispatcher,
     projection: &DramaProjectionService,
@@ -330,7 +331,10 @@ async fn dispatch_followup_task(
         project_id,
         Some(stage_code),
         job_type,
-        Some(&format!("{}:{}:v{}", project_id, job_type, interaction_version)),
+        Some(&format!(
+            "{}:{}:v{}",
+            project_id, job_type, interaction_version
+        )),
         &payload,
     )?;
 
@@ -440,7 +444,8 @@ async fn create_project_direct_via_worker(
     }))
 }
 
-fn check_projection_access<'a>(
+#[allow(clippy::result_large_err)]
+fn check_projection_access(
     row: Option<ProjectionRow>,
     user: &User,
 ) -> Result<ProjectionRow, Response<BoxBody>> {
@@ -541,21 +546,9 @@ fn private_assets_service(user_state: &UserState) -> DramaPrivateAssetsService {
 fn project_meta_response_from_row(row: DramaProjectMetaRow) -> DramaProjectMetaResponse {
     DramaProjectMetaResponse {
         project_id: row.project_id,
-        characters: row
-            .characters
-            .as_array()
-            .cloned()
-            .unwrap_or_default(),
-        style_references: row
-            .style_references
-            .as_array()
-            .cloned()
-            .unwrap_or_default(),
-        text_materials: row
-            .text_materials
-            .as_array()
-            .cloned()
-            .unwrap_or_default(),
+        characters: row.characters.as_array().cloned().unwrap_or_default(),
+        style_references: row.style_references.as_array().cloned().unwrap_or_default(),
+        text_materials: row.text_materials.as_array().cloned().unwrap_or_default(),
         visual_settings: if row.visual_settings.is_object() {
             row.visual_settings
         } else {
@@ -719,7 +712,10 @@ pub async fn list_scene_assets(
         ),
         Err(e) => {
             tracing::error!("List private scene assets failed: {}", e);
-            internal_error_response("failed to list private scene assets", "读取私有场景素材列表失败")
+            internal_error_response(
+                "failed to list private scene assets",
+                "读取私有场景素材列表失败",
+            )
         }
     }
 }
@@ -731,13 +727,15 @@ pub async fn create_scene_asset(
 ) -> impl IntoResponse {
     let service = private_assets_service(&user_state);
     match service.create_scene_asset(i64::from(user.id), &req) {
-        Ok(scene_asset) => gateway_response(
-            200,
-            serde_json::to_value(scene_asset).unwrap_or_default(),
-        ),
+        Ok(scene_asset) => {
+            gateway_response(200, serde_json::to_value(scene_asset).unwrap_or_default())
+        }
         Err(e) => {
             tracing::error!("Create private scene asset failed: {}", e);
-            internal_error_response("failed to create private scene asset", "创建私有场景素材失败")
+            internal_error_response(
+                "failed to create private scene asset",
+                "创建私有场景素材失败",
+            )
         }
     }
 }
@@ -756,7 +754,10 @@ pub async fn update_scene_asset(
         Ok(None) => not_found_response("private scene asset not found", "私有场景素材不存在"),
         Err(e) => {
             tracing::error!("Update private scene asset failed: {}", e);
-            internal_error_response("failed to update private scene asset", "更新私有场景素材失败")
+            internal_error_response(
+                "failed to update private scene asset",
+                "更新私有场景素材失败",
+            )
         }
     }
 }
@@ -778,7 +779,10 @@ pub async fn delete_scene_asset(
         Ok(false) => not_found_response("private scene asset not found", "私有场景素材不存在"),
         Err(e) => {
             tracing::error!("Delete private scene asset failed: {}", e);
-            internal_error_response("failed to delete private scene asset", "删除私有场景素材失败")
+            internal_error_response(
+                "failed to delete private scene asset",
+                "删除私有场景素材失败",
+            )
         }
     }
 }
@@ -795,7 +799,10 @@ pub async fn list_style_assets(
         ),
         Err(e) => {
             tracing::error!("List private style assets failed: {}", e);
-            internal_error_response("failed to list private style assets", "读取私有样式素材列表失败")
+            internal_error_response(
+                "failed to list private style assets",
+                "读取私有样式素材列表失败",
+            )
         }
     }
 }
@@ -807,13 +814,15 @@ pub async fn create_style_asset(
 ) -> impl IntoResponse {
     let service = private_assets_service(&user_state);
     match service.create_style_asset(i64::from(user.id), &req) {
-        Ok(style_asset) => gateway_response(
-            200,
-            serde_json::to_value(style_asset).unwrap_or_default(),
-        ),
+        Ok(style_asset) => {
+            gateway_response(200, serde_json::to_value(style_asset).unwrap_or_default())
+        }
         Err(e) => {
             tracing::error!("Create private style asset failed: {}", e);
-            internal_error_response("failed to create private style asset", "创建私有样式素材失败")
+            internal_error_response(
+                "failed to create private style asset",
+                "创建私有样式素材失败",
+            )
         }
     }
 }
@@ -832,7 +841,10 @@ pub async fn update_style_asset(
         Ok(None) => not_found_response("private style asset not found", "私有样式素材不存在"),
         Err(e) => {
             tracing::error!("Update private style asset failed: {}", e);
-            internal_error_response("failed to update private style asset", "更新私有样式素材失败")
+            internal_error_response(
+                "failed to update private style asset",
+                "更新私有样式素材失败",
+            )
         }
     }
 }
@@ -854,7 +866,10 @@ pub async fn delete_style_asset(
         Ok(false) => not_found_response("private style asset not found", "私有样式素材不存在"),
         Err(e) => {
             tracing::error!("Delete private style asset failed: {}", e);
-            internal_error_response("failed to delete private style asset", "删除私有样式素材失败")
+            internal_error_response(
+                "failed to delete private style asset",
+                "删除私有样式素材失败",
+            )
         }
     }
 }
@@ -884,7 +899,10 @@ pub async fn get_project_resources(
         Ok(resources) => gateway_response(200, serde_json::to_value(resources).unwrap_or_default()),
         Err(e) => {
             tracing::error!("Get project resources failed: {}", e);
-            internal_error_response("failed to read drama project resources", "读取短剧项目资源失败")
+            internal_error_response(
+                "failed to read drama project resources",
+                "读取短剧项目资源失败",
+            )
         }
     }
 }
@@ -917,7 +935,9 @@ pub async fn put_project_resources(
             "scene_asset_ids are not supported at project level; bind scenes at chapter level",
             "scene_asset_ids 当前不支持项目级绑定，请在章节工作区完成场景绑定",
         ),
-        Err(ProjectResourcesError::ForbiddenCharacterAssociation { invalid_character_ids }) => (
+        Err(ProjectResourcesError::ForbiddenCharacterAssociation {
+            invalid_character_ids,
+        }) => (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({
                 "code": 403,
@@ -939,7 +959,9 @@ pub async fn put_project_resources(
             })),
         )
             .into_response(),
-        Err(ProjectResourcesError::ForbiddenStyleAssociation { invalid_style_asset_ids }) => (
+        Err(ProjectResourcesError::ForbiddenStyleAssociation {
+            invalid_style_asset_ids,
+        }) => (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({
                 "code": 403,
@@ -951,7 +973,10 @@ pub async fn put_project_resources(
             .into_response(),
         Err(ProjectResourcesError::Database(e)) => {
             tracing::error!("Put project resources failed: {}", e);
-            internal_error_response("failed to save drama project resources", "保存短剧项目资源失败")
+            internal_error_response(
+                "failed to save drama project resources",
+                "保存短剧项目资源失败",
+            )
         }
     }
 }
@@ -976,7 +1001,9 @@ pub async fn get_chapter_scene_assets(
     let service = private_assets_service(&user_state);
     match service.get_chapter_scene_assets(&project_id, &chapter_id, i64::from(user.id)) {
         Ok(result) => gateway_response(200, serde_json::to_value(result).unwrap_or_default()),
-        Err(ChapterSceneAssetsError::ForbiddenSceneAssetAssociation { invalid_scene_asset_ids }) => (
+        Err(ChapterSceneAssetsError::ForbiddenSceneAssetAssociation {
+            invalid_scene_asset_ids,
+        }) => (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({
                 "code": 403,
@@ -988,7 +1015,10 @@ pub async fn get_chapter_scene_assets(
             .into_response(),
         Err(ChapterSceneAssetsError::Database(e)) => {
             tracing::error!("Get chapter scene assets failed: {}", e);
-            internal_error_response("failed to read chapter scene assets", "读取章节场景资产失败")
+            internal_error_response(
+                "failed to read chapter scene assets",
+                "读取章节场景资产失败",
+            )
         }
     }
 }
@@ -1012,9 +1042,16 @@ pub async fn put_chapter_scene_assets(
     }
 
     let service = private_assets_service(&user_state);
-    match service.put_chapter_scene_assets(&project_id, &chapter_id, i64::from(user.id), &req.scene_asset_ids) {
+    match service.put_chapter_scene_assets(
+        &project_id,
+        &chapter_id,
+        i64::from(user.id),
+        &req.scene_asset_ids,
+    ) {
         Ok(result) => gateway_response(200, serde_json::to_value(result).unwrap_or_default()),
-        Err(ChapterSceneAssetsError::ForbiddenSceneAssetAssociation { invalid_scene_asset_ids }) => (
+        Err(ChapterSceneAssetsError::ForbiddenSceneAssetAssociation {
+            invalid_scene_asset_ids,
+        }) => (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({
                 "code": 403,
@@ -1026,7 +1063,10 @@ pub async fn put_chapter_scene_assets(
             .into_response(),
         Err(ChapterSceneAssetsError::Database(e)) => {
             tracing::error!("Put chapter scene assets failed: {}", e);
-            internal_error_response("failed to save chapter scene assets", "保存章节场景资产失败")
+            internal_error_response(
+                "failed to save chapter scene assets",
+                "保存章节场景资产失败",
+            )
         }
     }
 }
@@ -1085,15 +1125,22 @@ pub async fn list_projects(
     Query(query): Query<DramaProjectListQuery>,
 ) -> impl IntoResponse {
     if canonical_reads_enabled() && query.cursor.is_none() {
-        match projection.list_projections(user.id, query.status.as_deref(), query.limit.unwrap_or(20)) {
+        match projection.list_projections(
+            user.id,
+            query.status.as_deref(),
+            query.limit.unwrap_or(20),
+        ) {
             Ok(rows) => {
                 let list: Vec<Value> = rows.iter().map(projection_summary_json).collect();
-                return gateway_response(200, serde_json::json!({
-                    "list": list,
-                    "total": list.len(),
-                    "page": 1,
-                    "page_size": query.limit.unwrap_or(20)
-                }))
+                return gateway_response(
+                    200,
+                    serde_json::json!({
+                        "list": list,
+                        "total": list.len(),
+                        "page": 1,
+                        "page_size": query.limit.unwrap_or(20)
+                    }),
+                )
                 .into_response();
             }
             Err(e) => {
@@ -1550,7 +1597,7 @@ pub async fn get_shots(
             Err(e) => tracing::error!("Projection read failed: {}", e),
         }
     }
-    
+
     match facade.get_shots(&project_id, &user).await {
         Ok((status, body)) => gateway_response(status, body),
         Err(e) => map_facade_err(e).into_response(),
@@ -1576,9 +1623,21 @@ pub async fn get_render(
                     .unwrap_or_default()
                     .into_iter()
                     .map(|evt| {
-                        let segment_index = evt.payload.get("segment_index").and_then(|v| v.as_i64()).unwrap_or(0);
-                        let total_segments = evt.payload.get("total_segments").and_then(|v| v.as_i64()).unwrap_or(0);
-                        let segment_status = evt.payload.get("segment_status").and_then(|v| v.as_str()).unwrap_or("unknown");
+                        let segment_index = evt
+                            .payload
+                            .get("segment_index")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0);
+                        let total_segments = evt
+                            .payload
+                            .get("total_segments")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0);
+                        let segment_status = evt
+                            .payload
+                            .get("segment_status")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
                         serde_json::json!({
                             "task_id": format!("render-seg{}", segment_index),
                             "shot_id": format!("shot-{}", segment_index),
@@ -1607,7 +1666,6 @@ pub async fn get_render(
         Err(e) => map_facade_err(e).into_response(),
     }
 }
-
 
 pub async fn get_artifacts(
     Extension(user): Extension<User>,
@@ -2034,7 +2092,10 @@ mod tests {
             value.pointer("/interaction/type"),
             Some(&json!("strategy_selection"))
         );
-        assert_eq!(value.pointer("/cost_summary/reserve_cents"), Some(&json!(5000)));
+        assert_eq!(
+            value.pointer("/cost_summary/reserve_cents"),
+            Some(&json!(5000))
+        );
     }
 
     #[test]

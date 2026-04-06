@@ -75,14 +75,10 @@ impl LlmClient {
         let base_url =
             env::var("OPENAI_BASE_URL").unwrap_or_else(|_| "https://timicc.com/v1".into());
         let model = env::var("AI_CHAT_MODEL").unwrap_or_else(|_| "gpt-5.2".into());
-        let connect_timeout_secs = parse_env_u64(
-            "AI_CHAT_CONNECT_TIMEOUT_SECS",
-            DEFAULT_CONNECT_TIMEOUT_SECS,
-        );
-        let request_timeout_secs = parse_env_u64(
-            "AI_CHAT_REQUEST_TIMEOUT_SECS",
-            DEFAULT_REQUEST_TIMEOUT_SECS,
-        );
+        let connect_timeout_secs =
+            parse_env_u64("AI_CHAT_CONNECT_TIMEOUT_SECS", DEFAULT_CONNECT_TIMEOUT_SECS);
+        let request_timeout_secs =
+            parse_env_u64("AI_CHAT_REQUEST_TIMEOUT_SECS", DEFAULT_REQUEST_TIMEOUT_SECS);
         let client = Client::builder()
             .connect_timeout(Duration::from_secs(connect_timeout_secs))
             .timeout(Duration::from_secs(request_timeout_secs))
@@ -387,6 +383,12 @@ impl LlmClient {
         } else {
             format!("{}: {}", context, error)
         }
+    }
+}
+
+impl Default for LlmClient {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

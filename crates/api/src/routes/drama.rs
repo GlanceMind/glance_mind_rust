@@ -52,7 +52,8 @@ pub fn routes() -> Router<UserState> {
         )
         .route(
             "/projects/:project_id/chapters/:chapter_id/scene-assets",
-            get(drama_handler::get_chapter_scene_assets).put(drama_handler::put_chapter_scene_assets),
+            get(drama_handler::get_chapter_scene_assets)
+                .put(drama_handler::put_chapter_scene_assets),
         )
         .route("/projects/:id/clarify", post(drama_handler::clarify))
         .route(
@@ -63,10 +64,7 @@ pub fn routes() -> Router<UserState> {
         .route("/projects/:id/script", get(drama_handler::get_script))
         .route("/projects/:id/shots", get(drama_handler::get_shots))
         .route("/projects/:id/render", get(drama_handler::get_render))
-        .route(
-            "/projects/:id/artifacts",
-            get(drama_handler::get_artifacts),
-        )
+        .route("/projects/:id/artifacts", get(drama_handler::get_artifacts))
         .route("/projects/:id/cost", get(drama_handler::get_cost))
         .route("/projects/:id/fallbacks", get(drama_handler::get_fallbacks))
         .route(

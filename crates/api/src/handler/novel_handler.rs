@@ -136,8 +136,9 @@ pub async fn create_project(
     Json(req): Json<NovelProjectCreateRequest>,
 ) -> impl IntoResponse {
     match service.create_project(user.id, &req) {
-        Ok(project) => created_response(serde_json::to_value(&project).unwrap_or_default())
-            .into_response(),
+        Ok(project) => {
+            created_response(serde_json::to_value(&project).unwrap_or_default()).into_response()
+        }
         Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
     }
 }
@@ -234,9 +235,7 @@ pub async fn list_config_snapshots(
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
     match service.list_config_snapshots(&project_id) {
-        Ok(snaps) => {
-            ok_response(serde_json::to_value(&snaps).unwrap_or_default()).into_response()
-        }
+        Ok(snaps) => ok_response(serde_json::to_value(&snaps).unwrap_or_default()).into_response(),
         Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
     }
 }
@@ -589,9 +588,7 @@ pub async fn update_architecture(
     Json(req): Json<NovelArchitectureUpdateRequest>,
 ) -> impl IntoResponse {
     match service.update_architecture(&project_id, &req) {
-        Ok(arch) => {
-            ok_response(serde_json::to_value(&arch).unwrap_or_default()).into_response()
-        }
+        Ok(arch) => ok_response(serde_json::to_value(&arch).unwrap_or_default()).into_response(),
         Err(e) => err_response(StatusCode::NOT_FOUND, &e).into_response(),
     }
 }
@@ -621,9 +618,7 @@ pub async fn update_character_state(
     Json(req): Json<NovelCharacterStateUpdateRequest>,
 ) -> impl IntoResponse {
     match service.update_character_state(&project_id, &req.state_text) {
-        Ok(state) => {
-            ok_response(serde_json::to_value(&state).unwrap_or_default()).into_response()
-        }
+        Ok(state) => ok_response(serde_json::to_value(&state).unwrap_or_default()).into_response(),
         Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
     }
 }
@@ -677,9 +672,7 @@ pub async fn update_plot_arcs(
     Json(req): Json<NovelPlotArcsUpdateRequest>,
 ) -> impl IntoResponse {
     match service.update_plot_arcs(&project_id, &req.plot_arcs_text) {
-        Ok(arcs) => {
-            ok_response(serde_json::to_value(&arcs).unwrap_or_default()).into_response()
-        }
+        Ok(arcs) => ok_response(serde_json::to_value(&arcs).unwrap_or_default()).into_response(),
         Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
     }
 }
@@ -738,9 +731,7 @@ pub async fn get_blueprint(
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
     match service.get_blueprint(&project_id) {
-        Ok(Some(bp)) => {
-            ok_response(serde_json::to_value(&bp).unwrap_or_default()).into_response()
-        }
+        Ok(Some(bp)) => ok_response(serde_json::to_value(&bp).unwrap_or_default()).into_response(),
         Ok(None) => ok_response(serde_json::Value::Null).into_response(),
         Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
     }
@@ -777,9 +768,7 @@ pub async fn get_blueprint_chapter(
     Path((project_id, chapter_number)): Path<(String, i32)>,
 ) -> impl IntoResponse {
     match service.get_blueprint_chapter(&project_id, chapter_number) {
-        Ok(Some(ch)) => {
-            ok_response(serde_json::to_value(&ch).unwrap_or_default()).into_response()
-        }
+        Ok(Some(ch)) => ok_response(serde_json::to_value(&ch).unwrap_or_default()).into_response(),
         Ok(None) => ok_response(serde_json::Value::Null).into_response(),
         Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
     }
@@ -939,9 +928,7 @@ pub async fn get_chapter(
     Path((project_id, chapter_number)): Path<(String, i32)>,
 ) -> impl IntoResponse {
     match service.get_chapter(&project_id, chapter_number) {
-        Ok(Some(ch)) => {
-            ok_response(serde_json::to_value(&ch).unwrap_or_default()).into_response()
-        }
+        Ok(Some(ch)) => ok_response(serde_json::to_value(&ch).unwrap_or_default()).into_response(),
         Ok(None) => ok_response(serde_json::Value::Null).into_response(),
         Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
     }
@@ -1246,7 +1233,8 @@ pub async fn import_knowledge(
     }
 
     let Some(text) = file_content else {
-        return err_response(StatusCode::BAD_REQUEST, "missing multipart field: file").into_response();
+        return err_response(StatusCode::BAD_REQUEST, "missing multipart field: file")
+            .into_response();
     };
     let Some(snapshot_id) = config_snapshot_id else {
         return err_response(
@@ -1382,9 +1370,7 @@ pub async fn list_jobs(
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
     match service.list_jobs(&project_id) {
-        Ok(jobs) => {
-            ok_response(serde_json::to_value(&jobs).unwrap_or_default()).into_response()
-        }
+        Ok(jobs) => ok_response(serde_json::to_value(&jobs).unwrap_or_default()).into_response(),
         Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
     }
 }
@@ -1396,9 +1382,7 @@ pub async fn get_job(
 ) -> impl IntoResponse {
     let job = match service.get_job(&project_id, job_id) {
         Ok(Some(j)) => j,
-        Ok(None) => {
-            return err_response(StatusCode::NOT_FOUND, "job not found").into_response()
-        }
+        Ok(None) => return err_response(StatusCode::NOT_FOUND, "job not found").into_response(),
         Err(e) => return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
     };
 
@@ -1430,9 +1414,7 @@ pub async fn retry_job(
 
     let original_job = match service.get_job(&project_id, job_id) {
         Ok(Some(j)) => j,
-        Ok(None) => {
-            return err_response(StatusCode::NOT_FOUND, "job not found").into_response()
-        }
+        Ok(None) => return err_response(StatusCode::NOT_FOUND, "job not found").into_response(),
         Err(e) => return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
     };
 
@@ -1440,7 +1422,10 @@ pub async fn retry_job(
     if !retryable.contains(&original_job.status.as_str()) {
         return err_response(
             StatusCode::CONFLICT,
-            &format!("job status '{}' is not retryable (must be failed/partial_failed/cancelled)", original_job.status),
+            &format!(
+                "job status '{}' is not retryable (must be failed/partial_failed/cancelled)",
+                original_job.status
+            ),
         )
         .into_response();
     }
@@ -1528,12 +1513,7 @@ pub async fn ingest_worker_callback(
 
     match event.event_type.as_str() {
         "job_started" => {
-            if let Err(e) = service.update_job_status(
-                event.job_id,
-                "running",
-                None,
-                None,
-            ) {
+            if let Err(e) = service.update_job_status(event.job_id, "running", None, None) {
                 tracing::error!("Failed to update job to running: {e}");
                 return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
             }
@@ -1547,7 +1527,10 @@ pub async fn ingest_worker_callback(
         }
         "job_completed" => {
             let result = if event.result_payload.is_object()
-                && event.result_payload.as_object().map_or(false, |m| !m.is_empty())
+                && event
+                    .result_payload
+                    .as_object()
+                    .is_some_and(|m| !m.is_empty())
             {
                 Some(event.result_payload.clone())
             } else {
@@ -1567,11 +1550,16 @@ pub async fn ingest_worker_callback(
         }
         "job_failed" => {
             let err_payload = if event.error_payload.is_object()
-                && event.error_payload.as_object().map_or(false, |m| !m.is_empty())
+                && event
+                    .error_payload
+                    .as_object()
+                    .is_some_and(|m| !m.is_empty())
             {
                 Some(event.error_payload.clone())
             } else {
-                Some(serde_json::json!({"error": event.error_message.as_deref().unwrap_or("unknown")}))
+                Some(
+                    serde_json::json!({"error": event.error_message.as_deref().unwrap_or("unknown")}),
+                )
             };
             match service.update_job_status(event.job_id, "failed", None, err_payload) {
                 Ok(job) => {
@@ -1587,14 +1575,20 @@ pub async fn ingest_worker_callback(
         }
         "job_partial_failed" => {
             let result = if event.result_payload.is_object()
-                && event.result_payload.as_object().map_or(false, |m| !m.is_empty())
+                && event
+                    .result_payload
+                    .as_object()
+                    .is_some_and(|m| !m.is_empty())
             {
                 Some(event.result_payload.clone())
             } else {
                 None
             };
             let err_payload = if event.error_payload.is_object()
-                && event.error_payload.as_object().map_or(false, |m| !m.is_empty())
+                && event
+                    .error_payload
+                    .as_object()
+                    .is_some_and(|m| !m.is_empty())
             {
                 Some(event.error_payload.clone())
             } else {
@@ -1620,7 +1614,10 @@ pub async fn ingest_worker_callback(
                 _ => "unknown",
             };
             let output = if event.result_payload.is_object()
-                && event.result_payload.as_object().map_or(false, |m| !m.is_empty())
+                && event
+                    .result_payload
+                    .as_object()
+                    .is_some_and(|m| !m.is_empty())
             {
                 Some(event.result_payload.clone())
             } else {

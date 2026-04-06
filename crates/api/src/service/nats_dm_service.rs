@@ -297,7 +297,7 @@ impl NatsDmService {
 
         // Apply `before_seq` filter: keep only messages whose nats_seq < before_seq
         if let Some(before_seq) = query.before_seq {
-            all_messages.retain(|m| m.nats_seq.map_or(true, |s| s < before_seq));
+            all_messages.retain(|m| m.nats_seq.is_none_or(|s| s < before_seq));
         }
 
         // Take the last `limit` messages (newest) and report has_more
@@ -311,6 +311,7 @@ impl NatsDmService {
         Ok(DmMessagesResponse { messages, has_more })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn send_reply(
         &self,
         conv_id: &str,

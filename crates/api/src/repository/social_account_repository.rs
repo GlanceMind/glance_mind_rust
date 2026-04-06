@@ -17,6 +17,7 @@ impl SocialAccountRepository {
         Self { pool }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn find_by_user(
         &self,
         user_id: i32,

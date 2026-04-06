@@ -167,7 +167,10 @@ impl CampaignService {
         // Validate schedule_type if provided
         if let Some(ref st) = dto.schedule_type {
             validate_schedule_type(st)?;
-            let config = dto.schedule_config.as_ref().or(existing.schedule_config.as_ref());
+            let config = dto
+                .schedule_config
+                .as_ref()
+                .or(existing.schedule_config.as_ref());
             validate_schedule_config(st, &config.cloned())?;
         }
 
@@ -443,9 +446,10 @@ impl CampaignService {
             _platform_id, scan_count, model_id_sql
         );
 
-        let mut conn = self.pool.get().map_err(|e| {
-            ApiError::InternalServerError(format!("DB pool error: {}", e))
-        })?;
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|e| ApiError::InternalServerError(format!("DB pool error: {}", e)))?;
 
         match diesel::sql_query(&query).get_result::<MinCostRow>(&mut conn) {
             Ok(row) => Ok(row.calculate_min_campaign_cost),
@@ -469,10 +473,7 @@ struct MinCostRow {
     calculate_min_campaign_cost: BigDecimal,
 }
 
-const VALID_SCHEDULE_TYPES: &[&str] = &[
-    "CONTINUOUS", "ONCE", "SCHEDULED",
-    "INTERVAL", "CRON",
-];
+const VALID_SCHEDULE_TYPES: &[&str] = &["CONTINUOUS", "ONCE", "SCHEDULED", "INTERVAL", "CRON"];
 
 fn validate_schedule_type(schedule_type: &str) -> Result<(), ApiError> {
     if !VALID_SCHEDULE_TYPES.contains(&schedule_type) {
@@ -495,7 +496,7 @@ fn validate_schedule_config(
         "CONTINUOUS" | "INTERVAL" => {
             if let Some(cfg) = config {
                 if let Some(secs) = cfg.get("interval_seconds").and_then(|v| v.as_i64()) {
-                    if secs < 60 || secs > 86400 {
+                    if !(60..=86400).contains(&secs) {
                         return Err(ApiError::BadRequest(format!(
                             "interval_seconds must be between 60 and 86400 (got {}) / 执行间隔必须在 60-86400 秒之间（当前 {}）",
                             secs, secs

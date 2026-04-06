@@ -7,11 +7,10 @@ use glance_mind_db::entity::novel::*;
 use glance_mind_db::schema::{
     gm_novel_architectures, gm_novel_blueprint_chapters, gm_novel_blueprints,
     gm_novel_chapter_prompts, gm_novel_chapters, gm_novel_character_state_snapshots,
-    gm_novel_consistency_checks, gm_novel_embedding_profiles,
-    gm_novel_global_summary_snapshots, gm_novel_jobs, gm_novel_knowledge_chunks,
-    gm_novel_knowledge_imports, gm_novel_llm_profiles, gm_novel_plot_arc_snapshots,
-    gm_novel_project_config_snapshots, gm_novel_projects, gm_novel_stage_events,
-    gm_novel_stage_runs,
+    gm_novel_consistency_checks, gm_novel_embedding_profiles, gm_novel_global_summary_snapshots,
+    gm_novel_jobs, gm_novel_knowledge_chunks, gm_novel_knowledge_imports, gm_novel_llm_profiles,
+    gm_novel_plot_arc_snapshots, gm_novel_project_config_snapshots, gm_novel_projects,
+    gm_novel_stage_events, gm_novel_stage_runs,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -74,9 +73,7 @@ impl NovelService {
             let snap = NewNovelProjectConfigSnapshot {
                 project_id: project_id.clone(),
                 architecture_llm_profile_id: req.config_snapshot.architecture_llm_profile_id,
-                chapter_outline_llm_profile_id: req
-                    .config_snapshot
-                    .chapter_outline_llm_profile_id,
+                chapter_outline_llm_profile_id: req.config_snapshot.chapter_outline_llm_profile_id,
                 prompt_draft_llm_profile_id: req.config_snapshot.prompt_draft_llm_profile_id,
                 final_chapter_llm_profile_id: req.config_snapshot.final_chapter_llm_profile_id,
                 consistency_review_llm_profile_id: req
@@ -169,22 +166,18 @@ impl NovelService {
             .map_err(|e| format!("Project not found: {e}"))?;
 
         diesel::update(
-            gm_novel_projects::table
-                .filter(gm_novel_projects::project_id.eq(project_id)),
+            gm_novel_projects::table.filter(gm_novel_projects::project_id.eq(project_id)),
         )
         .set((
-            gm_novel_projects::title
-                .eq(req.title.as_deref().unwrap_or(&current.title)),
+            gm_novel_projects::title.eq(req.title.as_deref().unwrap_or(&current.title)),
             gm_novel_projects::description
                 .eq(req.description.as_deref().unwrap_or(&current.description)),
-            gm_novel_projects::topic
-                .eq(req.topic.as_deref().unwrap_or(&current.topic)),
-            gm_novel_projects::genre
-                .eq(req.genre.as_deref().unwrap_or(&current.genre)),
-            gm_novel_projects::num_chapters
-                .eq(req.num_chapters.unwrap_or(current.num_chapters)),
-            gm_novel_projects::target_words_per_chapter
-                .eq(req.target_words_per_chapter.unwrap_or(current.target_words_per_chapter)),
+            gm_novel_projects::topic.eq(req.topic.as_deref().unwrap_or(&current.topic)),
+            gm_novel_projects::genre.eq(req.genre.as_deref().unwrap_or(&current.genre)),
+            gm_novel_projects::num_chapters.eq(req.num_chapters.unwrap_or(current.num_chapters)),
+            gm_novel_projects::target_words_per_chapter.eq(req
+                .target_words_per_chapter
+                .unwrap_or(current.target_words_per_chapter)),
             gm_novel_projects::default_user_guidance.eq(req
                 .default_user_guidance
                 .as_deref()
@@ -445,10 +438,11 @@ impl NovelService {
 
         diesel::update(gm_novel_llm_profiles::table.filter(gm_novel_llm_profiles::id.eq(id)))
             .set((
-                gm_novel_llm_profiles::name
-                    .eq(req.name.as_deref().unwrap_or(&current.name)),
-                gm_novel_llm_profiles::interface_format
-                    .eq(req.interface_format.as_deref().unwrap_or(&current.interface_format)),
+                gm_novel_llm_profiles::name.eq(req.name.as_deref().unwrap_or(&current.name)),
+                gm_novel_llm_profiles::interface_format.eq(req
+                    .interface_format
+                    .as_deref()
+                    .unwrap_or(&current.interface_format)),
                 gm_novel_llm_profiles::base_url
                     .eq(req.base_url.as_deref().unwrap_or(&current.base_url)),
                 gm_novel_llm_profiles::api_key
@@ -457,8 +451,7 @@ impl NovelService {
                     .eq(req.model_name.as_deref().unwrap_or(&current.model_name)),
                 gm_novel_llm_profiles::temperature
                     .eq(req.temperature.unwrap_or(current.temperature)),
-                gm_novel_llm_profiles::max_tokens
-                    .eq(req.max_tokens.unwrap_or(current.max_tokens)),
+                gm_novel_llm_profiles::max_tokens.eq(req.max_tokens.unwrap_or(current.max_tokens)),
                 gm_novel_llm_profiles::timeout_seconds
                     .eq(req.timeout_seconds.unwrap_or(current.timeout_seconds)),
                 gm_novel_llm_profiles::updated_at.eq(Utc::now()),
@@ -585,14 +578,14 @@ impl NovelService {
             .map_err(|e| format!("Embedding profile not found: {e}"))?;
 
         diesel::update(
-            gm_novel_embedding_profiles::table
-                .filter(gm_novel_embedding_profiles::id.eq(id)),
+            gm_novel_embedding_profiles::table.filter(gm_novel_embedding_profiles::id.eq(id)),
         )
         .set((
-            gm_novel_embedding_profiles::name
-                .eq(req.name.as_deref().unwrap_or(&current.name)),
-            gm_novel_embedding_profiles::interface_format
-                .eq(req.interface_format.as_deref().unwrap_or(&current.interface_format)),
+            gm_novel_embedding_profiles::name.eq(req.name.as_deref().unwrap_or(&current.name)),
+            gm_novel_embedding_profiles::interface_format.eq(req
+                .interface_format
+                .as_deref()
+                .unwrap_or(&current.interface_format)),
             gm_novel_embedding_profiles::base_url
                 .eq(req.base_url.as_deref().unwrap_or(&current.base_url)),
             gm_novel_embedding_profiles::api_key
@@ -632,10 +625,7 @@ impl NovelService {
     // Architecture methods
     // =========================================================================
 
-    pub fn get_architecture(
-        &self,
-        project_id: &str,
-    ) -> Result<Option<NovelArchitecture>, String> {
+    pub fn get_architecture(&self, project_id: &str) -> Result<Option<NovelArchitecture>, String> {
         let mut conn = self.pool.get().map_err(|e| e.to_string())?;
         gm_novel_architectures::table
             .filter(gm_novel_architectures::project_id.eq(project_id))
@@ -661,8 +651,10 @@ impl NovelService {
             gm_novel_architectures::table.filter(gm_novel_architectures::id.eq(current.id)),
         )
         .set((
-            gm_novel_architectures::core_seed_text
-                .eq(req.core_seed_text.as_deref().unwrap_or(&current.core_seed_text)),
+            gm_novel_architectures::core_seed_text.eq(req
+                .core_seed_text
+                .as_deref()
+                .unwrap_or(&current.core_seed_text)),
             gm_novel_architectures::character_dynamics_text.eq(req
                 .character_dynamics_text
                 .as_deref()
@@ -723,8 +715,7 @@ impl NovelService {
                 .values((
                     gm_novel_character_state_snapshots::project_id.eq(project_id),
                     gm_novel_character_state_snapshots::state_text.eq(text),
-                    gm_novel_character_state_snapshots::version_no
-                        .eq(max_ver.unwrap_or(0) + 1),
+                    gm_novel_character_state_snapshots::version_no.eq(max_ver.unwrap_or(0) + 1),
                     gm_novel_character_state_snapshots::is_current.eq(true),
                 ))
                 .get_result::<NovelCharacterStateSnapshot>(conn)
@@ -768,8 +759,7 @@ impl NovelService {
                 .values((
                     gm_novel_global_summary_snapshots::project_id.eq(project_id),
                     gm_novel_global_summary_snapshots::summary_text.eq(text),
-                    gm_novel_global_summary_snapshots::version_no
-                        .eq(max_ver.unwrap_or(0) + 1),
+                    gm_novel_global_summary_snapshots::version_no.eq(max_ver.unwrap_or(0) + 1),
                     gm_novel_global_summary_snapshots::is_current.eq(true),
                 ))
                 .get_result::<NovelGlobalSummarySnapshot>(conn)
@@ -777,10 +767,7 @@ impl NovelService {
         .map_err(|e| e.to_string())
     }
 
-    pub fn get_plot_arcs(
-        &self,
-        project_id: &str,
-    ) -> Result<Option<NovelPlotArcSnapshot>, String> {
+    pub fn get_plot_arcs(&self, project_id: &str) -> Result<Option<NovelPlotArcSnapshot>, String> {
         let mut conn = self.pool.get().map_err(|e| e.to_string())?;
         gm_novel_plot_arc_snapshots::table
             .filter(gm_novel_plot_arc_snapshots::project_id.eq(project_id))
@@ -825,10 +812,7 @@ impl NovelService {
     // Blueprint methods
     // =========================================================================
 
-    pub fn get_blueprint(
-        &self,
-        project_id: &str,
-    ) -> Result<Option<NovelBlueprint>, String> {
+    pub fn get_blueprint(&self, project_id: &str) -> Result<Option<NovelBlueprint>, String> {
         let mut conn = self.pool.get().map_err(|e| e.to_string())?;
         gm_novel_blueprints::table
             .filter(gm_novel_blueprints::project_id.eq(project_id))
@@ -932,20 +916,32 @@ impl NovelService {
                 .filter(gm_novel_blueprint_chapters::id.eq(current.id)),
         )
         .set((
-            gm_novel_blueprint_chapters::chapter_title
-                .eq(req.chapter_title.as_deref().unwrap_or(&current.chapter_title)),
+            gm_novel_blueprint_chapters::chapter_title.eq(req
+                .chapter_title
+                .as_deref()
+                .unwrap_or(&current.chapter_title)),
             gm_novel_blueprint_chapters::chapter_role
                 .eq(req.chapter_role.as_deref().unwrap_or(&current.chapter_role)),
-            gm_novel_blueprint_chapters::chapter_purpose
-                .eq(req.chapter_purpose.as_deref().unwrap_or(&current.chapter_purpose)),
-            gm_novel_blueprint_chapters::suspense_level
-                .eq(req.suspense_level.as_deref().unwrap_or(&current.suspense_level)),
-            gm_novel_blueprint_chapters::foreshadowing
-                .eq(req.foreshadowing.as_deref().unwrap_or(&current.foreshadowing)),
-            gm_novel_blueprint_chapters::plot_twist_level
-                .eq(req.plot_twist_level.as_deref().unwrap_or(&current.plot_twist_level)),
-            gm_novel_blueprint_chapters::chapter_summary
-                .eq(req.chapter_summary.as_deref().unwrap_or(&current.chapter_summary)),
+            gm_novel_blueprint_chapters::chapter_purpose.eq(req
+                .chapter_purpose
+                .as_deref()
+                .unwrap_or(&current.chapter_purpose)),
+            gm_novel_blueprint_chapters::suspense_level.eq(req
+                .suspense_level
+                .as_deref()
+                .unwrap_or(&current.suspense_level)),
+            gm_novel_blueprint_chapters::foreshadowing.eq(req
+                .foreshadowing
+                .as_deref()
+                .unwrap_or(&current.foreshadowing)),
+            gm_novel_blueprint_chapters::plot_twist_level.eq(req
+                .plot_twist_level
+                .as_deref()
+                .unwrap_or(&current.plot_twist_level)),
+            gm_novel_blueprint_chapters::chapter_summary.eq(req
+                .chapter_summary
+                .as_deref()
+                .unwrap_or(&current.chapter_summary)),
             gm_novel_blueprint_chapters::updated_at.eq(Utc::now()),
         ))
         .get_result::<NovelBlueprintChapter>(&mut conn)
@@ -1001,20 +997,17 @@ impl NovelService {
             .first::<NovelChapter>(&mut conn)
             .map_err(|e| format!("Chapter not found: {e}"))?;
 
-        diesel::update(
-            gm_novel_chapters::table.filter(gm_novel_chapters::id.eq(current.id)),
-        )
-        .set((
-            gm_novel_chapters::draft_text
-                .eq(req.draft_text.as_deref().or(current.draft_text.as_deref())),
-            gm_novel_chapters::final_text
-                .eq(req.final_text.as_deref().or(current.final_text.as_deref())),
-            gm_novel_chapters::status
-                .eq(req.status.as_deref().unwrap_or(&current.status)),
-            gm_novel_chapters::updated_at.eq(Utc::now()),
-        ))
-        .get_result::<NovelChapter>(&mut conn)
-        .map_err(|e| e.to_string())
+        diesel::update(gm_novel_chapters::table.filter(gm_novel_chapters::id.eq(current.id)))
+            .set((
+                gm_novel_chapters::draft_text
+                    .eq(req.draft_text.as_deref().or(current.draft_text.as_deref())),
+                gm_novel_chapters::final_text
+                    .eq(req.final_text.as_deref().or(current.final_text.as_deref())),
+                gm_novel_chapters::status.eq(req.status.as_deref().unwrap_or(&current.status)),
+                gm_novel_chapters::updated_at.eq(Utc::now()),
+            ))
+            .get_result::<NovelChapter>(&mut conn)
+            .map_err(|e| e.to_string())
     }
 
     pub fn get_chapter_prompt(
@@ -1196,11 +1189,7 @@ impl NovelService {
             .map_err(|e| e.to_string())
     }
 
-    pub fn get_job(
-        &self,
-        project_id: &str,
-        job_id: i64,
-    ) -> Result<Option<NovelJob>, String> {
+    pub fn get_job(&self, project_id: &str, job_id: i64) -> Result<Option<NovelJob>, String> {
         let mut conn = self.pool.get().map_err(|e| e.to_string())?;
         gm_novel_jobs::table
             .filter(gm_novel_jobs::id.eq(job_id))
@@ -1243,20 +1232,20 @@ impl NovelService {
         } else {
             current.started_at
         };
-        let completed_at =
-            if matches!(status, "completed" | "failed" | "partial_failed" | "cancelled") {
-                Some(now)
-            } else {
-                current.completed_at
-            };
+        let completed_at = if matches!(
+            status,
+            "completed" | "failed" | "partial_failed" | "cancelled"
+        ) {
+            Some(now)
+        } else {
+            current.completed_at
+        };
 
         diesel::update(gm_novel_jobs::table.filter(gm_novel_jobs::id.eq(job_id)))
             .set((
                 gm_novel_jobs::status.eq(status),
-                gm_novel_jobs::result_payload
-                    .eq(result_payload.unwrap_or(current.result_payload)),
-                gm_novel_jobs::error_payload
-                    .eq(error_payload.unwrap_or(current.error_payload)),
+                gm_novel_jobs::result_payload.eq(result_payload.unwrap_or(current.result_payload)),
+                gm_novel_jobs::error_payload.eq(error_payload.unwrap_or(current.error_payload)),
                 gm_novel_jobs::started_at.eq(started_at),
                 gm_novel_jobs::completed_at.eq(completed_at),
                 gm_novel_jobs::updated_at.eq(now),
@@ -1287,9 +1276,13 @@ impl NovelService {
             .iter()
             .filter(|j| matches!(j.status.as_str(), "completed" | "partial_failed"))
             .count() as f32;
-        let has_running = all_jobs.iter().any(|j| j.status == "running" || j.status == "pending");
+        let has_running = all_jobs
+            .iter()
+            .any(|j| j.status == "running" || j.status == "pending");
         let all_failed = !all_jobs.is_empty()
-            && all_jobs.iter().all(|j| j.status == "failed" || j.status == "cancelled");
+            && all_jobs
+                .iter()
+                .all(|j| j.status == "failed" || j.status == "cancelled");
 
         let progress = if total > 0.0 {
             (completed_count / total * 100.0).min(100.0)
@@ -1316,8 +1309,7 @@ impl NovelService {
         };
 
         diesel::update(
-            gm_novel_projects::table
-                .filter(gm_novel_projects::project_id.eq(&job.project_id)),
+            gm_novel_projects::table.filter(gm_novel_projects::project_id.eq(&job.project_id)),
         )
         .set((
             gm_novel_projects::status.eq(final_status),
@@ -1341,8 +1333,7 @@ impl NovelService {
     ) -> Result<(), String> {
         let mut conn = self.pool.get().map_err(|e| e.to_string())?;
         diesel::update(
-            gm_novel_projects::table
-                .filter(gm_novel_projects::project_id.eq(project_id)),
+            gm_novel_projects::table.filter(gm_novel_projects::project_id.eq(project_id)),
         )
         .set((
             gm_novel_projects::status.eq("in_progress"),
@@ -1360,6 +1351,7 @@ impl NovelService {
     // Stage run + event recording
     // =========================================================================
 
+    #[allow(clippy::too_many_arguments)]
     pub fn upsert_stage_run(
         &self,
         project_id: &str,
@@ -1397,9 +1389,8 @@ impl NovelService {
             )
             .set((
                 gm_novel_stage_runs::status.eq(status),
-                gm_novel_stage_runs::output_payload.eq(
-                    output_payload.unwrap_or_else(|| row.output_payload.clone()),
-                ),
+                gm_novel_stage_runs::output_payload
+                    .eq(output_payload.unwrap_or_else(|| row.output_payload.clone())),
                 gm_novel_stage_runs::error_message.eq(error_message),
                 gm_novel_stage_runs::started_at.eq(started_at.or(row.started_at)),
                 gm_novel_stage_runs::completed_at.eq(completed_at.or(row.completed_at)),
@@ -1418,9 +1409,7 @@ impl NovelService {
                 gm_novel_stage_runs::status.eq(status),
                 gm_novel_stage_runs::input_hash.eq(input_hash),
                 gm_novel_stage_runs::input_payload.eq(input_payload),
-                gm_novel_stage_runs::output_payload.eq(
-                    output_payload.unwrap_or_else(|| json!({})),
-                ),
+                gm_novel_stage_runs::output_payload.eq(output_payload.unwrap_or_else(|| json!({}))),
                 gm_novel_stage_runs::error_message.eq(error_message),
                 gm_novel_stage_runs::attempt_no.eq(attempt_no),
                 gm_novel_stage_runs::started_at.eq(started_at),
@@ -1430,6 +1419,7 @@ impl NovelService {
             .map_err(|e| format!("insert stage run: {e}"))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_stage_event(
         &self,
         project_id: &str,
@@ -1539,17 +1529,35 @@ impl NovelService {
 
             for line in block {
                 let t = line.trim();
-                if let Some(v) = t.strip_prefix("本章定位:").or_else(|| t.strip_prefix("本章定位：")) {
+                if let Some(v) = t
+                    .strip_prefix("本章定位:")
+                    .or_else(|| t.strip_prefix("本章定位："))
+                {
                     ch.chapter_role = v.trim().to_string();
-                } else if let Some(v) = t.strip_prefix("核心作用:").or_else(|| t.strip_prefix("核心作用：")) {
+                } else if let Some(v) = t
+                    .strip_prefix("核心作用:")
+                    .or_else(|| t.strip_prefix("核心作用："))
+                {
                     ch.chapter_purpose = v.trim().to_string();
-                } else if let Some(v) = t.strip_prefix("悬念密度:").or_else(|| t.strip_prefix("悬念密度：")) {
+                } else if let Some(v) = t
+                    .strip_prefix("悬念密度:")
+                    .or_else(|| t.strip_prefix("悬念密度："))
+                {
                     ch.suspense_level = v.trim().to_string();
-                } else if let Some(v) = t.strip_prefix("伏笔操作:").or_else(|| t.strip_prefix("伏笔操作：")) {
+                } else if let Some(v) = t
+                    .strip_prefix("伏笔操作:")
+                    .or_else(|| t.strip_prefix("伏笔操作："))
+                {
                     ch.foreshadowing = v.trim().to_string();
-                } else if let Some(v) = t.strip_prefix("认知颠覆:").or_else(|| t.strip_prefix("认知颠覆：")) {
+                } else if let Some(v) = t
+                    .strip_prefix("认知颠覆:")
+                    .or_else(|| t.strip_prefix("认知颠覆："))
+                {
                     ch.plot_twist_level = v.trim().to_string();
-                } else if let Some(v) = t.strip_prefix("本章简述:").or_else(|| t.strip_prefix("本章简述：")) {
+                } else if let Some(v) = t
+                    .strip_prefix("本章简述:")
+                    .or_else(|| t.strip_prefix("本章简述："))
+                {
                     ch.chapter_summary = v.trim().to_string();
                 }
             }

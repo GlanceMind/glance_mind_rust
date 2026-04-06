@@ -86,7 +86,7 @@ impl XunhuPayClient {
                 e,
                 &body[..body.len().min(500)]
             );
-            format!("Parse pay response: unexpected response format")
+            "Parse pay response: unexpected response format".to_string()
         })?;
         verify_response_hash_from_value(&raw_json, &self.app_secret)
             .map_err(|e| format!("Invalid pay response signature: {e}"))?;
@@ -181,7 +181,7 @@ impl XunhuPayClient {
                 e,
                 &body[..body.len().min(500)]
             );
-            format!("Parse refund response: unexpected response format")
+            "Parse refund response: unexpected response format".to_string()
         })?;
         verify_response_hash_from_value(&raw_json, &self.app_secret)
             .map_err(|e| format!("Invalid refund response signature: {e}"))?;

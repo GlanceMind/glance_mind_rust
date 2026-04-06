@@ -13,6 +13,8 @@ use diesel::PgConnection;
 use rand::seq::SliceRandom;
 use std::collections::{HashMap, HashSet};
 
+type AccountQuotaEntry = (i32, Option<String>, i32);
+
 #[derive(Clone)]
 pub struct AgentService {
     agent_repo: AgentRepository,
@@ -158,7 +160,7 @@ impl AgentService {
     fn enforce_daily_limits_inner(
         comments: Vec<UnifiedCommentWithConfigDto>,
         campaign_to_group: &HashMap<i32, i32>,
-        group_accounts: &HashMap<i32, Vec<(i32, Option<String>, i32)>>,
+        group_accounts: &HashMap<i32, Vec<AccountQuotaEntry>>,
         redis: Option<&RedisService>,
     ) -> Vec<UnifiedCommentWithConfigDto> {
         let redis = match redis {
@@ -698,7 +700,7 @@ mod tests {
         for profile in ["A", "B", "C"] {
             let count = assignment_count.get(profile).copied().unwrap_or(0);
             assert!(
-                count >= 10 && count <= 60,
+                (10..=60).contains(&count),
                 "Profile '{}' got {} assignments (expected ~30 ± margin)",
                 profile,
                 count

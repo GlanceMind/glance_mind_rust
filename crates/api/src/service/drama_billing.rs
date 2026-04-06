@@ -25,12 +25,8 @@ pub struct ReserveResult {
 
 fn decimal_to_i64(value: &BigDecimal) -> i64 {
     let raw = value.to_string();
-    let trimmed = if let Some((whole, frac)) = raw.split_once('.') {
-        if frac.chars().all(|c| c == '0') {
-            whole.to_string()
-        } else {
-            whole.to_string()
-        }
+    let trimmed = if let Some((whole, _frac)) = raw.split_once('.') {
+        whole.to_string()
     } else {
         raw
     };
@@ -132,11 +128,7 @@ impl DramaBillingGuard {
         Ok(())
     }
 
-    pub async fn settle_cost(
-        &self,
-        user_id: i32,
-        amount_cents: i64,
-    ) -> Result<(), String> {
+    pub async fn settle_cost(&self, user_id: i32, amount_cents: i64) -> Result<(), String> {
         let amount = BigDecimal::from(amount_cents);
 
         self.wallet_repo

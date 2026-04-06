@@ -255,8 +255,7 @@ impl IntoResponse for ApiError {
                 )
             }
             ApiError::TokenError(token_err) => {
-                if let crate::error::token_error::TokenError::TokenCreationError(detail) =
-                    token_err
+                if let crate::error::token_error::TokenError::TokenCreationError(detail) = token_err
                 {
                     tracing::error!("Token creation error: {}", detail);
                     (

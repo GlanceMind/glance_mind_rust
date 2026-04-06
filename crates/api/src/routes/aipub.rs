@@ -18,7 +18,10 @@ pub fn aipub_user_routes() -> Router<UserState> {
     Router::new()
         // Stats & estimate (put before :id routes to avoid conflict)
         .route("/publish_plans/stats", get(aipub_handler::get_plan_stats))
-        .route("/publish_plans/estimate", post(aipub_handler::estimate_plan_cost))
+        .route(
+            "/publish_plans/estimate",
+            post(aipub_handler::estimate_plan_cost),
+        )
         // Image upload to OSS
         .route("/aipub/upload-image", post(oss_handler::upload_image))
         // Video upload to OSS - with increased body size limit

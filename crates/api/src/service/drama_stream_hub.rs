@@ -33,9 +33,7 @@ impl DramaStreamHub {
     pub async fn subscribe(&self, project_id: &str) -> mpsc::Receiver<DramaSseEvent> {
         let (tx, rx) = mpsc::channel(64);
         let mut subs = self.subscribers.write().await;
-        subs.entry(project_id.to_string())
-            .or_default()
-            .push(tx);
+        subs.entry(project_id.to_string()).or_default().push(tx);
         rx
     }
 
@@ -51,5 +49,11 @@ impl DramaStreamHub {
                 subs.remove(&project_id);
             }
         }
+    }
+}
+
+impl Default for DramaStreamHub {
+    fn default() -> Self {
+        Self::new()
     }
 }

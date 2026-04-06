@@ -126,14 +126,13 @@ impl DramaProjectionService {
         let conn = &mut self.db.pool.get().map_err(|e| format!("db pool: {}", e))?;
         let job_id = extract_job_id(event);
 
-        let existing: Option<i64> = diesel::sql_query(
-            "SELECT id FROM gm_drama_callback_events WHERE event_id = $1",
-        )
-        .bind::<Text, _>(&event.event_id)
-        .get_result::<IdOnly>(conn)
-        .optional()
-        .map_err(|e| format!("dedup check: {}", e))?
-        .map(|r| r.id);
+        let existing: Option<i64> =
+            diesel::sql_query("SELECT id FROM gm_drama_callback_events WHERE event_id = $1")
+                .bind::<Text, _>(&event.event_id)
+                .get_result::<IdOnly>(conn)
+                .optional()
+                .map_err(|e| format!("dedup check: {}", e))?
+                .map(|r| r.id);
 
         if existing.is_some() {
             return Ok(false);
@@ -215,10 +214,7 @@ impl DramaProjectionService {
                 .map_err(|e| format!("apply canonical run_started: {}", e))?;
             }
             "stage_entered" => {
-                let stage = event
-                    .stage_code
-                    .as_deref()
-                    .unwrap_or("unknown");
+                let stage = event.stage_code.as_deref().unwrap_or("unknown");
                 diesel::sql_query(
                     "UPDATE gm_drama_project_projections \
                      SET current_stage = $2, last_event_sequence = $3, updated_at = NOW() \
@@ -786,6 +782,7 @@ impl DramaProjectionService {
         .map_err(|e| format!("list fallback events: {}", e))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn create_projection(
         &self,
         project_id: &str,
@@ -911,7 +908,8 @@ impl DramaProjectionService {
 
 fn extract_job_id(event: &DramaCallbackEvent) -> Option<i64> {
     event.payload.get("job_id").and_then(|v| {
-        v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))
+        v.as_i64()
+            .or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))
     })
 }
 
@@ -956,23 +954,18 @@ fn sync_job_status(
     Ok(())
 }
 
-fn project_is_cancelled(
-    conn: &mut diesel::PgConnection,
-    project_id: &str,
-) -> Result<bool, String> {
+fn project_is_cancelled(conn: &mut diesel::PgConnection, project_id: &str) -> Result<bool, String> {
     #[derive(QueryableByName)]
     struct StatusOnly {
         #[diesel(sql_type = Text)]
         status: String,
     }
 
-    let row = diesel::sql_query(
-        "SELECT status FROM gm_drama.projects WHERE project_id = $1",
-    )
-    .bind::<Text, _>(project_id)
-    .get_result::<StatusOnly>(conn)
-    .optional()
-    .map_err(|e| format!("read project cancel status: {}", e))?;
+    let row = diesel::sql_query("SELECT status FROM gm_drama.projects WHERE project_id = $1")
+        .bind::<Text, _>(project_id)
+        .get_result::<StatusOnly>(conn)
+        .optional()
+        .map_err(|e| format!("read project cancel status: {}", e))?;
 
     Ok(matches!(row, Some(StatusOnly { status }) if status == "cancelled"))
 }
