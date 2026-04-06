@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 # ===== Chef Stage - Prepare dependency recipe =====
 FROM rust:latest AS chef
 RUN cargo install cargo-chef
@@ -19,20 +17,14 @@ FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
 
 # Build dependencies (this layer is cached unless Cargo.toml/lock changes)
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/app/target \
-    cargo chef cook --release --recipe-path recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
 
 # Copy workspace source code
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 
 # Build application (only compiles app code, dependencies are cached)
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/app/target \
-    cargo build --release -p glance_mind_api && \
+RUN cargo build --release -p glance_mind_api && \
     cp /app/target/release/glance_mind_api /app/glance_mind_api
 
 # ===== Runtime Stage - Final image =====

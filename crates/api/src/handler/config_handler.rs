@@ -2,12 +2,22 @@ use crate::api_ok;
 use crate::error::api_error::ApiError;
 use crate::service::config_service::ConfigService;
 use crate::service::platform_service::PlatformService;
+use crate::service::video_capabilities::{build_video_model_capabilities, preferred_video_model};
 use axum::{
     extract::{Path, Query},
     response::IntoResponse,
     Extension,
 };
-use serde::Deserialize;
+use glance_mind_db::entity::ai_model::AiModel;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize)]
+pub struct AiModelResponseDto {
+    #[serde(flatten)]
+    pub model: AiModel,
+    pub is_default: bool,
+    pub capabilities: Option<crate::dto::video_dto::VideoModelCapabilitiesDto>,
+}
 
 pub async fn get_platforms(
     Extension(platform_service): Extension<PlatformService>,
@@ -50,7 +60,36 @@ pub async fn get_ai_models(
             .await
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?
     };
-    Ok(api_ok!(models))
+
+    let preferred_video_model_id = preferred_video_model(
+        &models
+            .iter()
+            .filter(|model| model.model_type == "video")
+            .cloned()
+            .collect::<Vec<_>>(),
+    )
+    .map(|model| model.id);
+
+    let payload: Vec<AiModelResponseDto> = models
+        .into_iter()
+        .map(|model| {
+            let is_video = model.model_type == "video";
+            let is_default = preferred_video_model_id == Some(model.id);
+            let capabilities = if is_video {
+                Some(build_video_model_capabilities(&model))
+            } else {
+                None
+            };
+
+            AiModelResponseDto {
+                model,
+                is_default,
+                capabilities,
+            }
+        })
+        .collect();
+
+    Ok(api_ok!(payload))
 }
 
 pub async fn get_pricing(

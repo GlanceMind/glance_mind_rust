@@ -22,3 +22,14 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Cursor IDE
+.cursor/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/

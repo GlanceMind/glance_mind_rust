@@ -1,4 +1,4 @@
-use crate::config::database::Database;
+use crate::config::database::{DBPool, Database};
 use crate::dto::campaign_dto::{
     CampaignCreateDto, CampaignLogDto, CampaignReadDto, CampaignStatus, CampaignUpdateDto,
 };
@@ -9,12 +9,13 @@ use diesel::result::Error as DieselError;
 use glance_mind_db::entity::campaign::{Campaign, NewCampaign};
 use std::sync::Arc;
 
-#[allow(unused_imports)]
 use bigdecimal::BigDecimal;
 
 #[derive(Clone)]
 pub struct CampaignService {
     repo: CampaignRepository,
+    pool: DBPool,
+    #[allow(dead_code)]
     wallet_repo: WalletRepository,
 }
 
@@ -22,6 +23,7 @@ impl CampaignService {
     pub fn new(db: &Arc<Database>) -> Self {
         Self {
             repo: CampaignRepository::new(db.pool.clone()),
+            pool: db.pool.clone(),
             wallet_repo: WalletRepository::new(db.pool.clone()),
         }
     }
@@ -31,6 +33,31 @@ impl CampaignService {
         user_id: i32,
         dto: CampaignCreateDto,
     ) -> Result<CampaignReadDto, ApiError> {
+        // Validate schedule_type
+        validate_schedule_type(&dto.schedule_type)?;
+        validate_schedule_config(&dto.schedule_type, &dto.schedule_config)?;
+
+        // Validate max_scan_count
+        let scan_count = dto.max_scan_count.unwrap_or(0);
+        if scan_count <= 0 {
+            return Err(ApiError::BadRequest(
+                "max_scan_count must be greater than 0 / 最大扫描数量必须大于 0".to_string(),
+            ));
+        }
+
+        // Validate budget_cap against minimum cost using DB stored procedure
+        if let Some(ref cap) = dto.budget_cap {
+            let min_cost = self
+                .calculate_min_cost(dto.platform_id, scan_count, dto.ai_model_id)
+                .await?;
+            if cap < &min_cost {
+                return Err(ApiError::BadRequest(format!(
+                    "Budget too low: minimum {} points required / 预算不足：最低需要 {} 积分",
+                    min_cost, min_cost
+                )));
+            }
+        }
+
         // Create campaign in DRAFT status (budget not frozen yet)
         let new_campaign = NewCampaign {
             user_id,
@@ -136,6 +163,13 @@ impl CampaignService {
             .find_by_id_and_user(id, user_id)
             .await
             .map_err(|_| ApiError::BusinessError(BusinessError::CampaignNotFound))?;
+
+        // Validate schedule_type if provided
+        if let Some(ref st) = dto.schedule_type {
+            validate_schedule_type(st)?;
+            let config = dto.schedule_config.as_ref().or(existing.schedule_config.as_ref());
+            validate_schedule_config(st, &config.cloned())?;
+        }
 
         // Build changeset
         let changeset = NewCampaign {
@@ -389,4 +423,99 @@ impl CampaignService {
             search_options: campaign.search_options,
         }
     }
+
+    async fn calculate_min_cost(
+        &self,
+        _platform_id: i32,
+        scan_count: i32,
+        _ai_model_id: i32,
+    ) -> Result<BigDecimal, ApiError> {
+        use diesel::prelude::*;
+
+        let model_id_sql = if _ai_model_id > 0 {
+            _ai_model_id.to_string()
+        } else {
+            "NULL".to_string()
+        };
+
+        let query = format!(
+            "SELECT calculate_min_campaign_cost({}, {}, {})",
+            _platform_id, scan_count, model_id_sql
+        );
+
+        let mut conn = self.pool.get().map_err(|e| {
+            ApiError::InternalServerError(format!("DB pool error: {}", e))
+        })?;
+
+        match diesel::sql_query(&query).get_result::<MinCostRow>(&mut conn) {
+            Ok(row) => Ok(row.calculate_min_campaign_cost),
+            Err(e) => {
+                tracing::warn!(
+                    "calculate_min_campaign_cost DB function unavailable: {}, using fallback formula",
+                    e
+                );
+                let scan_cost = BigDecimal::from(5);
+                let ai_cost = BigDecimal::from(2);
+                let effective_scans = BigDecimal::from(std::cmp::max(scan_count, 1));
+                Ok((scan_cost + ai_cost) * effective_scans)
+            }
+        }
+    }
+}
+
+#[derive(diesel::QueryableByName)]
+struct MinCostRow {
+    #[diesel(sql_type = diesel::sql_types::Numeric)]
+    calculate_min_campaign_cost: BigDecimal,
+}
+
+const VALID_SCHEDULE_TYPES: &[&str] = &[
+    "CONTINUOUS", "ONCE", "SCHEDULED",
+    "INTERVAL", "CRON",
+];
+
+fn validate_schedule_type(schedule_type: &str) -> Result<(), ApiError> {
+    if !VALID_SCHEDULE_TYPES.contains(&schedule_type) {
+        return Err(ApiError::BadRequest(format!(
+            "Invalid schedule_type '{}'. Valid values: {} / 无效投放策略 '{}'，可选：{}",
+            schedule_type,
+            VALID_SCHEDULE_TYPES.join(", "),
+            schedule_type,
+            VALID_SCHEDULE_TYPES.join(", ")
+        )));
+    }
+    Ok(())
+}
+
+fn validate_schedule_config(
+    schedule_type: &str,
+    config: &Option<serde_json::Value>,
+) -> Result<(), ApiError> {
+    match schedule_type {
+        "CONTINUOUS" | "INTERVAL" => {
+            if let Some(cfg) = config {
+                if let Some(secs) = cfg.get("interval_seconds").and_then(|v| v.as_i64()) {
+                    if secs < 60 || secs > 86400 {
+                        return Err(ApiError::BadRequest(format!(
+                            "interval_seconds must be between 60 and 86400 (got {}) / 执行间隔必须在 60-86400 秒之间（当前 {}）",
+                            secs, secs
+                        )));
+                    }
+                }
+            }
+        }
+        "SCHEDULED" | "CRON" => {
+            if let Some(cfg) = config {
+                if let Some(expr) = cfg.get("cron_expression").and_then(|v| v.as_str()) {
+                    if expr.is_empty() {
+                        return Err(ApiError::BadRequest(
+                            "cron_expression cannot be empty / Cron 表达式不能为空".to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }

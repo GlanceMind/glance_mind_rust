@@ -1,11 +1,13 @@
 use crate::config::database::Database;
 use crate::dto::social_account_dto::{
-    CreateSocialAccountDto, SocialAccountDto, UpdateSocialAccountDto,
+    BatchCreateAccountsDto, BatchCreateResultDto, CreateSocialAccountDto, SocialAccountDto,
+    UpdateSocialAccountDto,
 };
 use crate::error::{api_error::ApiError, business_error::BusinessError};
 use crate::repository::social_account_repository::SocialAccountRepository;
 use glance_mind_db::entity::social_account::{NewSocialAccount, SocialAccount};
 use std::sync::Arc;
+use tracing::{error, info};
 
 #[derive(Clone)]
 pub struct SocialAccountService {
@@ -22,11 +24,20 @@ impl SocialAccountService {
     pub async fn list_accounts(
         &self,
         user_id: i32,
-        req: crate::dto::common::PageRequest,
+        req: crate::dto::social_account_dto::AccountListRequest,
     ) -> Result<crate::dto::common::PageResponse<SocialAccountDto>, ApiError> {
         let (accounts, total) = self
             .repo
-            .find_by_user(user_id, req.page, req.page_size)
+            .find_by_user(
+                user_id,
+                req.page,
+                req.page_size,
+                req.group_id,
+                req.username,
+                req.platform_id,
+                req.status,
+                req.device_id,
+            )
             .await
             .map_err(|_| ApiError::InternalServerError("Failed to list accounts".to_string()))?;
 
@@ -39,14 +50,28 @@ impl SocialAccountService {
         ))
     }
 
+    /// Get a single social account by ID, verifying user ownership.
+    pub async fn get_account_by_id(
+        &self,
+        account_id: i32,
+        user_id: i32,
+    ) -> Result<SocialAccount, ApiError> {
+        let account =
+            self.repo.find_by_id(account_id).await.map_err(|_| {
+                ApiError::NotFound(format!("Social account {} not found", account_id))
+            })?;
+        if account.user_id != user_id {
+            return Err(ApiError::Forbidden("Not your account".into()));
+        }
+        Ok(account)
+    }
+
     pub async fn create_account(
         &self,
         user_id: i32,
         dto: CreateSocialAccountDto,
     ) -> Result<SocialAccountDto, ApiError> {
-        // Get platform_id - for now use a mock ID
-        // In real implementation, look up platform by name
-        let platform_id = 1; // Mock ID
+        let platform_id = dto.platform_id;
 
         let new_account = NewSocialAccount {
             user_id,
@@ -168,9 +193,32 @@ impl SocialAccountService {
         Ok(())
     }
 
+    /// Remove account from group (set group_id to NULL)
+    pub async fn remove_from_group(&self, id: i32, user_id: i32) -> Result<(), ApiError> {
+        // Verify ownership
+        let account = self
+            .repo
+            .find_by_id(id)
+            .await
+            .map_err(|_| ApiError::BusinessError(BusinessError::AccountNotFound))?;
+
+        if account.user_id != user_id {
+            return Err(ApiError::BusinessError(
+                BusinessError::AccountPermissionDenied,
+            ));
+        }
+
+        self.repo.clear_group(id).await.map_err(|_| {
+            ApiError::InternalServerError("Failed to remove from group".to_string())
+        })?;
+
+        Ok(())
+    }
+
     fn to_dto(&self, account: SocialAccount) -> SocialAccountDto {
         SocialAccountDto {
             id: account.id,
+            platform_id: account.platform_id,
             group_id: account.group_id,
             username: account.username,
             cookie: Some(account.cookie),
@@ -196,5 +244,122 @@ impl SocialAccountService {
             .map_err(|_| {
                 ApiError::InternalServerError("Failed to get account statistics".to_string())
             })
+    }
+
+    /// Batch create multiple social accounts
+    /// Maximum 100 accounts per request
+    pub async fn batch_create_accounts(
+        &self,
+        user_id: i32,
+        dto: BatchCreateAccountsDto,
+    ) -> Result<BatchCreateResultDto, ApiError> {
+        // Parse profile range
+        let (prefix, start_num, end_num) =
+            self.parse_profile_range(&dto.profile_start, &dto.profile_end)?;
+
+        let total_count = end_num - start_num + 1;
+
+        // Validate: max 100 accounts per batch
+        if total_count > 100 {
+            return Err(ApiError::BadRequest(
+                "Maximum 100 accounts can be created in a single batch".to_string(),
+            ));
+        }
+
+        if total_count <= 0 {
+            return Err(ApiError::BadRequest(
+                "Invalid profile range: start must be less than or equal to end".to_string(),
+            ));
+        }
+
+        info!(
+            "Batch creating {} accounts for user {} with prefix '{}' from {} to {}",
+            total_count, user_id, prefix, start_num, end_num
+        );
+
+        // Generate accounts
+        let mut new_accounts: Vec<NewSocialAccount> = Vec::with_capacity(total_count as usize);
+
+        for i in start_num..=end_num {
+            let profile_name = format!("{}{}", prefix, i);
+            let username = format!("{}_{}", dto.username, profile_name);
+
+            new_accounts.push(NewSocialAccount {
+                user_id,
+                platform_id: dto.platform_id,
+                group_id: dto.group_id,
+                username,
+                cookie: String::new(),
+                proxy_url: None,
+                status: "ACTIVE".to_string(),
+                health_score: Some(100),
+                daily_max_replies: dto.daily_max_replies,
+                device_id: dto.device_id.clone(),
+                profile_name: Some(profile_name),
+            });
+        }
+
+        // Batch insert
+        match self.repo.batch_create(new_accounts).await {
+            Ok(accounts) => {
+                let created_ids: Vec<i32> = accounts.iter().map(|a| a.id).collect();
+                info!("Successfully created {} accounts", accounts.len());
+
+                Ok(BatchCreateResultDto {
+                    created_count: accounts.len() as i32,
+                    total_attempted: total_count,
+                    created_ids,
+                    errors: vec![],
+                })
+            }
+            Err(e) => {
+                error!("Failed to batch create accounts: {:?}", e);
+                Err(ApiError::InternalServerError(
+                    "Failed to batch create accounts".to_string(),
+                ))
+            }
+        }
+    }
+
+    /// Parse profile range like "account_1" to "account_100"
+    /// Returns (prefix, start_number, end_number)
+    fn parse_profile_range(&self, start: &str, end: &str) -> Result<(String, i32, i32), ApiError> {
+        // Extract prefix and number from start
+        let start_match = start.rfind(|c: char| !c.is_ascii_digit());
+        let end_match = end.rfind(|c: char| !c.is_ascii_digit());
+
+        let (start_prefix, start_num_str) = if let Some(idx) = start_match {
+            (&start[..=idx], &start[idx + 1..])
+        } else {
+            return Err(ApiError::BadRequest(
+                "Invalid profile_start format. Expected format like 'account_1'".to_string(),
+            ));
+        };
+
+        let (end_prefix, end_num_str) = if let Some(idx) = end_match {
+            (&end[..=idx], &end[idx + 1..])
+        } else {
+            return Err(ApiError::BadRequest(
+                "Invalid profile_end format. Expected format like 'account_100'".to_string(),
+            ));
+        };
+
+        // Verify prefixes match
+        if start_prefix != end_prefix {
+            return Err(ApiError::BadRequest(
+                "Profile start and end must have the same prefix".to_string(),
+            ));
+        }
+
+        // Parse numbers
+        let start_num: i32 = start_num_str
+            .parse()
+            .map_err(|_| ApiError::BadRequest("Invalid number in profile_start".to_string()))?;
+
+        let end_num: i32 = end_num_str
+            .parse()
+            .map_err(|_| ApiError::BadRequest("Invalid number in profile_end".to_string()))?;
+
+        Ok((start_prefix.to_string(), start_num, end_num))
     }
 }

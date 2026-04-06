@@ -15,11 +15,10 @@ use rig::completion::Prompt;
 use rig::providers::openai;
 use serde_json;
 
-// AI Client (reuse ai_service configuration)
 static CLIENT: Lazy<openai::CompletionsClient> = Lazy::new(|| {
-    let api_key = std::env::var("AGENT_API_KEY").expect("AGENT_API_KEY not set in environment");
-    let base_url = std::env::var("AGENT_BASE_URL")
-        .unwrap_or_else(|_| "https://api.deepseek.com/v1".to_string());
+    let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set in environment");
+    let base_url =
+        std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| "https://timicc.com/v1".to_string());
 
     let client_responses: openai::Client = openai::Client::builder()
         .base_url(&base_url)
@@ -220,10 +219,7 @@ Generate the analysis results in strict JSON format."#,
 
     /// Call AI
     async fn call_ai(&self, system_prompt: &str, user_prompt: &str) -> Result<String, ApiError> {
-        let agent = CLIENT
-            .agent("deepseek-ai/DeepSeek-V3")
-            .preamble(system_prompt)
-            .build();
+        let agent = CLIENT.agent("gpt-5.2").preamble(system_prompt).build();
 
         let response = agent.prompt(user_prompt).await.map_err(|e| {
             ApiError::InfrastructureError(InfrastructureError::ExternalApiRequestFailed(

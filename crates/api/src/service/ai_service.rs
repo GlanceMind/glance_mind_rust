@@ -4,12 +4,11 @@ use rig::client::CompletionClient;
 use rig::completion::Prompt;
 use rig::providers::openai;
 
-// Change type to CompletionsClient for Deepseek compatibility
 static CLIENT: Lazy<openai::CompletionsClient> = Lazy::new(|| {
-    let api_key = std::env::var("AGENT_API_KEY").expect("AGENT_API_KEY not set in environment");
+    let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set in environment");
 
-    let base_url = std::env::var("AGENT_BASE_URL")
-        .unwrap_or_else(|_| "https://api.deepseek.com/v1".to_string());
+    let base_url =
+        std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| "https://timicc.com/v1".to_string());
 
     let client_responses: openai::Client = openai::Client::builder()
         .base_url(&base_url)
@@ -28,10 +27,7 @@ impl AiService {
         let user_prompt = Self::build_user_prompt(&req);
 
         // Use the global CLIENT instance
-        let agent = CLIENT
-            .agent("deepseek-ai/DeepSeek-V3.2-Exp")
-            .preamble(&system_prompt)
-            .build();
+        let agent = CLIENT.agent("gpt-5.2").preamble(&system_prompt).build();
 
         let response = agent
             .prompt(&user_prompt)

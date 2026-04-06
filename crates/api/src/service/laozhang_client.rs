@@ -1,11 +1,12 @@
 use crate::dto::laozhang_dto::{
-    CreateVideoFromImageRequest, CreateVideoFromTextRequest, VideoTaskDetailResponse,
-    VideoTaskResponse,
+    CreateImageRequest, CreateVideoFromImageRequest, CreateVideoFromTextRequest, ImageResponse,
+    VideoTaskDetailResponse, VideoTaskResponse,
 };
 use crate::error::{
     api_error::ApiError, business_error::BusinessError, infrastructure_error::InfrastructureError,
 };
 use reqwest::{multipart, Client};
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 /// LaoZhang.ai API Client
@@ -685,11 +686,380 @@ impl LaoZhangClient {
         );
         Ok(task_response)
     }
+
+    // ========== Image Generation Functions ==========
+
+    /// Generate image from text prompt
+    ///
+    /// Supports multiple models including:
+    /// - gpt-4o-image: Best value, high quality ($0.01/image)
+    /// - dall-e-3: OpenAI official, rich details ($0.04/image)
+    /// - dall-e-2: Classic model, stable ($0.02/image)
+    /// - black-forest-labs/flux-pro-v1.1: Professional quality ($0.035/image)
+    /// - claude-3.5-sonnet-img: Claude image generation
+    ///
+    /// # Arguments
+    /// * `request` - Image generation request parameters
+    ///
+    /// # Returns
+    /// Returns image generation response containing image URLs
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use glance_mind_api::service::laozhang_client::LaoZhangClient;
+    /// # use glance_mind_api::dto::laozhang_dto::CreateImageRequest;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let client = LaoZhangClient::new("your_api_key".to_string(), None);
+    /// let request = CreateImageRequest {
+    ///     model: "gpt-4o-image".to_string(),
+    ///     prompt: "A serene Japanese garden with cherry blossoms".to_string(),
+    ///     ..Default::default()
+    /// };
+    /// let response = client.create_image(request).await?;
+    /// if let Some(url) = response.get_first_url() {
+    ///     println!("Image URL: {}", url);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn create_image(
+        &self,
+        request: CreateImageRequest,
+    ) -> Result<ImageResponse, ApiError> {
+        let url = format!("{}/v1/images/generations", self.base_url);
+
+        tracing::info!(
+            "Starting image generation: model={}, prompt='{}', n={:?}, size={:?}, quality={:?}, style={:?}",
+            request.model,
+            request.prompt,
+            request.n,
+            request.size,
+            request.quality,
+            request.style
+        );
+
+        tracing::debug!(
+            "LaoZhang image generation request body: {}",
+            serde_json::to_string_pretty(&request).unwrap_or_default()
+        );
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| {
+                tracing::error!("LaoZhang image generation request failed: {:?}", e);
+                ApiError::InfrastructureError(InfrastructureError::ExternalApiRequestFailed(
+                    e.to_string(),
+                ))
+            })?;
+
+        let status = response.status();
+        let body_text = response.text().await.map_err(|e| {
+            tracing::error!("Failed to read LaoZhang image response: {:?}", e);
+            ApiError::InfrastructureError(InfrastructureError::ExternalApiResponseParsingFailed(
+                e.to_string(),
+            ))
+        })?;
+
+        tracing::info!(
+            "LaoZhang image API response: status={}, body_length={} bytes",
+            status,
+            body_text.len()
+        );
+        tracing::debug!("LaoZhang image response content: {}", body_text);
+
+        if !status.is_success() {
+            tracing::error!(
+                "LaoZhang image generation failed: status={}, body={}",
+                status,
+                body_text
+            );
+
+            // Try to parse structured error response
+            if let Ok(error_response) = serde_json::from_str::<LaoZhangErrorResponse>(&body_text) {
+                return Err(ApiError::InfrastructureError(
+                    InfrastructureError::ExternalApiRequestFailed(format!(
+                        "LaoZhang image generation error: {}",
+                        error_response.error.message
+                    )),
+                ));
+            }
+
+            return Err(ApiError::InfrastructureError(
+                InfrastructureError::ExternalApiRequestFailed(format!(
+                    "LaoZhang API error: {} - {}",
+                    status, body_text
+                )),
+            ));
+        }
+
+        let image_response: ImageResponse = serde_json::from_str(&body_text).map_err(|e| {
+            tracing::error!(
+                "Failed to parse LaoZhang image response: {:?}, body: {}",
+                e,
+                body_text
+            );
+            ApiError::InfrastructureError(InfrastructureError::ExternalApiResponseParsingFailed(
+                e.to_string(),
+            ))
+        })?;
+
+        tracing::info!(
+            "LaoZhang image generation successful: model={}, images_count={}, prompt='{}'",
+            request.model,
+            image_response.data.len(),
+            request.prompt
+        );
+
+        Ok(image_response)
+    }
+
+    /// Analyze video using Gemini model (for material prompt generation)
+    ///
+    /// Supported models:
+    /// - gemini-2.5-pro: Detailed and accurate, recommended for complex video analysis
+    /// - gemini-2.5-flash: Fast and cost-effective, suitable for batch processing
+    ///
+    /// # Arguments
+    /// * `model` - Model name (e.g., "gemini-2.5-pro", "gemini-2.5-flash")
+    /// * `video_url` - URL of the video to analyze
+    /// * `prompt` - Analysis instruction prompt
+    /// * `max_tokens` - Maximum tokens in response (optional)
+    ///
+    /// # Returns
+    /// Returns the analysis result as a string
+    pub async fn analyze_video(
+        &self,
+        model: &str,
+        video_url: &str,
+        prompt: &str,
+        max_tokens: Option<u32>,
+    ) -> Result<String, ApiError> {
+        let url = format!("{}/v1/chat/completions", self.base_url);
+
+        let request = VideoAnalysisRequest::new(model, prompt, video_url, max_tokens);
+
+        tracing::info!(
+            "Starting video analysis: model={}, video_url='{}', max_tokens={:?}",
+            model,
+            video_url.chars().take(50).collect::<String>(),
+            max_tokens
+        );
+
+        tracing::debug!(
+            "Video analysis request body: {}",
+            serde_json::to_string_pretty(&request).unwrap_or_default()
+        );
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| {
+                tracing::error!("Video analysis request failed: {:?}", e);
+                ApiError::InfrastructureError(InfrastructureError::ExternalApiRequestFailed(
+                    e.to_string(),
+                ))
+            })?;
+
+        let status = response.status();
+        let body_text = response.text().await.map_err(|e| {
+            tracing::error!("Failed to read video analysis response: {:?}", e);
+            ApiError::InfrastructureError(InfrastructureError::ExternalApiResponseParsingFailed(
+                e.to_string(),
+            ))
+        })?;
+
+        tracing::info!(
+            "Video analysis response: status={}, body_len={}",
+            status,
+            body_text.len()
+        );
+
+        if !status.is_success() {
+            tracing::error!(
+                "Video analysis failed: status={}, body={}",
+                status,
+                body_text
+            );
+
+            if let Ok(error_response) = serde_json::from_str::<LaoZhangErrorResponse>(&body_text) {
+                return Err(ApiError::InfrastructureError(
+                    InfrastructureError::ExternalApiRequestFailed(format!(
+                        "Video analysis error: {}",
+                        error_response.error.message
+                    )),
+                ));
+            }
+
+            return Err(ApiError::InfrastructureError(
+                InfrastructureError::ExternalApiRequestFailed(format!(
+                    "Video analysis error: {} - {}",
+                    status, body_text
+                )),
+            ));
+        }
+
+        tracing::debug!("Video analysis response content: {}", body_text);
+
+        let analysis_response: VideoAnalysisResponse =
+            serde_json::from_str(&body_text).map_err(|e| {
+                tracing::error!(
+                    "Failed to parse video analysis response: {:?}, body: {}",
+                    e,
+                    body_text
+                );
+                ApiError::InfrastructureError(
+                    InfrastructureError::ExternalApiResponseParsingFailed(e.to_string()),
+                )
+            })?;
+
+        let content = analysis_response.get_content().ok_or_else(|| {
+            ApiError::InfrastructureError(InfrastructureError::ExternalApiResponseParsingFailed(
+                "No content in video analysis response".to_string(),
+            ))
+        })?;
+
+        tracing::info!(
+            "Video analysis completed: id={}, model={}, content_len={}",
+            analysis_response.id,
+            analysis_response.model,
+            content.len()
+        );
+
+        Ok(content.to_string())
+    }
+}
+
+// ============================================================================
+// Video Analysis Types (Gemini Vision API)
+// ============================================================================
+
+/// Content item for multimodal messages
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ContentItem {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: ImageUrlContent },
+}
+
+/// Image/Video URL content
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageUrlContent {
+    pub url: String,
+}
+
+/// Message for chat completions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: Vec<ContentItem>,
+}
+
+/// Video analysis request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoAnalysisRequest {
+    pub model: String,
+    pub messages: Vec<ChatMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+}
+
+impl VideoAnalysisRequest {
+    /// Create a new video analysis request
+    pub fn new(model: &str, prompt: &str, video_url: &str, max_tokens: Option<u32>) -> Self {
+        Self {
+            model: model.to_string(),
+            messages: vec![ChatMessage {
+                role: "user".to_string(),
+                content: vec![
+                    ContentItem::Text {
+                        text: prompt.to_string(),
+                    },
+                    ContentItem::ImageUrl {
+                        image_url: ImageUrlContent {
+                            url: video_url.to_string(),
+                        },
+                    },
+                ],
+            }],
+            max_tokens,
+        }
+    }
+}
+
+/// Choice in chat completion response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatChoice {
+    pub index: u32,
+    pub message: ChatResponseMessage,
+    pub finish_reason: Option<String>,
+}
+
+/// Message in chat completion response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatResponseMessage {
+    pub role: String,
+    pub content: String,
+}
+
+/// Chat completion usage info
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+}
+
+/// Video analysis response (chat completions format)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoAnalysisResponse {
+    pub id: String,
+    pub object: String,
+    pub created: i64,
+    pub model: String,
+    pub choices: Vec<ChatChoice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<ChatUsage>,
+}
+
+impl VideoAnalysisResponse {
+    /// Get the first response content
+    pub fn get_content(&self) -> Option<&str> {
+        self.choices.first().map(|c| c.message.content.as_str())
+    }
+}
+
+/// Error response from LaoZhang API
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LaoZhangErrorResponse {
+    pub error: LaoZhangError,
+}
+
+/// Error details
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LaoZhangError {
+    pub message: String,
+    #[serde(rename = "type")]
+    pub error_type: Option<String>,
+    pub code: Option<String>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dto::laozhang_dto::ImageData;
 
     // ========== Basic Tests ==========
 
@@ -807,6 +1177,492 @@ mod tests {
         assert_eq!(request.seconds, "10");
         assert_eq!(request.image_filename, "image.png");
         assert_eq!(request.image_data, test_image);
+    }
+
+    // ========== Image Generation Tests ==========
+
+    #[test]
+    fn test_create_image_request_default() {
+        let request = CreateImageRequest::default();
+        assert_eq!(request.model, "gpt-4o-image");
+        assert_eq!(request.prompt, "");
+        assert_eq!(request.n, Some(1));
+        assert_eq!(request.size, Some("1024x1024".to_string()));
+        assert!(request.quality.is_none());
+        assert!(request.style.is_none());
+    }
+
+    #[test]
+    fn test_create_image_request_gpt4o_image() {
+        let request = CreateImageRequest {
+            model: "gpt-4o-image".to_string(),
+            prompt: "A serene Japanese garden with cherry blossoms".to_string(),
+            n: Some(1),
+            size: Some("1024x1024".to_string()),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("gpt-4o-image"));
+        assert!(json.contains("Japanese garden"));
+        // quality and style should be omitted from JSON (skip_serializing_if)
+        assert!(!json.contains("quality"));
+        assert!(!json.contains("style"));
+    }
+
+    #[test]
+    fn test_create_image_request_dalle3_with_quality_and_style() {
+        let request = CreateImageRequest {
+            model: "dall-e-3".to_string(),
+            prompt: "A detailed oil painting of a robot playing chess".to_string(),
+            n: Some(1),
+            size: Some("1024x1024".to_string()),
+            quality: Some("hd".to_string()),
+            style: Some("vivid".to_string()),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("dall-e-3"));
+        assert!(json.contains("\"quality\":\"hd\""));
+        assert!(json.contains("\"style\":\"vivid\""));
+    }
+
+    #[test]
+    fn test_create_image_request_with_response_format() {
+        let request = CreateImageRequest {
+            model: "gpt-4o-image".to_string(),
+            prompt: "test".to_string(),
+            response_format: Some("url".to_string()),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("\"response_format\":\"url\""));
+    }
+
+    #[test]
+    fn test_create_image_request_serialization_all_fields() {
+        let request = CreateImageRequest {
+            model: "dall-e-3".to_string(),
+            prompt: "test prompt".to_string(),
+            n: Some(2),
+            size: Some("1024x1792".to_string()),
+            quality: Some("hd".to_string()),
+            style: Some("natural".to_string()),
+            response_format: Some("url".to_string()),
+        };
+
+        let json_value: serde_json::Value = serde_json::to_value(&request).unwrap();
+        assert_eq!(json_value["model"], "dall-e-3");
+        assert_eq!(json_value["prompt"], "test prompt");
+        assert_eq!(json_value["n"], 2);
+        assert_eq!(json_value["size"], "1024x1792");
+        assert_eq!(json_value["quality"], "hd");
+        assert_eq!(json_value["style"], "natural");
+        assert_eq!(json_value["response_format"], "url");
+    }
+
+    #[test]
+    fn test_create_image_request_serialization_optional_fields_omitted() {
+        let request = CreateImageRequest {
+            model: "gpt-4o-image".to_string(),
+            prompt: "test".to_string(),
+            n: None,
+            size: None,
+            quality: None,
+            style: None,
+            response_format: None,
+        };
+
+        let json = serde_json::to_string(&request).unwrap();
+        // Only model and prompt should be present
+        assert!(json.contains("model"));
+        assert!(json.contains("prompt"));
+        assert!(!json.contains("\"n\""));
+        assert!(!json.contains("\"size\""));
+        assert!(!json.contains("\"quality\""));
+        assert!(!json.contains("\"style\""));
+        assert!(!json.contains("\"response_format\""));
+    }
+
+    #[test]
+    fn test_image_response_deserialization_with_url() {
+        let json = r#"{
+            "created": 1706000000,
+            "data": [
+                {
+                    "url": "https://example.com/image1.png",
+                    "revised_prompt": "A beautiful garden..."
+                }
+            ]
+        }"#;
+
+        let response: ImageResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.created, 1706000000);
+        assert_eq!(response.data.len(), 1);
+        assert_eq!(
+            response.data[0].url.as_deref(),
+            Some("https://example.com/image1.png")
+        );
+        assert_eq!(
+            response.data[0].revised_prompt.as_deref(),
+            Some("A beautiful garden...")
+        );
+        assert!(response.data[0].b64_json.is_none());
+        assert!(response.data[0].has_image());
+    }
+
+    #[test]
+    fn test_image_response_deserialization_with_b64_json() {
+        let json = r#"{
+            "created": 1706000000,
+            "data": [
+                {
+                    "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+                    "revised_prompt": "A tiny image"
+                }
+            ]
+        }"#;
+
+        let response: ImageResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.created, 1706000000);
+        assert_eq!(response.data.len(), 1);
+        assert!(response.data[0].url.is_none());
+        assert!(response.data[0].b64_json.is_some());
+        assert!(response.data[0].has_image());
+        assert!(response.has_images());
+        assert_eq!(response.image_count(), 1);
+        // get_first_url returns None since there's no URL
+        assert!(response.get_first_url().is_none());
+        // get_first_b64 returns the base64 data
+        assert!(response.get_first_b64().is_some());
+    }
+
+    #[test]
+    fn test_image_response_get_first_url() {
+        let response = ImageResponse {
+            created: 1706000000,
+            data: vec![
+                ImageData {
+                    url: Some("https://example.com/image1.png".to_string()),
+                    b64_json: None,
+                    revised_prompt: None,
+                },
+                ImageData {
+                    url: Some("https://example.com/image2.png".to_string()),
+                    b64_json: None,
+                    revised_prompt: None,
+                },
+            ],
+        };
+
+        assert_eq!(
+            response.get_first_url(),
+            Some("https://example.com/image1.png")
+        );
+    }
+
+    #[test]
+    fn test_image_response_get_all_urls() {
+        let response = ImageResponse {
+            created: 1706000000,
+            data: vec![
+                ImageData {
+                    url: Some("https://example.com/image1.png".to_string()),
+                    b64_json: None,
+                    revised_prompt: None,
+                },
+                ImageData {
+                    url: Some("https://example.com/image2.png".to_string()),
+                    b64_json: None,
+                    revised_prompt: None,
+                },
+            ],
+        };
+
+        let urls = response.get_all_urls();
+        assert_eq!(urls.len(), 2);
+        assert_eq!(urls[0], "https://example.com/image1.png");
+        assert_eq!(urls[1], "https://example.com/image2.png");
+    }
+
+    #[test]
+    fn test_image_response_mixed_url_and_b64() {
+        let response = ImageResponse {
+            created: 1706000000,
+            data: vec![
+                ImageData {
+                    url: Some("https://example.com/image1.png".to_string()),
+                    b64_json: None,
+                    revised_prompt: None,
+                },
+                ImageData {
+                    url: None,
+                    b64_json: Some("base64data".to_string()),
+                    revised_prompt: None,
+                },
+            ],
+        };
+
+        // get_all_urls only returns URL-based images
+        assert_eq!(response.get_all_urls().len(), 1);
+        // But image_count counts all images
+        assert_eq!(response.image_count(), 2);
+        assert!(response.has_images());
+    }
+
+    #[test]
+    fn test_image_response_empty_data() {
+        let response = ImageResponse {
+            created: 1706000000,
+            data: vec![],
+        };
+
+        assert!(response.get_first_url().is_none());
+        assert!(response.get_all_urls().is_empty());
+        assert!(response.get_first_b64().is_none());
+        assert!(!response.has_images());
+        assert_eq!(response.image_count(), 0);
+    }
+
+    #[test]
+    fn test_image_response_without_revised_prompt() {
+        let json = r#"{
+            "created": 1706000000,
+            "data": [
+                {
+                    "url": "https://example.com/image1.png"
+                }
+            ]
+        }"#;
+
+        let response: ImageResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.data.len(), 1);
+        assert!(response.data[0].revised_prompt.is_none());
+    }
+
+    #[test]
+    fn test_image_response_multiple_images() {
+        let json = r#"{
+            "created": 1706000000,
+            "data": [
+                {"url": "https://example.com/img1.png"},
+                {"url": "https://example.com/img2.png"},
+                {"url": "https://example.com/img3.png"}
+            ]
+        }"#;
+
+        let response: ImageResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.data.len(), 3);
+        assert_eq!(response.get_all_urls().len(), 3);
+    }
+
+    #[test]
+    fn test_image_data_empty() {
+        let json = r#"{
+            "created": 1706000000,
+            "data": [{}]
+        }"#;
+
+        let response: ImageResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.data.len(), 1);
+        assert!(!response.data[0].has_image());
+        assert!(!response.has_images());
+    }
+
+    /// Verify all supported image models can be serialized correctly
+    #[test]
+    fn test_all_image_models_serialization() {
+        let models = vec![
+            ("gpt-4o-image", "1024x1024", None, None),
+            ("sora-image", "1024x1024", None, None),
+            ("dall-e-3", "1024x1024", Some("hd"), Some("vivid")),
+        ];
+
+        for (model, size, quality, style) in models {
+            let request = CreateImageRequest {
+                model: model.to_string(),
+                prompt: "Test prompt for image generation".to_string(),
+                n: Some(1),
+                size: Some(size.to_string()),
+                quality: quality.map(|q| q.to_string()),
+                style: style.map(|s| s.to_string()),
+                ..Default::default()
+            };
+
+            // Verify serialization works
+            let json_str = serde_json::to_string(&request).unwrap();
+            assert!(
+                json_str.contains(model),
+                "JSON should contain model name: {}",
+                model
+            );
+
+            // Verify deserialization round-trip
+            let deserialized: CreateImageRequest = serde_json::from_str(&json_str).unwrap();
+            assert_eq!(deserialized.model, model);
+            assert_eq!(deserialized.prompt, "Test prompt for image generation");
+            assert_eq!(deserialized.n, Some(1));
+            assert_eq!(deserialized.size, Some(size.to_string()));
+            assert_eq!(deserialized.quality, quality.map(|q| q.to_string()));
+            assert_eq!(deserialized.style, style.map(|s| s.to_string()));
+        }
+    }
+
+    // ========== Image Generation Manual Tests (Requires API Key) ==========
+
+    /// Manual test: Generate image with all supported models
+    ///
+    /// Run with:
+    /// ```bash
+    /// export LAOZHANG_API_KEY="your_api_key"
+    /// cargo test test_manual_create_image_all_models -- --ignored --nocapture
+    /// ```
+    #[tokio::test]
+    #[ignore]
+    async fn test_manual_create_image_all_models() {
+        let api_key = std::env::var("LAOZHANG_API_KEY")
+            .expect("Please set LAOZHANG_API_KEY environment variable");
+
+        let client = LaoZhangClient::new(api_key, None);
+
+        let test_prompt = "A serene Japanese garden with cherry blossoms in spring";
+
+        // (model, size, quality, style, response_format)
+        #[allow(clippy::type_complexity)]
+        let models: Vec<(&str, &str, Option<&str>, Option<&str>, Option<&str>)> = vec![
+            ("gpt-4o-image", "1024x1024", None, None, Some("url")),
+            ("sora-image", "1024x1024", None, None, Some("url")),
+            ("dall-e-3", "1024x1024", Some("hd"), Some("vivid"), None),
+        ];
+
+        println!("\nTest: Image Generation - All Models");
+        println!("====================================");
+        println!("Prompt: {}", test_prompt);
+        println!();
+
+        let mut success_count = 0;
+        let total = models.len();
+
+        for (model, size, quality, style, response_format) in &models {
+            println!("--- Testing model: {} ---", model);
+
+            let request = CreateImageRequest {
+                model: model.to_string(),
+                prompt: test_prompt.to_string(),
+                n: Some(1),
+                size: Some(size.to_string()),
+                quality: quality.map(|q| q.to_string()),
+                style: style.map(|s| s.to_string()),
+                response_format: response_format.map(|f| f.to_string()),
+            };
+
+            match client.create_image(request).await {
+                Ok(response) => {
+                    success_count += 1;
+                    println!(
+                        "  OK: {} image(s) generated (has_images={})",
+                        response.data.len(),
+                        response.has_images()
+                    );
+                    if let Some(url) = response.get_first_url() {
+                        println!("  URL: {}...", &url[..url.len().min(80)]);
+                    }
+                    if let Some(b64) = response.get_first_b64() {
+                        println!(
+                            "  B64: ({}... {} bytes)",
+                            &b64[..b64.len().min(30)],
+                            b64.len()
+                        );
+                    }
+                    if let Some(revised) = response
+                        .data
+                        .first()
+                        .and_then(|d| d.revised_prompt.as_deref())
+                    {
+                        println!("  Revised prompt: {}...", &revised[..revised.len().min(60)]);
+                    }
+                }
+                Err(e) => {
+                    println!("  FAIL: {:?}", e);
+                }
+            }
+            println!();
+        }
+
+        println!("====================================");
+        println!(
+            "Results: {}/{} models succeeded ({:.0}%)",
+            success_count,
+            total,
+            success_count as f64 / total as f64 * 100.0
+        );
+
+        assert_eq!(
+            success_count, total,
+            "All active image models should generate successfully"
+        );
+    }
+
+    /// Manual test: Generate image with gpt-4o-image model
+    ///
+    /// Run with:
+    /// ```bash
+    /// export LAOZHANG_API_KEY="your_api_key"
+    /// cargo test test_manual_create_image_gpt4o -- --ignored --nocapture
+    /// ```
+    #[tokio::test]
+    #[ignore]
+    async fn test_manual_create_image_gpt4o() {
+        let api_key = std::env::var("LAOZHANG_API_KEY")
+            .expect("Please set LAOZHANG_API_KEY environment variable");
+
+        let client = LaoZhangClient::new(api_key, None);
+
+        let request = CreateImageRequest {
+            model: "gpt-4o-image".to_string(),
+            prompt: "A cute cat wearing a tiny top hat, digital art style".to_string(),
+            n: Some(1),
+            size: Some("1024x1024".to_string()),
+            response_format: Some("url".to_string()),
+            ..Default::default()
+        };
+
+        println!("\nTest: Image Generation - GPT-4o Image");
+        println!("====================================");
+        println!("Model: {}", request.model);
+        println!("Prompt: {}", request.prompt);
+        println!("Size: {:?}", request.size);
+        println!("Response format: {:?}", request.response_format);
+        println!();
+
+        match client.create_image(request).await {
+            Ok(response) => {
+                println!("Request successful!");
+                println!("  created: {}", response.created);
+                println!("  images: {}", response.data.len());
+                for (i, img) in response.data.iter().enumerate() {
+                    if let Some(ref url) = img.url {
+                        println!("  image[{}] url: {}", i, url);
+                    }
+                    if let Some(ref b64) = img.b64_json {
+                        println!("  image[{}] b64_json: {} bytes", i, b64.len());
+                    }
+                    if let Some(ref revised) = img.revised_prompt {
+                        println!("  image[{}] revised_prompt: {}", i, revised);
+                    }
+                }
+                assert!(
+                    response.has_images(),
+                    "Response should contain at least one image"
+                );
+            }
+            Err(e) => {
+                println!("Request failed: {:?}", e);
+                panic!("Image generation failed");
+            }
+        }
     }
 
     // ========== Manual Tests (Requires API Key) ==========

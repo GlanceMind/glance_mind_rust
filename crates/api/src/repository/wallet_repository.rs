@@ -1,5 +1,7 @@
 use crate::config::database::DBPool;
+use crate::dto::wallet_dto::PaymentStatus;
 use bigdecimal::BigDecimal;
+use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, PooledConnection};
 use diesel::result::Error as DieselError;
@@ -12,6 +14,16 @@ use glance_mind_db::schema::{
 };
 
 pub type PgConnection = PooledConnection<ConnectionManager<DieselPgConnection>>;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RefundApplyOutcome {
+    Applied,
+    BlockedInsufficientBalance {
+        available_balance: BigDecimal,
+        required_points: BigDecimal,
+    },
+    Noop,
+}
 
 #[derive(Clone)]
 pub struct WalletRepository {
@@ -75,6 +87,18 @@ impl WalletRepository {
             .load(&mut conn)?;
 
         Ok((items, total))
+    }
+
+    /// Get a single transaction by ID (for authorization checks)
+    pub async fn get_transaction_by_id(
+        &self,
+        transaction_id: i32,
+    ) -> Result<WalletTransaction, DieselError> {
+        let mut conn = self.pool.get().expect("Connection error");
+        wallet_transactions::table
+            .find(transaction_id)
+            .select(WalletTransaction::as_select())
+            .first(&mut conn)
     }
 
     pub async fn create_transaction(
@@ -144,6 +168,250 @@ impl WalletRepository {
         Ok(available >= *required_amount)
     }
 
+    /// Find a transaction by its external_txn_id (merchant order number)
+    pub async fn find_transaction_by_external_id(
+        &self,
+        external_id: &str,
+    ) -> Result<WalletTransaction, DieselError> {
+        let mut conn = self.pool.get().expect("Connection error");
+        wallet_transactions::table
+            .filter(wallet_transactions::external_txn_id.eq(external_id))
+            .select(WalletTransaction::as_select())
+            .first(&mut conn)
+    }
+
+    /// List stale pending recharge orders for reconciliation.
+    pub async fn list_pending_recharge_transactions(
+        &self,
+        older_than: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<WalletTransaction>, DieselError> {
+        let mut conn = self.pool.get().expect("Connection error");
+        wallet_transactions::table
+            .filter(wallet_transactions::type_.eq("RECHARGE"))
+            .filter(
+                wallet_transactions::payment_status.eq(Some(PaymentStatus::Pending.as_db_value())),
+            )
+            .filter(wallet_transactions::created_at.le(older_than))
+            .select(WalletTransaction::as_select())
+            .order(wallet_transactions::created_at.asc())
+            .limit(limit)
+            .load(&mut conn)
+    }
+
+    pub async fn count_pending_recharge_orders(&self, user_id: i32) -> Result<i64, DieselError> {
+        let mut conn = self.pool.get().expect("Connection error");
+        wallet_transactions::table
+            .filter(wallet_transactions::user_id.eq(user_id))
+            .filter(wallet_transactions::type_.eq("RECHARGE"))
+            .filter(
+                wallet_transactions::payment_status.eq(Some(PaymentStatus::Pending.as_db_value())),
+            )
+            .count()
+            .get_result(&mut conn)
+    }
+
+    /// Transition a recharge order from one explicit payment state to another.
+    ///
+    /// `PENDING -> PAID` must still go through `atomic_confirm_payment()` so the
+    /// wallet credit and order transition stay in a single database transaction.
+    pub async fn update_payment_status_if_current(
+        &self,
+        txn_id: i32,
+        current_status: PaymentStatus,
+        next_status: PaymentStatus,
+        platform_txn_id: Option<&str>,
+        open_order_id: Option<&str>,
+    ) -> Result<Option<WalletTransaction>, DieselError> {
+        let mut conn = self.pool.get().expect("Connection error");
+        diesel::update(
+            wallet_transactions::table
+                .filter(wallet_transactions::id.eq(txn_id))
+                .filter(wallet_transactions::payment_status.eq(Some(current_status.as_db_value()))),
+        )
+        .set((
+            wallet_transactions::payment_status.eq(Some(next_status.as_db_value())),
+            wallet_transactions::platform_txn_id.eq(platform_txn_id),
+            wallet_transactions::open_order_id.eq(open_order_id),
+        ))
+        .returning(WalletTransaction::as_returning())
+        .get_result(&mut conn)
+        .optional()
+    }
+
+    /// Atomically: mark order PAID + credit wallet + write deposit record.
+    ///
+    /// Uses a single DB transaction to prevent "paid but not credited" states.
+    /// The WHERE clause on payment_status='PENDING' acts as a row-level lock
+    /// that makes concurrent duplicate callbacks safe.
+    pub async fn atomic_confirm_payment(
+        &self,
+        txn_id: i32,
+        user_id: i32,
+        points: BigDecimal,
+        platform_txn_id: &str,
+        open_order_id: &str,
+    ) -> Result<(), DieselError> {
+        let mut conn = self.pool.get().expect("Connection error");
+
+        conn.transaction(|conn| {
+            let recharge_order = wallet_transactions::table
+                .find(txn_id)
+                .select(WalletTransaction::as_select())
+                .first::<WalletTransaction>(conn)?;
+
+            // CAS: only transition PENDING -> PAID; concurrent calls will match 0 rows
+            let updated = diesel::update(
+                wallet_transactions::table
+                    .filter(wallet_transactions::id.eq(txn_id))
+                    .filter(
+                        wallet_transactions::payment_status
+                            .eq(Some(PaymentStatus::Pending.as_db_value())),
+                    ),
+            )
+            .set((
+                wallet_transactions::payment_status.eq(Some(PaymentStatus::Paid.as_db_value())),
+                wallet_transactions::platform_txn_id.eq(Some(platform_txn_id)),
+                wallet_transactions::open_order_id.eq(Some(open_order_id)),
+                wallet_transactions::paid_at.eq(diesel::dsl::now),
+            ))
+            .execute(conn)?;
+
+            if updated == 0 {
+                // Already processed or not in PENDING state — idempotent no-op
+                return Ok(());
+            }
+
+            // Ensure wallet exists
+            let wallet_exists = user_wallets::table
+                .filter(user_wallets::user_id.eq(user_id))
+                .select(user_wallets::user_id)
+                .first::<i32>(conn)
+                .optional()?;
+
+            if wallet_exists.is_none() {
+                diesel::insert_into(user_wallets::table)
+                    .values((
+                        user_wallets::user_id.eq(user_id),
+                        user_wallets::balance_points.eq(BigDecimal::from(0)),
+                        user_wallets::frozen_points.eq(BigDecimal::from(0)),
+                    ))
+                    .execute(conn)?;
+            }
+
+            // Credit balance
+            diesel::update(user_wallets::table)
+                .filter(user_wallets::user_id.eq(user_id))
+                .set(user_wallets::balance_points.eq(user_wallets::balance_points + &points))
+                .execute(conn)?;
+
+            // Write DEPOSIT transaction record for audit trail
+            let deposit_txn = NewWalletTransaction {
+                user_id,
+                amount: points,
+                type_: "DEPOSIT".to_string(),
+                payment_method: recharge_order.payment_method.clone(),
+                external_txn_id: None,
+                reference_id: Some(txn_id),
+                description: Some(format!(
+                    "Wallet credit for recharge order {}",
+                    recharge_order
+                        .external_txn_id
+                        .as_deref()
+                        .unwrap_or("unknown_order")
+                )),
+                reference_type: Some("recharge".to_string()),
+                payment_status: None,
+            };
+            diesel::insert_into(wallet_transactions::table)
+                .values(&deposit_txn)
+                .execute(conn)?;
+
+            Ok(())
+        })
+    }
+
+    /// Atomically: mark order REFUNDED + debit wallet + write refund record.
+    ///
+    /// This is used when a previously paid recharge is refunded/charged back.
+    pub async fn atomic_apply_refund(
+        &self,
+        txn_id: i32,
+        user_id: i32,
+        current_status: PaymentStatus,
+        points: BigDecimal,
+        platform_txn_id: Option<&str>,
+        open_order_id: Option<&str>,
+    ) -> Result<RefundApplyOutcome, DieselError> {
+        let mut conn = self.pool.get().expect("Connection error");
+
+        conn.transaction(|conn| {
+            let recharge_order = wallet_transactions::table
+                .find(txn_id)
+                .select(WalletTransaction::as_select())
+                .first::<WalletTransaction>(conn)?;
+
+            let wallet = user_wallets::table
+                .filter(user_wallets::user_id.eq(user_id))
+                .select(UserWallet::as_select())
+                .first::<UserWallet>(conn)?;
+
+            let available_balance = &wallet.balance_points - &wallet.frozen_points;
+            if available_balance < points {
+                return Ok(RefundApplyOutcome::BlockedInsufficientBalance {
+                    available_balance,
+                    required_points: points.clone(),
+                });
+            }
+
+            let updated = diesel::update(
+                wallet_transactions::table
+                    .filter(wallet_transactions::id.eq(txn_id))
+                    .filter(
+                        wallet_transactions::payment_status.eq(Some(current_status.as_db_value())),
+                    ),
+            )
+            .set((
+                wallet_transactions::payment_status.eq(Some(PaymentStatus::Refunded.as_db_value())),
+                wallet_transactions::platform_txn_id.eq(platform_txn_id),
+                wallet_transactions::open_order_id.eq(open_order_id),
+            ))
+            .execute(conn)?;
+
+            if updated == 0 {
+                return Ok(RefundApplyOutcome::Noop);
+            }
+
+            diesel::update(user_wallets::table)
+                .filter(user_wallets::user_id.eq(user_id))
+                .set(user_wallets::balance_points.eq(user_wallets::balance_points - &points))
+                .execute(conn)?;
+
+            let refund_txn = NewWalletTransaction {
+                user_id,
+                amount: -points,
+                type_: "REFUND".to_string(),
+                payment_method: recharge_order.payment_method.clone(),
+                external_txn_id: None,
+                reference_id: Some(txn_id),
+                description: Some(format!(
+                    "Wallet debit for refunded recharge order {}",
+                    recharge_order
+                        .external_txn_id
+                        .as_deref()
+                        .unwrap_or("unknown_order")
+                )),
+                reference_type: Some("recharge_refund".to_string()),
+                payment_status: None,
+            };
+            diesel::insert_into(wallet_transactions::table)
+                .values(&refund_txn)
+                .execute(conn)?;
+
+            Ok(RefundApplyOutcome::Applied)
+        })
+    }
+
     /// Add balance and create transaction (for welcome bonus, deposits, etc.)
     pub async fn add_balance_with_transaction(
         &self,
@@ -190,6 +458,8 @@ impl WalletRepository {
                 external_txn_id: None,
                 reference_id: None,
                 description: Some(description),
+                reference_type: None,
+                payment_status: None,
             };
 
             let transaction = diesel::insert_into(wallet_transactions::table)

@@ -22,12 +22,12 @@ pub async fn send_verification_code(
         .validate()
         .map_err(|e| ApiError::BusinessError(BusinessError::ValidationFailed(e.to_string())))?;
 
-    // Get IP and User-Agent
+    // Get IP and User-Agent (first IP only from X-Forwarded-For chain)
     let ip_address = headers
         .get("x-forwarded-for")
         .or_else(|| headers.get("x-real-ip"))
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
+        .map(|s| s.split(',').next().unwrap_or(s).trim().to_string());
 
     let user_agent = headers
         .get("user-agent")
@@ -68,12 +68,12 @@ pub async fn send_password_reset_code(
         .validate()
         .map_err(|e| ApiError::BusinessError(BusinessError::ValidationFailed(e.to_string())))?;
 
-    // Get IP and User-Agent
+    // Get IP and User-Agent (first IP only from X-Forwarded-For chain)
     let ip_address = headers
         .get("x-forwarded-for")
         .or_else(|| headers.get("x-real-ip"))
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
+        .map(|s| s.split(',').next().unwrap_or(s).trim().to_string());
 
     let user_agent = headers
         .get("user-agent")

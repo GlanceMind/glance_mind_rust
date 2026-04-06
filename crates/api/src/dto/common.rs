@@ -6,6 +6,8 @@ pub struct PageRequest {
     pub page: i64,
     #[serde(default = "default_page_size")]
     pub page_size: i64,
+    /// Optional group_id filter for accounts
+    pub group_id: Option<i32>,
 }
 
 fn default_page() -> i64 {

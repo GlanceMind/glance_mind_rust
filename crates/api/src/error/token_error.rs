@@ -5,8 +5,8 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum TokenError {
-    #[error("Invalid token: {0}")]
-    InvalidToken(String),
+    #[error("Invalid token")]
+    InvalidToken,
     #[error("Token has expired")]
     TokenExpired,
     #[error("Missing Bearer token")]
@@ -19,7 +19,7 @@ impl TokenError {
     /// Convert TokenError to ErrorCode
     pub fn to_error_code(&self) -> ErrorCode {
         match self {
-            TokenError::InvalidToken(_) => ErrorCode::TokenInvalid,
+            TokenError::InvalidToken => ErrorCode::TokenInvalid,
             TokenError::TokenExpired => ErrorCode::TokenExpired,
             TokenError::MissingToken => ErrorCode::Unauthorized,
             TokenError::TokenCreationError(_) => ErrorCode::InternalServerError,
@@ -29,10 +29,10 @@ impl TokenError {
     /// Get Chinese error message
     pub fn to_message_cn(&self) -> String {
         match self {
-            TokenError::InvalidToken(msg) => format!("Invalid authentication: {}", msg),
+            TokenError::InvalidToken => "Invalid authentication token".to_string(),
             TokenError::TokenExpired => "Session expired, please login again".to_string(),
             TokenError::MissingToken => "Missing authentication".to_string(),
-            TokenError::TokenCreationError(msg) => format!("Token creation error: {}", msg),
+            TokenError::TokenCreationError(_) => "Authentication service error".to_string(),
         }
     }
 }

@@ -12,6 +12,10 @@ pub fn routes() -> Router<UserState> {
             "/transactions",
             get(wallet_handler::get_wallet_transactions),
         )
-        .route("/orders", post(wallet_handler::create_recharge_order))
-        .route("/orders/:order_id", get(wallet_handler::get_order_status))
+        // XunhuPay recharge endpoints
+        .route("/recharge", post(wallet_handler::create_recharge))
+        .route(
+            "/recharge/:order_no",
+            get(wallet_handler::get_recharge_status),
+        )
 }

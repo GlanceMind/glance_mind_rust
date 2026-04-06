@@ -23,6 +23,7 @@ pub struct AiModel {
 pub enum ModelType {
     Chat,
     Video,
+    Image,
 }
 
 #[allow(dead_code)]
@@ -31,6 +32,7 @@ impl ModelType {
         match self {
             ModelType::Chat => "chat",
             ModelType::Video => "video",
+            ModelType::Image => "image",
         }
     }
 
@@ -38,6 +40,7 @@ impl ModelType {
         match s {
             "chat" => Some(ModelType::Chat),
             "video" => Some(ModelType::Video),
+            "image" => Some(ModelType::Image),
             _ => None,
         }
     }

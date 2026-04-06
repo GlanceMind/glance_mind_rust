@@ -1,0 +1,1 @@
+DROP FUNCTION IF EXISTS calculate_min_campaign_cost(INTEGER, INTEGER, INTEGER);

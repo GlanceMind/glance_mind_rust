@@ -3,6 +3,7 @@ use chrono::{Duration, Utc};
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, PooledConnection};
 use diesel::PgConnection as DieselPgConnection;
+use diesel::SelectableHelper;
 
 use glance_mind_db::entity::video::{
     NewVideoGenerationTask, UpdateVideoGenerationTask, VideoGenerationTask,
@@ -21,6 +22,7 @@ impl VideoRepository {
     ) -> Result<VideoGenerationTask, diesel::result::Error> {
         diesel::insert_into(gm_video_generation_tasks::table)
             .values(&new_task)
+            .returning(VideoGenerationTask::as_select())
             .get_result(conn)
             .map_err(|e| {
                 tracing::error!("Failed to create video task: {:?}", e);
@@ -35,6 +37,7 @@ impl VideoRepository {
     ) -> Result<VideoGenerationTask, diesel::result::Error> {
         gm_video_generation_tasks::table
             .filter(gm_video_generation_tasks::task_id.eq(task_id))
+            .select(VideoGenerationTask::as_select())
             .first(conn)
             .map_err(|e| {
                 tracing::error!("Failed to query video task task_id={}: {:?}", task_id, e);
@@ -49,6 +52,7 @@ impl VideoRepository {
     ) -> Result<VideoGenerationTask, diesel::result::Error> {
         gm_video_generation_tasks::table
             .find(id)
+            .select(VideoGenerationTask::as_select())
             .first(conn)
             .map_err(|e| {
                 tracing::error!("Failed to query video task id={}: {:?}", id, e);
@@ -88,7 +92,8 @@ impl VideoRepository {
             .order(gm_video_generation_tasks::created_at.desc())
             .limit(page_size as i64)
             .offset(((page - 1) * page_size) as i64)
-            .load::<VideoGenerationTask>(conn)
+            .select(VideoGenerationTask::as_select())
+            .load(conn)
             .map_err(|e| {
                 tracing::error!(
                     "Failed to query user video task list user_id={}: {:?}",
@@ -121,7 +126,8 @@ impl VideoRepository {
             )
             .order(gm_video_generation_tasks::updated_at.asc())
             .limit(limit)
-            .load::<VideoGenerationTask>(conn)
+            .select(VideoGenerationTask::as_select())
+            .load(conn)
             .map_err(|e| {
                 tracing::error!("Failed to query active video tasks: {:?}", e);
                 e
@@ -141,7 +147,8 @@ impl VideoRepository {
                 "processing",
             ]))
             .filter(gm_video_generation_tasks::created_at.lt(timeout_time))
-            .load::<VideoGenerationTask>(conn)
+            .select(VideoGenerationTask::as_select())
+            .load(conn)
             .map_err(|e| {
                 tracing::error!("Failed to query timed out video tasks: {:?}", e);
                 e
@@ -156,6 +163,7 @@ impl VideoRepository {
     ) -> Result<VideoGenerationTask, diesel::result::Error> {
         diesel::update(gm_video_generation_tasks::table.find(id))
             .set(&update)
+            .returning(VideoGenerationTask::as_select())
             .get_result(conn)
             .map_err(|e| {
                 tracing::error!("Failed to update video task id={}: {:?}", id, e);
@@ -209,6 +217,7 @@ impl VideoRepository {
                 updated_at.eq(Utc::now()),
                 completed_at.eq(Some(Utc::now())),
             ))
+            .returning(VideoGenerationTask::as_select())
             .get_result(conn)
     }
 
@@ -242,6 +251,7 @@ impl VideoRepository {
                 retry_count.eq(task.retry_count + 1),
                 updated_at.eq(Utc::now()),
             ))
+            .returning(VideoGenerationTask::as_select())
             .get_result(conn)
     }
 }

@@ -47,6 +47,10 @@ pub enum ApiError {
     #[error("Verification code expired")]
     VerificationCodeExpired,
 
+    // ============ Business Errors - Permission Related ============
+    #[error("Permission denied: {0}")]
+    PermissionDenied(String),
+
     // ============ Business Errors - Wallet Related ============
     #[error("Insufficient balance")]
     InsufficientBalance,
@@ -153,6 +157,9 @@ impl ApiError {
             ApiError::InvalidVerificationCode => ErrorCode::InvalidVerificationCode,
             ApiError::VerificationCodeExpired => ErrorCode::VerificationCodeExpired,
 
+            // Permission related
+            ApiError::PermissionDenied(_) => ErrorCode::PermissionDenied,
+
             // Wallet related
             ApiError::InsufficientBalance => ErrorCode::InsufficientBalance,
             ApiError::ChargeFailed(_) => ErrorCode::ChargeFailed,
@@ -195,34 +202,34 @@ impl ApiError {
         }
     }
 
-    /// Get Chinese error message
+    /// Get Chinese error message (safe for client display)
     pub fn to_message_cn(&self) -> String {
         match self {
-            // For errors with parameters, return detailed message
-            ApiError::InternalServerError(msg) => format!("Internal server error: {}", msg),
+            ApiError::InternalServerError(_) => "Internal server error".to_string(),
+            ApiError::DatabaseError(_) => "Database operation failed".to_string(),
             ApiError::BadRequest(msg) => format!("Bad request: {}", msg),
             ApiError::Forbidden(msg) => format!("Access forbidden: {}", msg),
             ApiError::NotFound(msg) => format!("Resource not found: {}", msg),
             ApiError::Unauthorized(msg) => format!("Unauthorized: {}", msg),
             ApiError::ValidationError(msg) => format!("Validation failed: {}", msg),
+            ApiError::PermissionDenied(feature) => format!("Feature not enabled: {}", feature),
             ApiError::ChargeFailed(msg) => format!("Charge failed: {}", msg),
             ApiError::PricingRuleNotFound(action) => format!("Pricing rule not found: {}", action),
-            ApiError::AiServiceError(msg) => format!("AI service error: {}", msg),
-            ApiError::EmailServiceError(msg) => format!("Email service error: {}", msg),
-            ApiError::PaymentServiceError(msg) => format!("Payment service error: {}", msg),
-            ApiError::TikTok(msg) => format!("TikTok API error: {}", msg),
-            ApiError::Instagram(msg) => format!("Instagram API error: {}", msg),
-            ApiError::Twitter(msg) => format!("Twitter API error: {}", msg),
-            ApiError::Reddit(msg) => format!("Reddit API error: {}", msg),
-            ApiError::DatabaseError(msg) => format!("Database error: {}", msg),
+            ApiError::AiServiceError(_) => "AI service error, please try again later".to_string(),
+            ApiError::EmailServiceError(_) => {
+                "Email service error, please try again later".to_string()
+            }
+            ApiError::PaymentServiceError(_) => {
+                "Payment service error, please try again later".to_string()
+            }
+            ApiError::TikTok(_) => "TikTok API error".to_string(),
+            ApiError::Instagram(_) => "Instagram API error".to_string(),
+            ApiError::Twitter(_) => "Twitter API error".to_string(),
+            ApiError::Reddit(_) => "Reddit API error".to_string(),
 
-            // Business errors
             ApiError::BusinessError(err) => err.to_message_cn(),
-
-            // Infrastructure errors
             ApiError::InfrastructureError(err) => err.to_message_cn(),
 
-            // Other errors use ErrorCode's default message
             _ => self.to_error_code().message_cn().to_string(),
         }
     }
@@ -231,8 +238,37 @@ impl ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let error_code = self.to_error_code();
-        let msg = self.to_string();
-        let msg_cn = self.to_message_cn();
+
+        let (msg, msg_cn) = match &self {
+            ApiError::InternalServerError(detail) => {
+                tracing::error!("Internal server error: {}", detail);
+                (
+                    "Internal server error".to_string(),
+                    "Internal server error".to_string(),
+                )
+            }
+            ApiError::DatabaseError(detail) => {
+                tracing::error!("Database error: {}", detail);
+                (
+                    "A database error occurred".to_string(),
+                    "Database operation failed".to_string(),
+                )
+            }
+            ApiError::TokenError(token_err) => {
+                if let crate::error::token_error::TokenError::TokenCreationError(detail) =
+                    token_err
+                {
+                    tracing::error!("Token creation error: {}", detail);
+                    (
+                        "Authentication service error".to_string(),
+                        "Authentication service error".to_string(),
+                    )
+                } else {
+                    (self.to_string(), self.to_message_cn())
+                }
+            }
+            _ => (self.to_string(), self.to_message_cn()),
+        };
 
         ApiResponse::<()>::error_with_message(error_code, msg, msg_cn).into_response()
     }

@@ -23,6 +23,14 @@ pub struct ChargingContext {
     pub final_cost: BigDecimal,
 }
 
+fn calculate_final_cost(base_cost: &BigDecimal, cost_multiplier: &BigDecimal) -> BigDecimal {
+    base_cost * cost_multiplier
+}
+
+fn points_to_rmb(points: &BigDecimal) -> BigDecimal {
+    points / BigDecimal::from(100)
+}
+
 impl ChargingManager {
     pub fn new(
         pricing_repo: PricingRepository,
@@ -89,16 +97,18 @@ impl ChargingManager {
         };
 
         // 3. Calculate final cost: base_cost * cost_multiplier
-        let final_cost = &base_cost * &cost_multiplier;
+        let final_cost = calculate_final_cost(&base_cost, &cost_multiplier);
+        let final_cost_rmb = points_to_rmb(&final_cost);
 
         tracing::info!(
-            "Charging preparation: user_id={}, action={:?}, platform_id={:?}, base_cost={}, multiplier={}, final_cost={}",
+            "Charging preparation: user_id={}, action={:?}, platform_id={:?}, base_cost={}, multiplier={}, final_cost={} (~¥{})",
             user_id,
             action_type,
             platform_id,
             base_cost,
             cost_multiplier,
-            final_cost
+            final_cost,
+            final_cost_rmb
         );
 
         // 4. Check balance
@@ -184,5 +194,58 @@ impl ChargingManager {
         tracing::info!("Charge successful: transaction_id={}", transaction.id);
 
         Ok(transaction)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{calculate_final_cost, points_to_rmb};
+    use bigdecimal::BigDecimal;
+    use std::str::FromStr;
+
+    fn bd(value: &str) -> BigDecimal {
+        BigDecimal::from_str(value).expect("valid decimal")
+    }
+
+    #[test]
+    fn calculate_final_cost_is_table_driven() {
+        let cases = [
+            ("1.00", "1.00", "1.00"),
+            ("2.00", "1.50", "3.00"),
+            ("400.00", "1.00", "400.00"),
+            ("400.00", "1.50", "600.00"),
+            ("400.00", "3.00", "1200.00"),
+            ("400.00", "3.75", "1500.00"),
+        ];
+
+        for (base_cost, multiplier, expected) in cases {
+            let actual = calculate_final_cost(&bd(base_cost), &bd(multiplier));
+            assert_eq!(
+                actual.normalized(),
+                bd(expected).normalized(),
+                "base_cost={base_cost}, multiplier={multiplier}"
+            );
+        }
+    }
+
+    #[test]
+    fn points_to_rmb_uses_points_first_exchange_rate() {
+        let cases = [
+            ("0.00", "0.00"),
+            ("3.00", "0.03"),
+            ("10.00", "0.10"),
+            ("400.00", "4.00"),
+            ("1200.00", "12.00"),
+            ("1500.00", "15.00"),
+        ];
+
+        for (points, expected_rmb) in cases {
+            let actual = points_to_rmb(&bd(points));
+            assert_eq!(
+                actual.normalized(),
+                bd(expected_rmb).normalized(),
+                "points={points}"
+            );
+        }
     }
 }

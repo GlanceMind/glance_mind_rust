@@ -8,6 +8,7 @@ use crate::dto::video_dto::{
     CreateVideoRequest, CreateVideoResponse, VideoOrientation, VideoTaskListResponse,
 };
 use crate::error::{api_error::ApiError, business_error::BusinessError};
+use crate::middleware::charging::ActionType;
 use crate::response::api_result::ApiResult;
 use crate::state::user_state::UserState;
 use glance_mind_db::entity::user::User;
@@ -42,6 +43,10 @@ pub async fn create_video(
     let mut start_frame_filename: Option<String> = None;
     let mut end_frame_data: Option<Vec<u8>> = None;
     let mut end_frame_filename: Option<String> = None;
+    // Multi-image mode (ref2v / multiframe: up to 9 images)
+    let mut reference_images: Vec<Vec<u8>> = Vec::new();
+    // Per-keyframe transition prompts (multi-frame only, JSON-encoded string[])
+    let mut keyframe_prompts: Option<Vec<String>> = None;
 
     while let Some(field) = multipart
         .next_field()
@@ -120,12 +125,39 @@ pub async fn create_video(
                 })?;
                 end_frame_data = Some(data.to_vec());
             }
+            "reference_images" => {
+                let data = field.bytes().await.map_err(|_| {
+                    ApiError::BusinessError(BusinessError::InvalidFormField(
+                        "reference_images".to_string(),
+                    ))
+                })?;
+                if !data.is_empty() {
+                    reference_images.push(data.to_vec());
+                }
+            }
+            "keyframe_prompts" => {
+                let text = field.text().await.map_err(|_| {
+                    ApiError::BusinessError(BusinessError::InvalidFormField(
+                        "keyframe_prompts".to_string(),
+                    ))
+                })?;
+                keyframe_prompts = serde_json::from_str::<Vec<String>>(&text).ok();
+            }
             _ => {}
         }
     }
 
-    // Validate required fields
-    if prompt.is_none() && image_data.is_none() {
+    // Keep reference_images intact for modes that consume them (ref2v, multiframe, film, template).
+    // Only collapse to start_frame/end_frame when NO reference_images were sent and no start_frame
+    // was explicitly provided -- this preserves backward compatibility for dual-image modes
+    // (start-end, jimeng) that use the "start_frame"/"end_frame" field names directly.
+
+    // Validate required fields: need at least a prompt or any image
+    if prompt.is_none()
+        && image_data.is_none()
+        && start_frame_data.is_none()
+        && reference_images.is_empty()
+    {
         return Err(ApiError::BusinessError(
             BusinessError::PromptOrImageRequired,
         ));
@@ -156,6 +188,18 @@ pub async fn create_video(
         .validate_params()
         .map_err(|e| ApiError::BusinessError(BusinessError::ValidationFailed(e)))?;
 
+    // Charge video generation using the parsed multipart model id so billing
+    // always matches the actual model selected by the request body.
+    let charging_context = state
+        .charging_manager
+        .prepare_charging(
+            user.id,
+            ActionType::VideoGenerate,
+            request.ai_model_id,
+            None,
+        )
+        .await?;
+
     // Call service to process
     let result = state
         .video_service
@@ -169,7 +213,14 @@ pub async fn create_video(
             start_frame_filename,
             end_frame_data,
             end_frame_filename,
+            reference_images,
+            keyframe_prompts,
         )
+        .await?;
+
+    state
+        .charging_manager
+        .execute_charging(user.id, &charging_context, None)
         .await?;
 
     Ok(ApiResult::ok(result))

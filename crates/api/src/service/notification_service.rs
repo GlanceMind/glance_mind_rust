@@ -54,11 +54,7 @@ impl NotificationService {
     }
 
     /// Mark a single notification as read
-    pub async fn mark_as_read(
-        &self,
-        user_id: i32,
-        notification_id: i32,
-    ) -> Result<(), ApiError> {
+    pub async fn mark_as_read(&self, user_id: i32, notification_id: i32) -> Result<(), ApiError> {
         self.notification_repo
             .mark_as_read(user_id, notification_id)
             .await

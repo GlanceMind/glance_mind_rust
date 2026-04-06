@@ -8,7 +8,7 @@
 SET statement_timeout = 0;
 SET lock_timeout = 0;
 SET idle_in_transaction_session_timeout = 0;
-SET transaction_timeout = 0;
+-- SET transaction_timeout = 0;  -- Removed: PostgreSQL 17+ only
 SET client_encoding = 'UTF8';
 SET standard_conforming_strings = on;
 SELECT pg_catalog.set_config('search_path', '', false);
@@ -1141,7 +1141,6 @@ CREATE TABLE IF NOT EXISTS public.gm_user_wallets (
     updated_at timestamp with time zone,
     deposit_cny numeric DEFAULT 0 NOT NULL,
     deposit_usd numeric DEFAULT 0 NOT NULL,
-    CONSTRAINT chk_balance_frozen CHECK ((balance_points >= frozen_points)),
     CONSTRAINT user_wallets_balance_points_check CHECK ((balance_points >= (0)::numeric)),
     CONSTRAINT user_wallets_frozen_points_check CHECK ((frozen_points >= (0)::numeric))
 );

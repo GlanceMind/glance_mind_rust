@@ -43,7 +43,10 @@ pub async fn auth<B>(
         }
         Err(err) => match err.kind() {
             ErrorKind::ExpiredSignature => Err(TokenError::TokenExpired)?,
-            _ => Err(TokenError::InvalidToken(token.to_string()))?,
+            _ => {
+                tracing::warn!("JWT validation failed: {:?}", err.kind());
+                Err(TokenError::InvalidToken)?
+            }
         },
     }
 }

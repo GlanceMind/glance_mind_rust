@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS public.gm_agent_facebook_comments (
     suggested_reply TEXT,
     suggested_dm TEXT,
     suggested_reply_post TEXT,
-    status VARCHAR(50) DEFAULT 'PENDING',
+    status SMALLINT DEFAULT 0,
     
     -- Comment User Info
     comment_user_id VARCHAR(255),

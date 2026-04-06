@@ -17,6 +17,16 @@ pub struct WalletTransaction {
     pub reference_id: Option<i32>,
     pub description: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// Business type: campaign, aipub_plan, promo_code, etc.
+    pub reference_type: Option<String>,
+    /// Payment lifecycle: PENDING, PAID, FAILED, REFUNDING, REFUNDED
+    pub payment_status: Option<String>,
+    /// Third-party platform transaction id
+    pub platform_txn_id: Option<String>,
+    /// XunhuPay internal order id
+    pub open_order_id: Option<String>,
+    /// Actual payment completion time
+    pub paid_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Insertable, Serialize, Deserialize)]
@@ -30,4 +40,8 @@ pub struct NewWalletTransaction {
     pub external_txn_id: Option<String>,
     pub reference_id: Option<i32>,
     pub description: Option<String>,
+    /// Business type: campaign, aipub_plan, promo_code, etc.
+    pub reference_type: Option<String>,
+    /// Payment lifecycle: PENDING, PAID, FAILED, REFUNDING, REFUNDED
+    pub payment_status: Option<String>,
 }

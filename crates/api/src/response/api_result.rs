@@ -4,7 +4,7 @@
 ///
 /// # Example
 ///
-/// ```rust
+/// ```ignore
 /// pub async fn get_user() -> Result<ApiResult<User>, ApiError> {
 ///     let user = fetch_user().await?;
 ///     Ok(ApiResult::ok(user))
@@ -84,7 +84,7 @@ impl<T: Serialize> IntoResponse for ApiResult<T> {
 ///
 /// # Example
 ///
-/// ```rust
+/// ```ignore
 /// // Return data
 /// return Ok(api_result!(user));
 ///

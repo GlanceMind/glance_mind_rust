@@ -1,8 +1,10 @@
 pub(crate) mod agent_repository;
 pub(crate) mod ai_model_repository;
+pub mod aipub_repository;
 pub(crate) mod campaign_repository;
 pub mod crawler_repository;
 pub mod login_log_repository;
+pub mod material_repository;
 pub mod notification_repository;
 pub(crate) mod platform_repository;
 pub(crate) mod pricing_repository;
@@ -12,5 +14,6 @@ pub mod social_group_repository;
 pub mod template_repository;
 pub mod upload_task_repository;
 pub mod user_repository;
+pub mod video_case_repository;
 pub mod video_repository;
 pub mod wallet_repository;

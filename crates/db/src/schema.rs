@@ -1,6 +1,108 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
+    drama_chapter_scene_asset_links (project_id, chapter_id, scene_asset_id) {
+        project_id -> Text,
+        chapter_id -> Text,
+        user_id -> Int8,
+        scene_asset_id -> Text,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    drama_private_characters (id) {
+        id -> Text,
+        user_id -> Int8,
+        name -> Text,
+        gender -> Nullable<Text>,
+        age -> Nullable<Text>,
+        appearance -> Nullable<Text>,
+        personality -> Nullable<Text>,
+        voice_id -> Nullable<Text>,
+        reference_image_url -> Nullable<Text>,
+        notes -> Nullable<Text>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    drama_private_scene_assets (id) {
+        id -> Text,
+        user_id -> Int8,
+        name -> Text,
+        category -> Nullable<Text>,
+        location_description -> Nullable<Text>,
+        time_of_day -> Nullable<Text>,
+        mood -> Nullable<Text>,
+        reference_image_urls -> Jsonb,
+        camera_notes -> Nullable<Text>,
+        notes -> Nullable<Text>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    drama_private_style_assets (id) {
+        id -> Text,
+        user_id -> Int8,
+        name -> Text,
+        visual_style -> Nullable<Text>,
+        color_tone -> Nullable<Text>,
+        aspect_ratio -> Nullable<Text>,
+        resolution -> Nullable<Text>,
+        lighting_mood -> Nullable<Text>,
+        reference_image_urls -> Jsonb,
+        notes -> Nullable<Text>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    drama_project_character_links (project_id, character_id) {
+        project_id -> Text,
+        user_id -> Int8,
+        character_id -> Text,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    drama_project_meta (project_id) {
+        project_id -> Text,
+        user_id -> Int8,
+        characters -> Jsonb,
+        style_references -> Jsonb,
+        text_materials -> Jsonb,
+        visual_settings -> Jsonb,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    drama_project_scene_asset_links (project_id, scene_asset_id) {
+        project_id -> Text,
+        user_id -> Int8,
+        scene_asset_id -> Text,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    drama_project_style_asset_links (project_id, style_asset_id) {
+        project_id -> Text,
+        user_id -> Int8,
+        style_asset_id -> Text,
+        is_primary -> Bool,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     gm_admin_users (id) {
         id -> Int4,
         #[max_length = 50]
@@ -58,8 +160,7 @@ diesel::table! {
         suggested_reply -> Nullable<Text>,
         suggested_dm -> Nullable<Text>,
         suggested_reply_post -> Nullable<Text>,
-        #[max_length = 50]
-        status -> Nullable<Varchar>,
+        status -> Nullable<Int2>,
         #[max_length = 255]
         comment_user_id -> Nullable<Varchar>,
         #[max_length = 255]
@@ -142,8 +243,6 @@ diesel::table! {
         comment_text -> Text,
         reason -> Nullable<Text>,
         suggested_reply -> Nullable<Text>,
-        #[max_length = 50]
-        status -> Nullable<Varchar>,
         #[max_length = 255]
         comment_user_id -> Nullable<Varchar>,
         #[max_length = 255]
@@ -159,6 +258,7 @@ diesel::table! {
         updated_at -> Nullable<Timestamptz>,
         suggested_dm -> Nullable<Text>,
         suggested_reply_post -> Nullable<Text>,
+        status -> Nullable<Int2>,
     }
 }
 
@@ -207,8 +307,6 @@ diesel::table! {
         body -> Nullable<Text>,
         reason -> Nullable<Text>,
         suggested_reply -> Nullable<Text>,
-        #[max_length = 50]
-        status -> Nullable<Varchar>,
         score -> Nullable<Int4>,
         #[max_length = 255]
         parent_id -> Nullable<Varchar>,
@@ -219,6 +317,7 @@ diesel::table! {
         updated_at -> Nullable<Timestamptz>,
         suggested_dm -> Nullable<Text>,
         suggested_reply_post -> Nullable<Text>,
+        status -> Nullable<Int2>,
     }
 }
 
@@ -271,8 +370,6 @@ diesel::table! {
         comment_text -> Text,
         reason -> Nullable<Text>,
         suggested_reply -> Nullable<Text>,
-        #[max_length = 50]
-        status -> Nullable<Varchar>,
         favorite_count -> Nullable<Int4>,
         retweet_count -> Nullable<Int4>,
         reply_count -> Nullable<Int4>,
@@ -289,6 +386,7 @@ diesel::table! {
         updated_at -> Nullable<Timestamptz>,
         suggested_dm -> Nullable<Text>,
         suggested_reply_post -> Nullable<Text>,
+        status -> Nullable<Int2>,
     }
 }
 
@@ -405,6 +503,160 @@ diesel::table! {
 }
 
 diesel::table! {
+    gm_ai_conversations (id) {
+        id -> Int4,
+        user_id -> Int4,
+        #[max_length = 255]
+        title -> Varchar,
+        #[max_length = 20]
+        status -> Varchar,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    gm_ai_messages (id) {
+        id -> Int4,
+        conversation_id -> Int4,
+        #[max_length = 20]
+        role -> Varchar,
+        content -> Text,
+        tool_calls -> Nullable<Jsonb>,
+        #[max_length = 100]
+        tool_call_id -> Nullable<Varchar>,
+        plan_id -> Nullable<Int4>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_ai_plans (id) {
+        id -> Int4,
+        conversation_id -> Int4,
+        message_id -> Nullable<Int4>,
+        user_id -> Int4,
+        #[max_length = 255]
+        title -> Varchar,
+        description -> Text,
+        #[max_length = 20]
+        status -> Varchar,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    gm_ai_plan_steps (id) {
+        id -> Int4,
+        plan_id -> Int4,
+        step_order -> Int4,
+        #[max_length = 100]
+        tool_name -> Varchar,
+        tool_params -> Jsonb,
+        description -> Text,
+        #[max_length = 20]
+        status -> Varchar,
+        result -> Nullable<Jsonb>,
+        error_message -> Nullable<Text>,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    gm_ai_tool_audit_logs (id) {
+        id -> Int4,
+        user_id -> Int4,
+        conversation_id -> Nullable<Int4>,
+        #[max_length = 100]
+        tool_name -> Varchar,
+        #[max_length = 20]
+        safety_level -> Varchar,
+        success -> Bool,
+        error_message -> Nullable<Text>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_aipub_ai_tasks (id) {
+        id -> Int4,
+        plan_id -> Int4,
+        #[max_length = 20]
+        task_type -> Varchar,
+        #[max_length = 50]
+        external_service -> Varchar,
+        #[max_length = 200]
+        external_job_id -> Nullable<Varchar>,
+        input -> Jsonb,
+        result -> Nullable<Jsonb>,
+        #[max_length = 20]
+        status -> Varchar,
+        progress -> Nullable<Int4>,
+        error_message -> Nullable<Text>,
+        retry_count -> Nullable<Int4>,
+        sequence -> Int4,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+        completed_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    gm_aipub_plans (id) {
+        id -> Int4,
+        user_id -> Int4,
+        group_id -> Nullable<Int4>,
+        social_account_id -> Nullable<Int4>,
+        platform_id -> Int4,
+        #[max_length = 20]
+        content_type -> Varchar,
+        #[max_length = 20]
+        plan_type -> Varchar,
+        ai_task_types -> Nullable<Array<Nullable<Text>>>,
+        ai_service_config -> Nullable<Jsonb>,
+        ai_input -> Nullable<Jsonb>,
+        content -> Nullable<Jsonb>,
+        #[max_length = 20]
+        status -> Varchar,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+        #[max_length = 200]
+        name -> Nullable<Varchar>,
+        chat_ai_model_id -> Nullable<Int4>,
+        video_ai_model_id -> Nullable<Int4>,
+        image_ai_model_id -> Nullable<Int4>,
+        #[max_length = 20]
+        billing_status -> Varchar,
+        frozen_cost -> Numeric,
+        consumed_cost -> Numeric,
+        frozen_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    gm_aipub_tasks (id) {
+        id -> Int4,
+        plan_id -> Int4,
+        social_account_id -> Int4,
+        ai_task_id -> Nullable<Int4>,
+        content -> Jsonb,
+        #[max_length = 20]
+        status -> Varchar,
+        #[max_length = 500]
+        result_url -> Nullable<Varchar>,
+        error_message -> Nullable<Text>,
+        retry_count -> Nullable<Int4>,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+        published_at -> Nullable<Timestamptz>,
+        video_stage_started_at -> Nullable<Timestamptz>,
+        video_ai_task_id -> Nullable<Int4>,
+    }
+}
+
+diesel::table! {
     gm_campaign_accounts (id) {
         id -> Int4,
         campaign_id -> Int4,
@@ -469,6 +721,58 @@ diesel::table! {
 }
 
 diesel::table! {
+    gm_data_video_cases (id) {
+        id -> Int4,
+        #[max_length = 64]
+        task_no -> Varchar,
+        case_id -> Nullable<Int4>,
+        #[max_length = 64]
+        user_id -> Nullable<Varchar>,
+        #[max_length = 32]
+        tt_category_id -> Nullable<Varchar>,
+        #[max_length = 255]
+        category_name_en -> Nullable<Varchar>,
+        #[max_length = 255]
+        category_name_cn -> Nullable<Varchar>,
+        #[max_length = 16]
+        task_type -> Nullable<Varchar>,
+        num -> Nullable<Int4>,
+        status -> Nullable<Int4>,
+        script -> Nullable<Text>,
+        selling_point -> Nullable<Text>,
+        #[max_length = 255]
+        product_name -> Nullable<Varchar>,
+        #[max_length = 255]
+        brand_name -> Nullable<Varchar>,
+        #[max_length = 32]
+        video_language -> Nullable<Varchar>,
+        #[max_length = 64]
+        model -> Nullable<Varchar>,
+        #[max_length = 64]
+        video_model -> Nullable<Varchar>,
+        video_url -> Nullable<Text>,
+        ai_image_url -> Nullable<Text>,
+        ai_prompt -> Nullable<Text>,
+        refer_image_url -> Nullable<Text>,
+        refer_video_url -> Nullable<Text>,
+        image_urls -> Nullable<Jsonb>,
+        characters -> Nullable<Jsonb>,
+        videos -> Nullable<Jsonb>,
+        progress -> Nullable<Int4>,
+        #[max_length = 32]
+        video_status -> Nullable<Varchar>,
+        error_message -> Nullable<Text>,
+        #[max_length = 32]
+        size -> Nullable<Varchar>,
+        case_status -> Nullable<Int4>,
+        favorite_status -> Nullable<Int4>,
+        completed_num -> Nullable<Int4>,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
     gm_crawler_results (id) {
         id -> Int4,
         task_id -> Int4,
@@ -503,6 +807,80 @@ diesel::table! {
         reserved_amount -> Nullable<Numeric>,
         actual_consumption -> Nullable<Numeric>,
         settled_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    gm_drama_callback_events (id) {
+        id -> Int8,
+        #[max_length = 255]
+        event_id -> Varchar,
+        #[max_length = 255]
+        project_id -> Varchar,
+        #[max_length = 255]
+        run_id -> Varchar,
+        sequence -> Int8,
+        #[max_length = 50]
+        stage_code -> Nullable<Varchar>,
+        #[max_length = 100]
+        event_type -> Varchar,
+        payload -> Jsonb,
+        occurred_at -> Timestamptz,
+        ingested_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_drama_cost_events (id) {
+        id -> Int8,
+        #[max_length = 255]
+        project_id -> Varchar,
+        #[max_length = 255]
+        run_id -> Nullable<Varchar>,
+        #[max_length = 100]
+        cost_type -> Varchar,
+        amount_cents -> Int8,
+        #[max_length = 50]
+        stage_code -> Nullable<Varchar>,
+        #[max_length = 100]
+        provider -> Nullable<Varchar>,
+        #[max_length = 255]
+        event_id -> Nullable<Varchar>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_drama_project_projections (id) {
+        id -> Int4,
+        #[max_length = 255]
+        project_id -> Varchar,
+        user_id -> Int4,
+        #[max_length = 500]
+        title -> Varchar,
+        description -> Text,
+        #[max_length = 50]
+        status -> Varchar,
+        #[max_length = 50]
+        content_type -> Nullable<Varchar>,
+        #[max_length = 50]
+        platform -> Nullable<Varchar>,
+        #[max_length = 50]
+        current_stage -> Nullable<Varchar>,
+        #[max_length = 50]
+        pending_stage -> Nullable<Varchar>,
+        progress_percent -> Float4,
+        #[max_length = 255]
+        run_id -> Nullable<Varchar>,
+        interaction_version -> Int4,
+        last_event_sequence -> Int8,
+        error_message -> Nullable<Text>,
+        cost_reserve_cents -> Int8,
+        cost_consumed_cents -> Int8,
+        interaction_payload -> Nullable<Jsonb>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+        completed_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -561,6 +939,398 @@ diesel::table! {
 }
 
 diesel::table! {
+    gm_novel_architecture_checkpoints (id) {
+        id -> Int8,
+        project_id -> Text,
+        core_seed_result -> Nullable<Text>,
+        character_dynamics_result -> Nullable<Text>,
+        character_state_result -> Nullable<Text>,
+        world_building_result -> Nullable<Text>,
+        plot_arch_result -> Nullable<Text>,
+        #[max_length = 32]
+        status -> Varchar,
+        source_stage_run_id -> Nullable<Int8>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_novel_architectures (id) {
+        id -> Int8,
+        project_id -> Text,
+        core_seed_text -> Text,
+        character_dynamics_text -> Text,
+        world_building_text -> Text,
+        plot_architecture_text -> Text,
+        full_text -> Text,
+        version_no -> Int4,
+        is_current -> Bool,
+        source_stage_run_id -> Nullable<Int8>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_novel_blueprint_chapters (id) {
+        id -> Int8,
+        blueprint_id -> Int8,
+        project_id -> Text,
+        chapter_number -> Int4,
+        #[max_length = 255]
+        chapter_title -> Varchar,
+        #[max_length = 255]
+        chapter_role -> Varchar,
+        chapter_purpose -> Text,
+        #[max_length = 100]
+        suspense_level -> Varchar,
+        foreshadowing -> Text,
+        #[max_length = 100]
+        plot_twist_level -> Varchar,
+        chapter_summary -> Text,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_novel_blueprints (id) {
+        id -> Int8,
+        project_id -> Text,
+        raw_text -> Text,
+        chunk_size -> Nullable<Int4>,
+        generated_chapter_count -> Int4,
+        version_no -> Int4,
+        is_current -> Bool,
+        source_stage_run_id -> Nullable<Int8>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_novel_chapter_prompts (id) {
+        id -> Int8,
+        project_id -> Text,
+        chapter_number -> Int4,
+        blueprint_chapter_id -> Nullable<Int8>,
+        user_guidance -> Nullable<Text>,
+        characters_involved -> Nullable<Text>,
+        key_items -> Nullable<Text>,
+        scene_location -> Nullable<Text>,
+        time_constraint -> Nullable<Text>,
+        short_summary -> Nullable<Text>,
+        previous_excerpt -> Nullable<Text>,
+        filtered_context -> Nullable<Text>,
+        prompt_text -> Text,
+        edited_prompt_text -> Nullable<Text>,
+        is_current -> Bool,
+        source_stage_run_id -> Nullable<Int8>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_novel_chapters (id) {
+        id -> Int8,
+        project_id -> Text,
+        chapter_number -> Int4,
+        blueprint_chapter_id -> Nullable<Int8>,
+        prompt_id -> Nullable<Int8>,
+        #[max_length = 255]
+        title -> Varchar,
+        user_guidance -> Nullable<Text>,
+        characters_involved -> Nullable<Text>,
+        key_items -> Nullable<Text>,
+        scene_location -> Nullable<Text>,
+        time_constraint -> Nullable<Text>,
+        draft_text -> Nullable<Text>,
+        final_text -> Nullable<Text>,
+        #[max_length = 32]
+        status -> Varchar,
+        is_enriched -> Bool,
+        target_words -> Nullable<Int4>,
+        draft_word_count -> Int4,
+        final_word_count -> Int4,
+        #[max_length = 32]
+        consistency_status -> Nullable<Varchar>,
+        source_stage_run_id -> Nullable<Int8>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+        finalized_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    gm_novel_character_state_snapshots (id) {
+        id -> Int8,
+        project_id -> Text,
+        chapter_number -> Nullable<Int4>,
+        state_text -> Text,
+        version_no -> Int4,
+        is_current -> Bool,
+        source_stage_run_id -> Nullable<Int8>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_novel_consistency_checks (id) {
+        id -> Int8,
+        project_id -> Text,
+        chapter_number -> Int4,
+        novel_setting_text -> Nullable<Text>,
+        character_state_text -> Nullable<Text>,
+        global_summary_text -> Nullable<Text>,
+        plot_arcs_text -> Nullable<Text>,
+        chapter_text -> Text,
+        result_text -> Text,
+        #[max_length = 32]
+        status -> Varchar,
+        source_stage_run_id -> Nullable<Int8>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_novel_embedding_profiles (id) {
+        id -> Int8,
+        user_id -> Int4,
+        #[max_length = 100]
+        name -> Varchar,
+        #[max_length = 50]
+        interface_format -> Varchar,
+        base_url -> Text,
+        api_key -> Text,
+        #[max_length = 200]
+        model_name -> Varchar,
+        retrieval_k -> Int4,
+        is_default -> Bool,
+        is_active -> Bool,
+        metadata -> Jsonb,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+        deleted_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    gm_novel_global_summary_snapshots (id) {
+        id -> Int8,
+        project_id -> Text,
+        chapter_number -> Nullable<Int4>,
+        summary_text -> Text,
+        version_no -> Int4,
+        is_current -> Bool,
+        source_stage_run_id -> Nullable<Int8>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_novel_jobs (id) {
+        id -> Int8,
+        project_id -> Text,
+        chapter_number -> Nullable<Int4>,
+        #[max_length = 50]
+        stage_code -> Varchar,
+        #[max_length = 50]
+        task_type -> Varchar,
+        #[max_length = 32]
+        status -> Varchar,
+        #[max_length = 255]
+        idempotency_key -> Nullable<Varchar>,
+        request_payload -> Jsonb,
+        result_payload -> Jsonb,
+        error_payload -> Jsonb,
+        created_by -> Nullable<Int4>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+        started_at -> Nullable<Timestamptz>,
+        completed_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    gm_novel_knowledge_chunks (id) {
+        id -> Int8,
+        project_id -> Text,
+        knowledge_import_id -> Int8,
+        chunk_index -> Int4,
+        content -> Text,
+        metadata -> Jsonb,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_novel_knowledge_imports (id) {
+        id -> Int8,
+        project_id -> Text,
+        #[max_length = 255]
+        source_name -> Varchar,
+        #[max_length = 50]
+        source_type -> Varchar,
+        original_text -> Text,
+        segment_count -> Int4,
+        #[max_length = 32]
+        status -> Varchar,
+        source_stage_run_id -> Nullable<Int8>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_novel_llm_profiles (id) {
+        id -> Int8,
+        user_id -> Int4,
+        #[max_length = 100]
+        name -> Varchar,
+        #[max_length = 50]
+        interface_format -> Varchar,
+        base_url -> Text,
+        api_key -> Text,
+        #[max_length = 200]
+        model_name -> Varchar,
+        temperature -> Float8,
+        max_tokens -> Int4,
+        timeout_seconds -> Int4,
+        is_default -> Bool,
+        is_active -> Bool,
+        metadata -> Jsonb,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+        deleted_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    gm_novel_memory_chunks (id) {
+        id -> Int8,
+        project_id -> Text,
+        #[max_length = 50]
+        source_type -> Varchar,
+        source_ref_id -> Nullable<Int8>,
+        chapter_number -> Nullable<Int4>,
+        chunk_index -> Int4,
+        content -> Text,
+        embedding_profile_id -> Nullable<Int8>,
+        embedding_json -> Nullable<Jsonb>,
+        embedding_dim -> Nullable<Int4>,
+        #[max_length = 32]
+        embedding_status -> Varchar,
+        metadata -> Jsonb,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_novel_plot_arc_snapshots (id) {
+        id -> Int8,
+        project_id -> Text,
+        chapter_number -> Nullable<Int4>,
+        plot_arcs_text -> Text,
+        version_no -> Int4,
+        is_current -> Bool,
+        source_stage_run_id -> Nullable<Int8>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_novel_project_config_snapshots (id) {
+        id -> Int8,
+        project_id -> Text,
+        architecture_llm_profile_id -> Nullable<Int8>,
+        chapter_outline_llm_profile_id -> Nullable<Int8>,
+        prompt_draft_llm_profile_id -> Nullable<Int8>,
+        final_chapter_llm_profile_id -> Nullable<Int8>,
+        consistency_review_llm_profile_id -> Nullable<Int8>,
+        embedding_profile_id -> Nullable<Int8>,
+        proxy_setting -> Jsonb,
+        webdav_config -> Jsonb,
+        other_params -> Jsonb,
+        is_current -> Bool,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_novel_projects (project_id) {
+        project_id -> Text,
+        user_id -> Int4,
+        #[max_length = 255]
+        title -> Varchar,
+        topic -> Text,
+        #[max_length = 100]
+        genre -> Varchar,
+        description -> Text,
+        num_chapters -> Int4,
+        target_words_per_chapter -> Int4,
+        default_user_guidance -> Nullable<Text>,
+        #[max_length = 32]
+        status -> Varchar,
+        #[max_length = 50]
+        current_stage -> Nullable<Varchar>,
+        #[max_length = 50]
+        pending_stage -> Nullable<Varchar>,
+        current_chapter_number -> Nullable<Int4>,
+        progress_percent -> Float4,
+        interaction_version -> Int4,
+        last_error_message -> Nullable<Text>,
+        metadata -> Jsonb,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+        completed_at -> Nullable<Timestamptz>,
+        deleted_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    gm_novel_stage_events (id) {
+        id -> Int8,
+        project_id -> Text,
+        job_id -> Nullable<Int8>,
+        stage_run_id -> Nullable<Int8>,
+        chapter_number -> Nullable<Int4>,
+        sequence -> Int8,
+        #[max_length = 100]
+        event_type -> Varchar,
+        #[max_length = 50]
+        stage_code -> Nullable<Varchar>,
+        payload -> Jsonb,
+        occurred_at -> Timestamptz,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_novel_stage_runs (id) {
+        id -> Int8,
+        project_id -> Text,
+        job_id -> Int8,
+        chapter_number -> Int4,
+        #[max_length = 50]
+        stage_code -> Varchar,
+        #[max_length = 32]
+        status -> Varchar,
+        #[max_length = 128]
+        input_hash -> Varchar,
+        input_payload -> Jsonb,
+        output_payload -> Jsonb,
+        error_message -> Nullable<Text>,
+        attempt_no -> Int4,
+        started_at -> Nullable<Timestamptz>,
+        completed_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     gm_platforms (id) {
         id -> Int4,
         name -> Varchar,
@@ -570,10 +1340,6 @@ diesel::table! {
         updated_at -> Nullable<Timestamptz>,
         base_url -> Varchar,
         page_size -> Int4,
-        #[max_length = 100]
-        content_table_name -> Nullable<Varchar>,
-        #[max_length = 100]
-        comment_table_name -> Nullable<Varchar>,
     }
 }
 
@@ -699,6 +1465,26 @@ diesel::table! {
 }
 
 diesel::table! {
+    gm_user_materials (id) {
+        id -> Int4,
+        user_id -> Int4,
+        video_url -> Text,
+        prompt -> Nullable<Text>,
+        thumbnail_url -> Nullable<Text>,
+        #[max_length = 100]
+        tag -> Nullable<Varchar>,
+        #[max_length = 255]
+        title -> Nullable<Varchar>,
+        description -> Nullable<Text>,
+        duration -> Nullable<Int4>,
+        file_size -> Nullable<Int8>,
+        is_active -> Nullable<Bool>,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
     gm_user_wallets (user_id) {
         user_id -> Int4,
         balance_points -> Numeric,
@@ -738,6 +1524,7 @@ diesel::table! {
         invited_by -> Nullable<Varchar>,
         #[max_length = 50]
         username -> Nullable<Varchar>,
+        permissions -> Int8,
     }
 }
 
@@ -794,9 +1581,94 @@ diesel::table! {
         description -> Nullable<Text>,
         created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
+        #[max_length = 50]
+        reference_type -> Nullable<Varchar>,
+        #[max_length = 20]
+        payment_status -> Nullable<Varchar>,
+        #[max_length = 64]
+        platform_txn_id -> Nullable<Varchar>,
+        #[max_length = 64]
+        open_order_id -> Nullable<Varchar>,
+        paid_at -> Nullable<Timestamptz>,
     }
 }
 
+diesel::table! {
+    hb_novel_provider_request_logs (id) {
+        id -> Int8,
+        project_id -> Text,
+        job_id -> Nullable<Int8>,
+        #[max_length = 50]
+        stage_code -> Nullable<Varchar>,
+        #[max_length = 20]
+        provider_kind -> Varchar,
+        #[max_length = 50]
+        interface_format -> Varchar,
+        #[max_length = 200]
+        model_name -> Nullable<Varchar>,
+        request_summary -> Jsonb,
+        response_summary -> Jsonb,
+        #[max_length = 32]
+        status -> Varchar,
+        latency_ms -> Nullable<Int4>,
+        error_message -> Nullable<Text>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    hb_novel_vector_operations (id) {
+        id -> Int8,
+        project_id -> Text,
+        #[max_length = 50]
+        operation_type -> Varchar,
+        knowledge_import_id -> Nullable<Int8>,
+        chapter_number -> Nullable<Int4>,
+        #[max_length = 32]
+        status -> Varchar,
+        detail -> Jsonb,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    hb_novel_worker_attempts (id) {
+        id -> Int8,
+        worker_task_id -> Text,
+        attempt_no -> Int4,
+        #[max_length = 100]
+        worker_name -> Nullable<Varchar>,
+        #[max_length = 100]
+        host_name -> Nullable<Varchar>,
+        #[max_length = 32]
+        status -> Varchar,
+        error_message -> Nullable<Text>,
+        started_at -> Timestamptz,
+        completed_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    hb_novel_worker_tasks (id) {
+        id -> Text,
+        project_id -> Text,
+        job_id -> Nullable<Int8>,
+        #[max_length = 50]
+        stage_code -> Varchar,
+        #[max_length = 50]
+        task_type -> Varchar,
+        chapter_number -> Nullable<Int4>,
+        #[max_length = 32]
+        status -> Varchar,
+        payload -> Jsonb,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+        started_at -> Nullable<Timestamptz>,
+        completed_at -> Nullable<Timestamptz>,
+    }
+}
+
+// drama tables use Int8 user_id vs gm_users Int4 id - cannot use joinable!
 diesel::joinable!(gm_agent_comments -> gm_agent_videos (video_db_id));
 diesel::joinable!(gm_agent_comments -> gm_campaigns (campaign_id));
 diesel::joinable!(gm_agent_facebook_comments -> gm_agent_facebook_posts (post_db_id));
@@ -817,6 +1689,14 @@ diesel::joinable!(gm_agent_twitter_tweets -> gm_campaigns (campaign_id));
 diesel::joinable!(gm_agent_twitter_tweets -> gm_crawler_tasks (task_id));
 diesel::joinable!(gm_agent_videos -> gm_campaigns (campaign_id));
 diesel::joinable!(gm_agent_videos -> gm_crawler_tasks (task_id));
+diesel::joinable!(gm_aipub_ai_tasks -> gm_aipub_plans (plan_id));
+diesel::joinable!(gm_aipub_plans -> gm_platforms (platform_id));
+diesel::joinable!(gm_aipub_plans -> gm_social_accounts (social_account_id));
+diesel::joinable!(gm_aipub_plans -> gm_social_groups (group_id));
+diesel::joinable!(gm_aipub_plans -> gm_users (user_id));
+diesel::joinable!(gm_aipub_tasks -> gm_aipub_ai_tasks (ai_task_id));
+diesel::joinable!(gm_aipub_tasks -> gm_aipub_plans (plan_id));
+diesel::joinable!(gm_aipub_tasks -> gm_social_accounts (social_account_id));
 diesel::joinable!(gm_campaign_accounts -> gm_campaigns (campaign_id));
 diesel::joinable!(gm_campaign_accounts -> gm_social_accounts (account_id));
 diesel::joinable!(gm_campaign_templates -> gm_campaigns (campaign_id));
@@ -828,6 +1708,47 @@ diesel::joinable!(gm_campaigns -> gm_users (user_id));
 diesel::joinable!(gm_crawler_results -> gm_crawler_tasks (task_id));
 diesel::joinable!(gm_crawler_tasks -> gm_campaigns (campaign_id));
 diesel::joinable!(gm_login_logs -> gm_users (user_id));
+diesel::joinable!(gm_novel_architecture_checkpoints -> gm_novel_projects (project_id));
+diesel::joinable!(gm_novel_architecture_checkpoints -> gm_novel_stage_runs (source_stage_run_id));
+diesel::joinable!(gm_novel_architectures -> gm_novel_projects (project_id));
+diesel::joinable!(gm_novel_architectures -> gm_novel_stage_runs (source_stage_run_id));
+diesel::joinable!(gm_novel_blueprint_chapters -> gm_novel_blueprints (blueprint_id));
+diesel::joinable!(gm_novel_blueprint_chapters -> gm_novel_projects (project_id));
+diesel::joinable!(gm_novel_blueprints -> gm_novel_projects (project_id));
+diesel::joinable!(gm_novel_blueprints -> gm_novel_stage_runs (source_stage_run_id));
+diesel::joinable!(gm_novel_chapter_prompts -> gm_novel_blueprint_chapters (blueprint_chapter_id));
+diesel::joinable!(gm_novel_chapter_prompts -> gm_novel_projects (project_id));
+diesel::joinable!(gm_novel_chapter_prompts -> gm_novel_stage_runs (source_stage_run_id));
+diesel::joinable!(gm_novel_chapters -> gm_novel_blueprint_chapters (blueprint_chapter_id));
+diesel::joinable!(gm_novel_chapters -> gm_novel_chapter_prompts (prompt_id));
+diesel::joinable!(gm_novel_chapters -> gm_novel_projects (project_id));
+diesel::joinable!(gm_novel_chapters -> gm_novel_stage_runs (source_stage_run_id));
+diesel::joinable!(gm_novel_character_state_snapshots -> gm_novel_projects (project_id));
+diesel::joinable!(gm_novel_character_state_snapshots -> gm_novel_stage_runs (source_stage_run_id));
+diesel::joinable!(gm_novel_consistency_checks -> gm_novel_projects (project_id));
+diesel::joinable!(gm_novel_consistency_checks -> gm_novel_stage_runs (source_stage_run_id));
+diesel::joinable!(gm_novel_embedding_profiles -> gm_users (user_id));
+diesel::joinable!(gm_novel_global_summary_snapshots -> gm_novel_projects (project_id));
+diesel::joinable!(gm_novel_global_summary_snapshots -> gm_novel_stage_runs (source_stage_run_id));
+diesel::joinable!(gm_novel_jobs -> gm_novel_projects (project_id));
+diesel::joinable!(gm_novel_jobs -> gm_users (created_by));
+diesel::joinable!(gm_novel_knowledge_chunks -> gm_novel_knowledge_imports (knowledge_import_id));
+diesel::joinable!(gm_novel_knowledge_chunks -> gm_novel_projects (project_id));
+diesel::joinable!(gm_novel_knowledge_imports -> gm_novel_projects (project_id));
+diesel::joinable!(gm_novel_knowledge_imports -> gm_novel_stage_runs (source_stage_run_id));
+diesel::joinable!(gm_novel_llm_profiles -> gm_users (user_id));
+diesel::joinable!(gm_novel_memory_chunks -> gm_novel_embedding_profiles (embedding_profile_id));
+diesel::joinable!(gm_novel_memory_chunks -> gm_novel_projects (project_id));
+diesel::joinable!(gm_novel_plot_arc_snapshots -> gm_novel_projects (project_id));
+diesel::joinable!(gm_novel_plot_arc_snapshots -> gm_novel_stage_runs (source_stage_run_id));
+diesel::joinable!(gm_novel_project_config_snapshots -> gm_novel_embedding_profiles (embedding_profile_id));
+diesel::joinable!(gm_novel_project_config_snapshots -> gm_novel_projects (project_id));
+diesel::joinable!(gm_novel_projects -> gm_users (user_id));
+diesel::joinable!(gm_novel_stage_events -> gm_novel_jobs (job_id));
+diesel::joinable!(gm_novel_stage_events -> gm_novel_projects (project_id));
+diesel::joinable!(gm_novel_stage_events -> gm_novel_stage_runs (stage_run_id));
+diesel::joinable!(gm_novel_stage_runs -> gm_novel_jobs (job_id));
+diesel::joinable!(gm_novel_stage_runs -> gm_novel_projects (project_id));
 diesel::joinable!(gm_pricing_rules -> gm_platforms (platform_id));
 diesel::joinable!(gm_referral_earnings -> gm_referrals (referral_id));
 diesel::joinable!(gm_regions -> gm_platforms (platform_id));
@@ -846,8 +1767,20 @@ diesel::joinable!(gm_video_generation_tasks -> gm_ai_models (model_id));
 diesel::joinable!(gm_video_generation_tasks -> gm_users (user_id));
 diesel::joinable!(gm_video_generation_tasks -> gm_wallet_transactions (wallet_transaction_id));
 diesel::joinable!(gm_wallet_transactions -> gm_users (user_id));
+diesel::joinable!(hb_novel_provider_request_logs -> gm_novel_jobs (job_id));
+diesel::joinable!(hb_novel_vector_operations -> gm_novel_knowledge_imports (knowledge_import_id));
+diesel::joinable!(hb_novel_worker_attempts -> hb_novel_worker_tasks (worker_task_id));
+diesel::joinable!(hb_novel_worker_tasks -> gm_novel_jobs (job_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
+    drama_chapter_scene_asset_links,
+    drama_private_characters,
+    drama_private_scene_assets,
+    drama_private_style_assets,
+    drama_project_character_links,
+    drama_project_meta,
+    drama_project_scene_asset_links,
+    drama_project_style_asset_links,
     gm_admin_users,
     gm_agent_comments,
     gm_agent_facebook_comments,
@@ -859,16 +1792,48 @@ diesel::allow_tables_to_appear_in_same_query!(
     gm_agent_twitter_comments,
     gm_agent_twitter_tweets,
     gm_agent_videos,
+    gm_ai_conversations,
+    gm_ai_messages,
+    gm_ai_plan_steps,
+    gm_ai_plans,
+    gm_ai_tool_audit_logs,
     gm_ai_models,
     gm_ai_video_models,
+    gm_aipub_ai_tasks,
+    gm_aipub_plans,
+    gm_aipub_tasks,
     gm_campaign_accounts,
     gm_campaign_templates,
     gm_campaigns,
     gm_crawler_results,
     gm_crawler_tasks,
+    gm_data_video_cases,
+    gm_drama_callback_events,
+    gm_drama_cost_events,
+    gm_drama_project_projections,
     gm_email_verifications,
     gm_login_logs,
     gm_notifications,
+    gm_novel_architecture_checkpoints,
+    gm_novel_architectures,
+    gm_novel_blueprint_chapters,
+    gm_novel_blueprints,
+    gm_novel_chapter_prompts,
+    gm_novel_chapters,
+    gm_novel_character_state_snapshots,
+    gm_novel_consistency_checks,
+    gm_novel_embedding_profiles,
+    gm_novel_global_summary_snapshots,
+    gm_novel_jobs,
+    gm_novel_knowledge_chunks,
+    gm_novel_knowledge_imports,
+    gm_novel_llm_profiles,
+    gm_novel_memory_chunks,
+    gm_novel_plot_arc_snapshots,
+    gm_novel_project_config_snapshots,
+    gm_novel_projects,
+    gm_novel_stage_events,
+    gm_novel_stage_runs,
     gm_platforms,
     gm_pricing_rules,
     gm_promo_codes,
@@ -878,9 +1843,14 @@ diesel::allow_tables_to_appear_in_same_query!(
     gm_social_accounts,
     gm_social_groups,
     gm_upload_tasks,
+    gm_user_materials,
     gm_user_notification_reads,
     gm_user_wallets,
     gm_users,
     gm_video_generation_tasks,
     gm_wallet_transactions,
+    hb_novel_provider_request_logs,
+    hb_novel_vector_operations,
+    hb_novel_worker_attempts,
+    hb_novel_worker_tasks,
 );

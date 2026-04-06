@@ -44,6 +44,7 @@ pub async fn get_unified_comments(
     let req = crate::dto::common::PageRequest {
         page: query.page,
         page_size: query.page_size,
+        group_id: None,
     };
     let response = state
         .agent_service

@@ -1,4 +1,5 @@
 use crate::config::database::DBPool;
+use crate::platform_routing::SupportedPlatform;
 use bigdecimal::BigDecimal;
 use diesel::prelude::*;
 use diesel::result::Error as DieselError;
@@ -46,6 +47,22 @@ impl CampaignRepository {
             .filter(campaigns::user_id.eq(user_id))
             .select(Campaign::as_select())
             .first(&mut conn)
+    }
+
+    fn get_campaign_platform(
+        &self,
+        conn: &mut PgConnection,
+        campaign_id: i32,
+    ) -> Result<SupportedPlatform, DieselError> {
+        use glance_mind_db::schema::{gm_campaigns, gm_platforms};
+
+        let platform_name: String = gm_campaigns::table
+            .inner_join(gm_platforms::table.on(gm_campaigns::platform_id.eq(gm_platforms::id)))
+            .filter(gm_campaigns::id.eq(campaign_id))
+            .select(gm_platforms::name)
+            .first(conn)?;
+
+        SupportedPlatform::from_name(&platform_name).ok_or(DieselError::NotFound)
     }
 
     pub async fn find_by_user(
@@ -102,6 +119,7 @@ impl CampaignRepository {
             .get_result(&mut conn)
     }
 
+    #[allow(dead_code)]
     pub async fn update_status_and_freeze(
         &self,
         id: i32,
@@ -124,33 +142,70 @@ impl CampaignRepository {
     // Get count of videos (total scans) for a campaign
     pub async fn get_total_scans(&self, campaign_id: i32) -> Result<i64, DieselError> {
         use glance_mind_db::schema::{
-            gm_agent_videos as agent_videos, gm_crawler_tasks as crawler_tasks,
+            gm_agent_facebook_posts, gm_agent_instagram_posts, gm_agent_reddit_posts,
+            gm_agent_twitter_tweets, gm_agent_videos,
         };
 
         let mut conn = self.pool.get().expect("Connection error");
+        let platform = self.get_campaign_platform(&mut conn, campaign_id)?;
 
-        agent_videos::table
-            .inner_join(crawler_tasks::table)
-            .filter(crawler_tasks::campaign_id.eq(campaign_id))
-            .count()
-            .get_result(&mut conn)
+        match platform {
+            SupportedPlatform::Tiktok => gm_agent_videos::table
+                .filter(gm_agent_videos::campaign_id.eq(Some(campaign_id)))
+                .count()
+                .get_result(&mut conn),
+            SupportedPlatform::Facebook => gm_agent_facebook_posts::table
+                .filter(gm_agent_facebook_posts::campaign_id.eq(Some(campaign_id)))
+                .count()
+                .get_result(&mut conn),
+            SupportedPlatform::Instagram => gm_agent_instagram_posts::table
+                .filter(gm_agent_instagram_posts::campaign_id.eq(Some(campaign_id)))
+                .count()
+                .get_result(&mut conn),
+            SupportedPlatform::Reddit => gm_agent_reddit_posts::table
+                .filter(gm_agent_reddit_posts::campaign_id.eq(Some(campaign_id)))
+                .count()
+                .get_result(&mut conn),
+            SupportedPlatform::Twitter => gm_agent_twitter_tweets::table
+                .filter(gm_agent_twitter_tweets::campaign_id.eq(Some(campaign_id)))
+                .count()
+                .get_result(&mut conn),
+        }
     }
 
     // Get count of AI-processed comments (ai replies) for a campaign
+    // Supports all platforms: TikTok, Instagram, Facebook, Twitter, Reddit
     pub async fn get_ai_replies_count(&self, campaign_id: i32) -> Result<i64, DieselError> {
         use glance_mind_db::schema::{
-            gm_agent_comments as agent_comments, gm_agent_videos as agent_videos,
-            gm_crawler_tasks as crawler_tasks,
+            gm_agent_comments, gm_agent_facebook_comments, gm_agent_instagram_comments,
+            gm_agent_reddit_comments, gm_agent_twitter_comments,
         };
 
         let mut conn = self.pool.get().expect("Connection error");
+        let platform = self.get_campaign_platform(&mut conn, campaign_id)?;
 
-        agent_comments::table
-            .inner_join(agent_videos::table)
-            .inner_join(crawler_tasks::table.on(agent_videos::task_id.eq(crawler_tasks::id)))
-            .filter(crawler_tasks::campaign_id.eq(campaign_id))
-            .count()
-            .get_result(&mut conn)
+        match platform {
+            SupportedPlatform::Tiktok => gm_agent_comments::table
+                .filter(gm_agent_comments::campaign_id.eq(Some(campaign_id)))
+                .count()
+                .get_result(&mut conn),
+            SupportedPlatform::Facebook => gm_agent_facebook_comments::table
+                .filter(gm_agent_facebook_comments::campaign_id.eq(Some(campaign_id)))
+                .count()
+                .get_result(&mut conn),
+            SupportedPlatform::Instagram => gm_agent_instagram_comments::table
+                .filter(gm_agent_instagram_comments::campaign_id.eq(Some(campaign_id)))
+                .count()
+                .get_result(&mut conn),
+            SupportedPlatform::Reddit => gm_agent_reddit_comments::table
+                .filter(gm_agent_reddit_comments::campaign_id.eq(Some(campaign_id)))
+                .count()
+                .get_result(&mut conn),
+            SupportedPlatform::Twitter => gm_agent_twitter_comments::table
+                .filter(gm_agent_twitter_comments::campaign_id.eq(Some(campaign_id)))
+                .count()
+                .get_result(&mut conn),
+        }
     }
 
     /// Activate campaign using stored procedure

@@ -35,4 +35,12 @@ impl PlatformRepository {
             .select(Region::as_select())
             .load(&mut conn)
     }
+
+    pub async fn find_all_regions(&self) -> Result<Vec<Region>, DieselError> {
+        let mut conn = self.pool.get().expect("Connection error");
+        regions::table
+            .filter(regions::is_active.eq(true))
+            .select(Region::as_select())
+            .load(&mut conn)
+    }
 }
