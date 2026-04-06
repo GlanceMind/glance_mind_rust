@@ -429,6 +429,15 @@ pub fn routes(
                     .layer(axum::Extension(drama_stream_hub.clone()))
                     .with_state(user_state.clone()),
             )
+            // Novel Engine Internal Callback (no user auth, internal network only)
+            .nest(
+                "/internal/novel",
+                crate::routes::novel::internal_routes()
+                    .layer(axum::Extension(
+                        crate::service::novel_service::NovelService::new(&user_state.db),
+                    ))
+                    .with_state(user_state.clone()),
+            )
             // Novel Engine Routes (requires auth)
             .nest(
                 "/novel",

@@ -842,6 +842,37 @@ pub struct NovelEventsQuery {
     pub limit: Option<i64>,
 }
 
+// =============================================================================
+// 16. Worker Callback Event (worker → API)
+// =============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NovelWorkerCallbackEvent {
+    pub project_id: String,
+    pub job_id: i64,
+    pub event_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chapter_number: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage_run_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_hash: Option<String>,
+    #[serde(default = "empty_json_object")]
+    pub result_payload: Value,
+    #[serde(default = "empty_json_object")]
+    pub error_payload: Value,
+    #[serde(default = "empty_json_object")]
+    pub payload: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempt_no: Option<i32>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

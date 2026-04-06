@@ -238,6 +238,20 @@ impl NovelService {
         .execute(&mut conn)
         .map_err(|e| e.to_string())?;
 
+        diesel::update(
+            gm_novel_projects::table
+                .filter(gm_novel_projects::project_id.eq(project_id))
+                .filter(gm_novel_projects::deleted_at.is_null()),
+        )
+        .set((
+            gm_novel_projects::status.eq("cancelled"),
+            gm_novel_projects::pending_stage.eq(None::<String>),
+            gm_novel_projects::last_error_message.eq(None::<String>),
+            gm_novel_projects::updated_at.eq(Utc::now()),
+        ))
+        .execute(&mut conn)
+        .map_err(|e| e.to_string())?;
+
         Ok(())
     }
 
@@ -1203,6 +1217,254 @@ impl NovelService {
             .order(gm_novel_stage_runs::created_at.asc())
             .load::<NovelStageRun>(&mut conn)
             .map_err(|e| e.to_string())
+    }
+
+    // =========================================================================
+    // Job status update + project progress sync
+    // =========================================================================
+
+    pub fn update_job_status(
+        &self,
+        job_id: i64,
+        status: &str,
+        result_payload: Option<serde_json::Value>,
+        error_payload: Option<serde_json::Value>,
+    ) -> Result<NovelJob, String> {
+        let mut conn = self.pool.get().map_err(|e| e.to_string())?;
+        let now = Utc::now();
+
+        let current = gm_novel_jobs::table
+            .filter(gm_novel_jobs::id.eq(job_id))
+            .first::<NovelJob>(&mut conn)
+            .map_err(|e| format!("job not found: {e}"))?;
+
+        let started_at = if status == "running" && current.started_at.is_none() {
+            Some(now)
+        } else {
+            current.started_at
+        };
+        let completed_at =
+            if matches!(status, "completed" | "failed" | "partial_failed" | "cancelled") {
+                Some(now)
+            } else {
+                current.completed_at
+            };
+
+        diesel::update(gm_novel_jobs::table.filter(gm_novel_jobs::id.eq(job_id)))
+            .set((
+                gm_novel_jobs::status.eq(status),
+                gm_novel_jobs::result_payload
+                    .eq(result_payload.unwrap_or(current.result_payload)),
+                gm_novel_jobs::error_payload
+                    .eq(error_payload.unwrap_or(current.error_payload)),
+                gm_novel_jobs::started_at.eq(started_at),
+                gm_novel_jobs::completed_at.eq(completed_at),
+                gm_novel_jobs::updated_at.eq(now),
+            ))
+            .get_result::<NovelJob>(&mut conn)
+            .map_err(|e| format!("update job status: {e}"))
+    }
+
+    pub fn sync_project_from_job(&self, job: &NovelJob) -> Result<(), String> {
+        let mut conn = self.pool.get().map_err(|e| e.to_string())?;
+
+        let project_status = match job.status.as_str() {
+            "running" => "in_progress",
+            "completed" | "partial_failed" => "in_progress",
+            "failed" => "in_progress",
+            _ => return Ok(()),
+        };
+
+        let all_jobs: Vec<NovelJob> = gm_novel_jobs::table
+            .filter(gm_novel_jobs::project_id.eq(&job.project_id))
+            .filter(gm_novel_jobs::status.ne("cancel_requested"))
+            .order(gm_novel_jobs::created_at.desc())
+            .load::<NovelJob>(&mut conn)
+            .map_err(|e| e.to_string())?;
+
+        let total = all_jobs.len() as f32;
+        let completed_count = all_jobs
+            .iter()
+            .filter(|j| matches!(j.status.as_str(), "completed" | "partial_failed"))
+            .count() as f32;
+        let has_running = all_jobs.iter().any(|j| j.status == "running" || j.status == "pending");
+        let all_failed = !all_jobs.is_empty()
+            && all_jobs.iter().all(|j| j.status == "failed" || j.status == "cancelled");
+
+        let progress = if total > 0.0 {
+            (completed_count / total * 100.0).min(100.0)
+        } else {
+            0.0
+        };
+
+        let final_status = if all_failed {
+            "failed"
+        } else if has_running {
+            "in_progress"
+        } else {
+            project_status
+        };
+
+        let error_msg = if job.status == "failed" {
+            job.error_payload
+                .get("error")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| Some(format!("Job {} failed", job.id)))
+        } else {
+            None
+        };
+
+        diesel::update(
+            gm_novel_projects::table
+                .filter(gm_novel_projects::project_id.eq(&job.project_id)),
+        )
+        .set((
+            gm_novel_projects::status.eq(final_status),
+            gm_novel_projects::current_stage.eq(Some(&job.stage_code)),
+            gm_novel_projects::current_chapter_number.eq(job.chapter_number),
+            gm_novel_projects::progress_percent.eq(progress),
+            gm_novel_projects::last_error_message.eq(error_msg),
+            gm_novel_projects::updated_at.eq(Utc::now()),
+        ))
+        .execute(&mut conn)
+        .map_err(|e| format!("sync project from job: {e}"))?;
+
+        Ok(())
+    }
+
+    pub fn mark_project_running(
+        &self,
+        project_id: &str,
+        stage_code: &str,
+        chapter_number: Option<i32>,
+    ) -> Result<(), String> {
+        let mut conn = self.pool.get().map_err(|e| e.to_string())?;
+        diesel::update(
+            gm_novel_projects::table
+                .filter(gm_novel_projects::project_id.eq(project_id)),
+        )
+        .set((
+            gm_novel_projects::status.eq("in_progress"),
+            gm_novel_projects::current_stage.eq(Some(stage_code)),
+            gm_novel_projects::current_chapter_number.eq(chapter_number),
+            gm_novel_projects::last_error_message.eq(None::<String>),
+            gm_novel_projects::updated_at.eq(Utc::now()),
+        ))
+        .execute(&mut conn)
+        .map_err(|e| format!("mark project running: {e}"))?;
+        Ok(())
+    }
+
+    // =========================================================================
+    // Stage run + event recording
+    // =========================================================================
+
+    pub fn upsert_stage_run(
+        &self,
+        project_id: &str,
+        job_id: i64,
+        chapter_number: i32,
+        stage_code: &str,
+        status: &str,
+        input_hash: &str,
+        input_payload: serde_json::Value,
+        output_payload: Option<serde_json::Value>,
+        error_message: Option<&str>,
+        attempt_no: i32,
+    ) -> Result<NovelStageRun, String> {
+        let mut conn = self.pool.get().map_err(|e| e.to_string())?;
+        let now = Utc::now();
+
+        let started_at = if status == "running" { Some(now) } else { None };
+        let completed_at = if matches!(status, "completed" | "failed") {
+            Some(now)
+        } else {
+            None
+        };
+
+        let existing: Option<NovelStageRun> = gm_novel_stage_runs::table
+            .filter(gm_novel_stage_runs::job_id.eq(job_id))
+            .filter(gm_novel_stage_runs::stage_code.eq(stage_code))
+            .filter(gm_novel_stage_runs::attempt_no.eq(attempt_no))
+            .first::<NovelStageRun>(&mut conn)
+            .optional()
+            .map_err(|e| e.to_string())?;
+
+        if let Some(row) = existing {
+            return diesel::update(
+                gm_novel_stage_runs::table.filter(gm_novel_stage_runs::id.eq(row.id)),
+            )
+            .set((
+                gm_novel_stage_runs::status.eq(status),
+                gm_novel_stage_runs::output_payload.eq(
+                    output_payload.unwrap_or_else(|| row.output_payload.clone()),
+                ),
+                gm_novel_stage_runs::error_message.eq(error_message),
+                gm_novel_stage_runs::started_at.eq(started_at.or(row.started_at)),
+                gm_novel_stage_runs::completed_at.eq(completed_at.or(row.completed_at)),
+                gm_novel_stage_runs::updated_at.eq(now),
+            ))
+            .get_result::<NovelStageRun>(&mut conn)
+            .map_err(|e| format!("update stage run: {e}"));
+        }
+
+        diesel::insert_into(gm_novel_stage_runs::table)
+            .values((
+                gm_novel_stage_runs::project_id.eq(project_id),
+                gm_novel_stage_runs::job_id.eq(job_id),
+                gm_novel_stage_runs::chapter_number.eq(chapter_number),
+                gm_novel_stage_runs::stage_code.eq(stage_code),
+                gm_novel_stage_runs::status.eq(status),
+                gm_novel_stage_runs::input_hash.eq(input_hash),
+                gm_novel_stage_runs::input_payload.eq(input_payload),
+                gm_novel_stage_runs::output_payload.eq(
+                    output_payload.unwrap_or_else(|| json!({})),
+                ),
+                gm_novel_stage_runs::error_message.eq(error_message),
+                gm_novel_stage_runs::attempt_no.eq(attempt_no),
+                gm_novel_stage_runs::started_at.eq(started_at),
+                gm_novel_stage_runs::completed_at.eq(completed_at),
+            ))
+            .get_result::<NovelStageRun>(&mut conn)
+            .map_err(|e| format!("insert stage run: {e}"))
+    }
+
+    pub fn record_stage_event(
+        &self,
+        project_id: &str,
+        job_id: Option<i64>,
+        stage_run_id: Option<i64>,
+        chapter_number: Option<i32>,
+        event_type: &str,
+        stage_code: Option<&str>,
+        payload: serde_json::Value,
+    ) -> Result<NovelStageEvent, String> {
+        let mut conn = self.pool.get().map_err(|e| e.to_string())?;
+        let now = Utc::now();
+
+        let next_seq: i64 = gm_novel_stage_events::table
+            .filter(gm_novel_stage_events::project_id.eq(project_id))
+            .select(max(gm_novel_stage_events::sequence))
+            .first::<Option<i64>>(&mut conn)
+            .map_err(|e| e.to_string())?
+            .unwrap_or(0)
+            + 1;
+
+        diesel::insert_into(gm_novel_stage_events::table)
+            .values((
+                gm_novel_stage_events::project_id.eq(project_id),
+                gm_novel_stage_events::job_id.eq(job_id),
+                gm_novel_stage_events::stage_run_id.eq(stage_run_id),
+                gm_novel_stage_events::chapter_number.eq(chapter_number),
+                gm_novel_stage_events::sequence.eq(next_seq),
+                gm_novel_stage_events::event_type.eq(event_type),
+                gm_novel_stage_events::stage_code.eq(stage_code),
+                gm_novel_stage_events::payload.eq(payload),
+                gm_novel_stage_events::occurred_at.eq(now),
+            ))
+            .get_result::<NovelStageEvent>(&mut conn)
+            .map_err(|e| format!("record stage event: {e}"))
     }
 
     // =========================================================================

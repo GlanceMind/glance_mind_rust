@@ -206,7 +206,7 @@ pub async fn cancel_project(
     match service.cancel_project(&project_id, user.id) {
         Ok(()) => ok_response(serde_json::json!({
             "project_id": project_id,
-            "status": "cancel_requested",
+            "status": "cancelled",
             "accepted": true,
         }))
         .into_response(),
@@ -564,6 +564,7 @@ pub async fn generate_architecture(
         return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
     }
 
+    let _ = service.mark_project_running(&project_id, "n01_architecture", None);
     job_accepted_response(&project_id, job.id).into_response()
 }
 
@@ -727,6 +728,7 @@ pub async fn generate_blueprint(
         return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
     }
 
+    let _ = service.mark_project_running(&project_id, "n02_blueprint", None);
     job_accepted_response(&project_id, job.id).into_response()
 }
 
@@ -836,6 +838,7 @@ pub async fn build_chapter_prompt(
         return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
     }
 
+    let _ = service.mark_project_running(&project_id, "n03_chapter_prompt", Some(chapter_number));
     job_accepted_response(&project_id, job.id).into_response()
 }
 
@@ -912,6 +915,7 @@ pub async fn generate_chapter_draft(
         return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
     }
 
+    let _ = service.mark_project_running(&project_id, "n04_chapter_draft", Some(chapter_number));
     job_accepted_response(&project_id, job.id).into_response()
 }
 
@@ -995,6 +999,7 @@ pub async fn enrich_chapter(
         return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
     }
 
+    let _ = service.mark_project_running(&project_id, "n05_enrich", Some(chapter_number));
     job_accepted_response(&project_id, job.id).into_response()
 }
 
@@ -1038,6 +1043,7 @@ pub async fn finalize_chapter(
         return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
     }
 
+    let _ = service.mark_project_running(&project_id, "n06_finalize", Some(chapter_number));
     job_accepted_response(&project_id, job.id).into_response()
 }
 
@@ -1078,6 +1084,7 @@ pub async fn batch_generate_chapters(
         return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
     }
 
+    let _ = service.mark_project_running(&project_id, "n07_batch", None);
     job_accepted_response(&project_id, job.id).into_response()
 }
 
@@ -1125,6 +1132,7 @@ pub async fn create_consistency_check(
         return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
     }
 
+    let _ = service.mark_project_running(&project_id, "n08_consistency", Some(chapter_number));
     job_accepted_response(&project_id, job.id).into_response()
 }
 
@@ -1293,6 +1301,7 @@ pub async fn import_knowledge(
         return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
     }
 
+    let _ = service.mark_project_running(&project_id, "n10_knowledge", None);
     knowledge_import_accepted_response(&project_id, job.id, import.id).into_response()
 }
 
@@ -1359,6 +1368,7 @@ pub async fn clear_memory(
         return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
     }
 
+    let _ = service.mark_project_running(&project_id, "n09_memory", None);
     job_accepted_response(&project_id, job.id).into_response()
 }
 
@@ -1499,4 +1509,158 @@ pub async fn list_events(
         }
         Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
     }
+}
+
+// =========================================================================
+// Internal callback (worker → API, no user auth)
+// =========================================================================
+
+pub async fn ingest_worker_callback(
+    Extension(service): Extension<NovelService>,
+    Json(event): Json<crate::dto::novel_dto::NovelWorkerCallbackEvent>,
+) -> impl IntoResponse {
+    tracing::info!(
+        project_id = %event.project_id,
+        job_id = event.job_id,
+        event_type = %event.event_type,
+        "Novel worker callback received"
+    );
+
+    match event.event_type.as_str() {
+        "job_started" => {
+            if let Err(e) = service.update_job_status(
+                event.job_id,
+                "running",
+                None,
+                None,
+            ) {
+                tracing::error!("Failed to update job to running: {e}");
+                return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
+            }
+            if let Err(e) = service.mark_project_running(
+                &event.project_id,
+                event.stage_code.as_deref().unwrap_or("unknown"),
+                event.chapter_number,
+            ) {
+                tracing::error!("Failed to mark project running: {e}");
+            }
+        }
+        "job_completed" => {
+            let result = if event.result_payload.is_object()
+                && event.result_payload.as_object().map_or(false, |m| !m.is_empty())
+            {
+                Some(event.result_payload.clone())
+            } else {
+                None
+            };
+            match service.update_job_status(event.job_id, "completed", result, None) {
+                Ok(job) => {
+                    if let Err(e) = service.sync_project_from_job(&job) {
+                        tracing::error!("Failed to sync project after job_completed: {e}");
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to update job to completed: {e}");
+                    return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
+                }
+            }
+        }
+        "job_failed" => {
+            let err_payload = if event.error_payload.is_object()
+                && event.error_payload.as_object().map_or(false, |m| !m.is_empty())
+            {
+                Some(event.error_payload.clone())
+            } else {
+                Some(serde_json::json!({"error": event.error_message.as_deref().unwrap_or("unknown")}))
+            };
+            match service.update_job_status(event.job_id, "failed", None, err_payload) {
+                Ok(job) => {
+                    if let Err(e) = service.sync_project_from_job(&job) {
+                        tracing::error!("Failed to sync project after job_failed: {e}");
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to update job to failed: {e}");
+                    return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
+                }
+            }
+        }
+        "job_partial_failed" => {
+            let result = if event.result_payload.is_object()
+                && event.result_payload.as_object().map_or(false, |m| !m.is_empty())
+            {
+                Some(event.result_payload.clone())
+            } else {
+                None
+            };
+            let err_payload = if event.error_payload.is_object()
+                && event.error_payload.as_object().map_or(false, |m| !m.is_empty())
+            {
+                Some(event.error_payload.clone())
+            } else {
+                None
+            };
+            match service.update_job_status(event.job_id, "partial_failed", result, err_payload) {
+                Ok(job) => {
+                    if let Err(e) = service.sync_project_from_job(&job) {
+                        tracing::error!("Failed to sync project after job_partial_failed: {e}");
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to update job to partial_failed: {e}");
+                    return err_response(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response();
+                }
+            }
+        }
+        "stage_run_started" | "stage_run_completed" | "stage_run_failed" => {
+            let sr_status = match event.event_type.as_str() {
+                "stage_run_started" => "running",
+                "stage_run_completed" => "completed",
+                "stage_run_failed" => "failed",
+                _ => "unknown",
+            };
+            let output = if event.result_payload.is_object()
+                && event.result_payload.as_object().map_or(false, |m| !m.is_empty())
+            {
+                Some(event.result_payload.clone())
+            } else {
+                None
+            };
+            if let Err(e) = service.upsert_stage_run(
+                &event.project_id,
+                event.job_id,
+                event.chapter_number.unwrap_or(0),
+                event.stage_code.as_deref().unwrap_or("unknown"),
+                sr_status,
+                event.input_hash.as_deref().unwrap_or(""),
+                event.payload.clone(),
+                output,
+                event.error_message.as_deref(),
+                event.attempt_no.unwrap_or(1),
+            ) {
+                tracing::error!("Failed to upsert stage run: {e}");
+            }
+        }
+        _ => {}
+    }
+
+    if let Err(e) = service.record_stage_event(
+        &event.project_id,
+        Some(event.job_id),
+        event.stage_run_id,
+        event.chapter_number,
+        &event.event_type,
+        event.stage_code.as_deref(),
+        event.payload.clone(),
+    ) {
+        tracing::error!("Failed to record stage event: {e}");
+    }
+
+    ok_response(serde_json::json!({
+        "accepted": true,
+        "project_id": event.project_id,
+        "job_id": event.job_id,
+        "event_type": event.event_type,
+    }))
+    .into_response()
 }

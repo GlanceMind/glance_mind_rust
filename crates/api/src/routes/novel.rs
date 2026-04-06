@@ -6,6 +6,10 @@ use axum::{
 use crate::handler::novel_handler;
 use crate::state::user_state::UserState;
 
+pub fn internal_routes() -> Router<UserState> {
+    Router::new().route("/callback", post(novel_handler::ingest_worker_callback))
+}
+
 pub fn routes() -> Router<UserState> {
     Router::new()
         .route(
