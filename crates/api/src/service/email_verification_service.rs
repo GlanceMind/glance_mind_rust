@@ -105,7 +105,7 @@ impl EmailVerificationService {
         let resend = Resend::new(&self.resend_api_key);
 
         // Send email using Resend template
-        let from = "GlanceMind <noreply@glancemind.org>";
+        let from = "GlanceMind <hello@glancemind.org>";
         let to = vec![email];
         let subject = "Verify Your GlanceMind Account"; // Template email also needs subject
 
@@ -272,7 +272,7 @@ impl EmailVerificationService {
 
         let resend = Resend::new(&self.resend_api_key);
 
-        let from = "GlanceMind <noreply@glancemind.org>";
+        let from = "GlanceMind <hello@glancemind.org>";
         let to = vec![email];
         let subject = "Reset Your GlanceMind Password";
 
