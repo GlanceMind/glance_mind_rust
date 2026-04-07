@@ -53,6 +53,7 @@ fn gateway_response(status: u16, body: Value) -> Response<BoxBody> {
     }
 }
 
+#[allow(dead_code)]
 fn canonical_reads_enabled() -> bool {
     matches!(
         std::env::var("DRAMA_CANONICAL_READS")
@@ -564,26 +565,24 @@ pub async fn get_project(
     Extension(facade): Extension<DramaFacade>,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    if canonical_reads_enabled() {
-        match projection.get_projection(&project_id) {
-            Ok(Some(row)) if row.user_id == user.id => {
-                return gateway_response(200, projection_detail_json(&row)).into_response();
-            }
-            Ok(Some(_)) => {
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(serde_json::json!({
-                        "code": 403,
-                        "msg": "forbidden",
-                        "msg_cn": "无权访问该短剧项目"
-                    })),
-                )
-                    .into_response();
-            }
-            Ok(None) => {}
-            Err(e) => {
-                tracing::error!("Projection read failed: {}", e);
-            }
+    match projection.get_projection(&project_id) {
+        Ok(Some(row)) if row.user_id == user.id => {
+            return gateway_response(200, projection_detail_json(&row)).into_response();
+        }
+        Ok(Some(_)) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "code": 403,
+                    "msg": "forbidden",
+                    "msg_cn": "无权访问该短剧项目"
+                })),
+            )
+                .into_response();
+        }
+        Ok(None) => {}
+        Err(e) => {
+            tracing::error!("Projection read failed, falling through to facade: {}", e);
         }
     }
     match facade.get_project(&project_id, &user).await {
@@ -1124,12 +1123,10 @@ pub async fn list_projects(
     Extension(facade): Extension<DramaFacade>,
     Query(query): Query<DramaProjectListQuery>,
 ) -> impl IntoResponse {
-    if canonical_reads_enabled() && query.cursor.is_none() {
-        match projection.list_projections(
-            user.id,
-            query.status.as_deref(),
-            query.limit.unwrap_or(20),
-        ) {
+    let limit = query.limit.unwrap_or(20);
+
+    if query.cursor.is_none() {
+        match projection.list_projections(user.id, query.status.as_deref(), limit) {
             Ok(rows) => {
                 let list: Vec<Value> = rows.iter().map(projection_summary_json).collect();
                 return gateway_response(
@@ -1138,16 +1135,17 @@ pub async fn list_projects(
                         "list": list,
                         "total": list.len(),
                         "page": 1,
-                        "page_size": query.limit.unwrap_or(20)
+                        "page_size": limit
                     }),
                 )
                 .into_response();
             }
             Err(e) => {
-                tracing::error!("Projection list failed: {}", e);
+                tracing::error!("Projection list failed, falling through to facade: {}", e);
             }
         }
     }
+
     let mut pairs: Vec<(&str, String)> = Vec::new();
     if let Some(ref s) = query.status {
         pairs.push(("status", s.clone()));
@@ -1161,7 +1159,19 @@ pub async fn list_projects(
     let refs: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
     match facade.list_projects(&refs, &user).await {
         Ok((status, body)) => gateway_response(status, body),
-        Err(e) => map_facade_err(e).into_response(),
+        Err(e) => {
+            tracing::error!("Drama facade list_projects failed: {}", e);
+            gateway_response(
+                200,
+                serde_json::json!({
+                    "list": [],
+                    "total": 0,
+                    "page": 1,
+                    "page_size": limit
+                }),
+            )
+            .into_response()
+        }
     }
 }
 
@@ -1513,28 +1523,26 @@ pub async fn get_script(
     Extension(facade): Extension<DramaFacade>,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    if canonical_reads_enabled() {
-        match projection.get_projection(&project_id) {
-            Ok(row) => {
-                let row = match check_projection_access(row, &user) {
-                    Ok(row) => row,
-                    Err(resp) => return resp,
-                };
-                if let Some(payload) = row.interaction_payload {
-                    if payload.get("type").and_then(|v| v.as_str()) == Some("script_approval") {
-                        return gateway_response(
-                            200,
-                            serde_json::json!({
-                                "project_id": row.project_id,
-                                "script": payload.get("script").cloned().unwrap_or(Value::Null)
-                            }),
-                        )
-                        .into_response();
-                    }
+    match projection.get_projection(&project_id) {
+        Ok(row) => {
+            let row = match check_projection_access(row, &user) {
+                Ok(row) => row,
+                Err(resp) => return resp,
+            };
+            if let Some(payload) = row.interaction_payload {
+                if payload.get("type").and_then(|v| v.as_str()) == Some("script_approval") {
+                    return gateway_response(
+                        200,
+                        serde_json::json!({
+                            "project_id": row.project_id,
+                            "script": payload.get("script").cloned().unwrap_or(Value::Null)
+                        }),
+                    )
+                    .into_response();
                 }
             }
-            Err(e) => tracing::error!("Projection read failed: {}", e),
         }
+        Err(e) => tracing::error!("Projection read failed: {}", e),
     }
     match facade.get_script(&project_id, &user).await {
         Ok((status, body)) => gateway_response(status, body),
@@ -1548,54 +1556,52 @@ pub async fn get_shots(
     Extension(facade): Extension<DramaFacade>,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    if canonical_reads_enabled() {
-        match projection.get_projection(&project_id) {
-            Ok(row) => {
-                let row = match check_projection_access(row, &user) {
-                    Ok(row) => row,
-                    Err(resp) => return resp,
-                };
-                let shots = row
-                    .interaction_payload
-                    .as_ref()
-                    .and_then(|payload| {
-                        if payload.get("type").and_then(|v| v.as_str()) == Some("script_approval") {
-                            payload
-                                .get("script")
-                                .and_then(|v| v.get("scenes"))
-                                .and_then(|v| v.as_array())
-                                .map(|scenes| {
-                                    scenes
-                                        .iter()
-                                        .map(|scene| {
-                                            serde_json::json!({
-                                                "shot_id": scene.get("scene_id").cloned().unwrap_or(Value::String(Uuid::new_v4().to_string())),
-                                                "scene_id": scene.get("scene_id").cloned().unwrap_or(Value::Null),
-                                                "sequence": scene.get("sequence").cloned().unwrap_or(Value::from(1)),
-                                                "shot_type": "story",
-                                                "duration_seconds": scene.get("duration_seconds").cloned().unwrap_or(Value::from(5)),
-                                                "description": scene.get("action_summary").cloned().unwrap_or(Value::Null)
-                                            })
+    match projection.get_projection(&project_id) {
+        Ok(row) => {
+            let row = match check_projection_access(row, &user) {
+                Ok(row) => row,
+                Err(resp) => return resp,
+            };
+            let shots = row
+                .interaction_payload
+                .as_ref()
+                .and_then(|payload| {
+                    if payload.get("type").and_then(|v| v.as_str()) == Some("script_approval") {
+                        payload
+                            .get("script")
+                            .and_then(|v| v.get("scenes"))
+                            .and_then(|v| v.as_array())
+                            .map(|scenes| {
+                                scenes
+                                    .iter()
+                                    .map(|scene| {
+                                        serde_json::json!({
+                                            "shot_id": scene.get("scene_id").cloned().unwrap_or(Value::String(Uuid::new_v4().to_string())),
+                                            "scene_id": scene.get("scene_id").cloned().unwrap_or(Value::Null),
+                                            "sequence": scene.get("sequence").cloned().unwrap_or(Value::from(1)),
+                                            "shot_type": "story",
+                                            "duration_seconds": scene.get("duration_seconds").cloned().unwrap_or(Value::from(5)),
+                                            "description": scene.get("action_summary").cloned().unwrap_or(Value::Null)
                                         })
-                                        .collect::<Vec<Value>>()
-                                })
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or_default();
-                return gateway_response(
-                    200,
-                    serde_json::json!({
-                        "project_id": row.project_id,
-                        "shots": shots,
-                        "visual_style": {}
-                    }),
-                )
-                .into_response();
-            }
-            Err(e) => tracing::error!("Projection read failed: {}", e),
+                                    })
+                                    .collect::<Vec<Value>>()
+                            })
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default();
+            return gateway_response(
+                200,
+                serde_json::json!({
+                    "project_id": row.project_id,
+                    "shots": shots,
+                    "visual_style": {}
+                }),
+            )
+            .into_response();
         }
+        Err(e) => tracing::error!("Projection read failed: {}", e),
     }
 
     match facade.get_shots(&project_id, &user).await {
@@ -1610,56 +1616,54 @@ pub async fn get_render(
     Extension(facade): Extension<DramaFacade>,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    if canonical_reads_enabled() {
-        match projection.get_projection(&project_id) {
-            Ok(row) => {
-                let row = match check_projection_access(row, &user) {
-                    Ok(row) => row,
-                    Err(resp) => return resp,
-                };
+    match projection.get_projection(&project_id) {
+        Ok(row) => {
+            let row = match check_projection_access(row, &user) {
+                Ok(row) => row,
+                Err(resp) => return resp,
+            };
 
-                let render_tasks: Vec<Value> = projection
-                    .list_render_events(&row.project_id)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|evt| {
-                        let segment_index = evt
-                            .payload
-                            .get("segment_index")
-                            .and_then(|v| v.as_i64())
-                            .unwrap_or(0);
-                        let total_segments = evt
-                            .payload
-                            .get("total_segments")
-                            .and_then(|v| v.as_i64())
-                            .unwrap_or(0);
-                        let segment_status = evt
-                            .payload
-                            .get("segment_status")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
-                        serde_json::json!({
-                            "task_id": format!("render-seg{}", segment_index),
-                            "shot_id": format!("shot-{}", segment_index),
-                            "status": segment_status,
-                            "segment_index": segment_index,
-                            "total_segments": total_segments,
-                        })
-                    })
-                    .collect();
-
-                return gateway_response(
-                    200,
+            let render_tasks: Vec<Value> = projection
+                .list_render_events(&row.project_id)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|evt| {
+                    let segment_index = evt
+                        .payload
+                        .get("segment_index")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    let total_segments = evt
+                        .payload
+                        .get("total_segments")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    let segment_status = evt
+                        .payload
+                        .get("segment_status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
                     serde_json::json!({
-                        "project_id": row.project_id,
-                        "render_tasks": render_tasks,
-                        "progress_percent": row.progress_percent
-                    }),
-                )
-                .into_response();
-            }
-            Err(e) => tracing::error!("Projection read failed: {}", e),
+                        "task_id": format!("render-seg{}", segment_index),
+                        "shot_id": format!("shot-{}", segment_index),
+                        "status": segment_status,
+                        "segment_index": segment_index,
+                        "total_segments": total_segments,
+                    })
+                })
+                .collect();
+
+            return gateway_response(
+                200,
+                serde_json::json!({
+                    "project_id": row.project_id,
+                    "render_tasks": render_tasks,
+                    "progress_percent": row.progress_percent
+                }),
+            )
+            .into_response();
         }
+        Err(e) => tracing::error!("Projection read failed: {}", e),
     }
     match facade.get_render(&project_id, &user).await {
         Ok((status, body)) => gateway_response(status, body),
@@ -1673,82 +1677,80 @@ pub async fn get_artifacts(
     Extension(facade): Extension<DramaFacade>,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    if canonical_reads_enabled() {
-        match projection.get_projection(&project_id) {
-            Ok(row) => {
-                let row = match check_projection_access(row, &user) {
-                    Ok(row) => row,
-                    Err(resp) => return resp,
-                };
-                match projection.list_artifacts(&row.project_id) {
-                    Ok(rows) => {
-                        let artifacts: Vec<Value> = rows
-                            .into_iter()
-                            .map(|item| {
-                                let artifact_type = item
-                                    .metadata
-                                    .as_ref()
-                                    .and_then(|v| v.get("artifact_type"))
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("artifact");
-                                serde_json::json!({
-                                    "artifact_id": item.id.to_string(),
-                                    "artifact_type": artifact_type,
-                                    "url": item.public_url,
-                                    "format": item.format,
-                                    "size_bytes": item.file_size,
-                                    "duration_seconds": item.duration_seconds
-                                })
-                            })
-                            .collect();
-                        let final_master = artifacts
-                            .iter()
-                            .find(|item| {
-                                item.get("artifact_type")
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| s.contains("final") || s.contains("master"))
-                                    .unwrap_or(false)
-                            })
-                            .cloned()
-                            .or_else(|| artifacts.first().cloned());
-                        let audio_tracks: Vec<Value> = artifacts
-                            .iter()
-                            .filter(|item| {
-                                item.get("artifact_type")
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| s.contains("audio") || s.contains("narration"))
-                                    .unwrap_or(false)
-                            })
-                            .cloned()
-                            .collect();
-                        let subtitle_bundles: Vec<Value> = artifacts
-                            .iter()
-                            .filter(|item| {
-                                item.get("artifact_type")
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| s.contains("subtitle") || s.contains("srt"))
-                                    .unwrap_or(false)
-                            })
-                            .cloned()
-                            .collect();
-                        return gateway_response(
-                            200,
+    match projection.get_projection(&project_id) {
+        Ok(row) => {
+            let row = match check_projection_access(row, &user) {
+                Ok(row) => row,
+                Err(resp) => return resp,
+            };
+            match projection.list_artifacts(&row.project_id) {
+                Ok(rows) => {
+                    let artifacts: Vec<Value> = rows
+                        .into_iter()
+                        .map(|item| {
+                            let artifact_type = item
+                                .metadata
+                                .as_ref()
+                                .and_then(|v| v.get("artifact_type"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("artifact");
                             serde_json::json!({
-                                "project_id": row.project_id,
-                                "artifacts": artifacts,
-                                "final_master": final_master,
-                                "audio_tracks": audio_tracks,
-                                "subtitle_bundles": subtitle_bundles,
-                                "stage_packages": []
-                            }),
-                        )
-                        .into_response();
-                    }
-                    Err(e) => tracing::error!("Projection artifacts read failed: {}", e),
+                                "artifact_id": item.id.to_string(),
+                                "artifact_type": artifact_type,
+                                "url": item.public_url,
+                                "format": item.format,
+                                "size_bytes": item.file_size,
+                                "duration_seconds": item.duration_seconds
+                            })
+                        })
+                        .collect();
+                    let final_master = artifacts
+                        .iter()
+                        .find(|item| {
+                            item.get("artifact_type")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.contains("final") || s.contains("master"))
+                                .unwrap_or(false)
+                        })
+                        .cloned()
+                        .or_else(|| artifacts.first().cloned());
+                    let audio_tracks: Vec<Value> = artifacts
+                        .iter()
+                        .filter(|item| {
+                            item.get("artifact_type")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.contains("audio") || s.contains("narration"))
+                                .unwrap_or(false)
+                        })
+                        .cloned()
+                        .collect();
+                    let subtitle_bundles: Vec<Value> = artifacts
+                        .iter()
+                        .filter(|item| {
+                            item.get("artifact_type")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.contains("subtitle") || s.contains("srt"))
+                                .unwrap_or(false)
+                        })
+                        .cloned()
+                        .collect();
+                    return gateway_response(
+                        200,
+                        serde_json::json!({
+                            "project_id": row.project_id,
+                            "artifacts": artifacts,
+                            "final_master": final_master,
+                            "audio_tracks": audio_tracks,
+                            "subtitle_bundles": subtitle_bundles,
+                            "stage_packages": []
+                        }),
+                    )
+                    .into_response();
                 }
+                Err(e) => tracing::error!("Projection artifacts read failed: {}", e),
             }
-            Err(e) => tracing::error!("Projection read failed: {}", e),
         }
+        Err(e) => tracing::error!("Projection read failed: {}", e),
     }
     match facade.get_artifacts(&project_id, &user).await {
         Ok((status, body)) => gateway_response(status, body),
@@ -1762,42 +1764,40 @@ pub async fn get_cost(
     Extension(facade): Extension<DramaFacade>,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    if canonical_reads_enabled() {
-        match projection.get_projection(&project_id) {
-            Ok(row) => {
-                let row = match check_projection_access(row, &user) {
-                    Ok(row) => row,
-                    Err(resp) => return resp,
-                };
-                match projection.list_cost_ledger(&row.project_id) {
-                    Ok(rows) => {
-                        let total_cents: i64 = rows.iter().map(|item| item.amount_cents).sum();
-                        let costs: Vec<Value> = rows
-                            .into_iter()
-                            .map(|item| {
-                                serde_json::json!({
-                                    "cost_type": item.cost_type,
-                                    "amount_cents": item.amount_cents,
-                                    "source": item.provider.unwrap_or_else(|| "worker".to_string()),
-                                    "stage_code": item.stage_code.unwrap_or_default()
-                                })
-                            })
-                            .collect();
-                        return gateway_response(
-                            200,
+    match projection.get_projection(&project_id) {
+        Ok(row) => {
+            let row = match check_projection_access(row, &user) {
+                Ok(row) => row,
+                Err(resp) => return resp,
+            };
+            match projection.list_cost_ledger(&row.project_id) {
+                Ok(rows) => {
+                    let total_cents: i64 = rows.iter().map(|item| item.amount_cents).sum();
+                    let costs: Vec<Value> = rows
+                        .into_iter()
+                        .map(|item| {
                             serde_json::json!({
-                                "project_id": row.project_id,
-                                "costs": costs,
-                                "total_cents": total_cents
-                            }),
-                        )
-                        .into_response();
-                    }
-                    Err(e) => tracing::error!("Projection cost read failed: {}", e),
+                                "cost_type": item.cost_type,
+                                "amount_cents": item.amount_cents,
+                                "source": item.provider.unwrap_or_else(|| "worker".to_string()),
+                                "stage_code": item.stage_code.unwrap_or_default()
+                            })
+                        })
+                        .collect();
+                    return gateway_response(
+                        200,
+                        serde_json::json!({
+                            "project_id": row.project_id,
+                            "costs": costs,
+                            "total_cents": total_cents
+                        }),
+                    )
+                    .into_response();
                 }
+                Err(e) => tracing::error!("Projection cost read failed: {}", e),
             }
-            Err(e) => tracing::error!("Projection read failed: {}", e),
         }
+        Err(e) => tracing::error!("Projection read failed: {}", e),
     }
     match facade.get_cost(&project_id, &user).await {
         Ok((status, body)) => gateway_response(status, body),
@@ -1811,43 +1811,41 @@ pub async fn get_fallbacks(
     Extension(facade): Extension<DramaFacade>,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    if canonical_reads_enabled() {
-        match projection.get_projection(&project_id) {
-            Ok(row) => {
-                let row = match check_projection_access(row, &user) {
-                    Ok(row) => row,
-                    Err(resp) => return resp,
-                };
-                match projection.list_fallback_events(&row.project_id) {
-                    Ok(rows) => {
-                        let fallback_events: Vec<Value> = rows
-                            .into_iter()
-                            .map(|item| {
-                                serde_json::json!({
-                                    "stage_code": item.stage_code,
-                                    "reason_category": item.reason_category,
-                                    "reason_detail": item.reason_detail,
-                                    "from_provider": item.from_provider,
-                                    "to_provider": item.to_provider,
-                                    "created_at": item.occurred_at.and_utc().to_rfc3339(),
-                                    "payload": item.payload
-                                })
-                            })
-                            .collect();
-                        return gateway_response(
-                            200,
+    match projection.get_projection(&project_id) {
+        Ok(row) => {
+            let row = match check_projection_access(row, &user) {
+                Ok(row) => row,
+                Err(resp) => return resp,
+            };
+            match projection.list_fallback_events(&row.project_id) {
+                Ok(rows) => {
+                    let fallback_events: Vec<Value> = rows
+                        .into_iter()
+                        .map(|item| {
                             serde_json::json!({
-                                "project_id": row.project_id,
-                                "fallback_events": fallback_events
-                            }),
-                        )
-                        .into_response();
-                    }
-                    Err(e) => tracing::error!("Projection fallback read failed: {}", e),
+                                "stage_code": item.stage_code,
+                                "reason_category": item.reason_category,
+                                "reason_detail": item.reason_detail,
+                                "from_provider": item.from_provider,
+                                "to_provider": item.to_provider,
+                                "created_at": item.occurred_at.and_utc().to_rfc3339(),
+                                "payload": item.payload
+                            })
+                        })
+                        .collect();
+                    return gateway_response(
+                        200,
+                        serde_json::json!({
+                            "project_id": row.project_id,
+                            "fallback_events": fallback_events
+                        }),
+                    )
+                    .into_response();
                 }
+                Err(e) => tracing::error!("Projection fallback read failed: {}", e),
             }
-            Err(e) => tracing::error!("Projection read failed: {}", e),
         }
+        Err(e) => tracing::error!("Projection read failed: {}", e),
     }
     match facade.get_fallbacks(&project_id, &user).await {
         Ok((status, body)) => gateway_response(status, body),
