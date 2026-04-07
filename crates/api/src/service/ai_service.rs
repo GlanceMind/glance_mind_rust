@@ -4,6 +4,9 @@ use rig::client::CompletionClient;
 use rig::completion::Prompt;
 use rig::providers::openai;
 
+static AI_MODEL: Lazy<String> =
+    Lazy::new(|| std::env::var("AI_CHAT_MODEL").unwrap_or_else(|_| "glm-5".to_string()));
+
 static CLIENT: Lazy<openai::CompletionsClient> = Lazy::new(|| {
     let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set in environment");
 
@@ -26,8 +29,7 @@ impl AiService {
         let system_prompt = Self::build_system_prompt(&req);
         let user_prompt = Self::build_user_prompt(&req);
 
-        // Use the global CLIENT instance
-        let agent = CLIENT.agent("gpt-5.2").preamble(&system_prompt).build();
+        let agent = CLIENT.agent(&*AI_MODEL).preamble(&system_prompt).build();
 
         let response = agent
             .prompt(&user_prompt)

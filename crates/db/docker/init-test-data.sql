@@ -117,7 +117,8 @@ INSERT INTO gm_ai_models (id, name, provider, model_key, model_type, cost_multip
 (15, 'Vidu 快速生成',   'vidu', 'vidu-fast',       'video', 1.0, true),
 (16, 'Vidu 模板视频',   'vidu', 'vidu-template',   'video', 2.5, true),
 (17, 'Vidu 通用成片',   'vidu', 'vidu-general-film','video', 3.0, true),
-(18, 'Vidu 电商成片',   'vidu', 'vidu-ad-film',     'video', 3.75, true)
+(18, 'Vidu 电商成片',   'vidu', 'vidu-ad-film',     'video', 3.75, true),
+(19, 'GLM-5',           'laozhang', 'glm-5',          'chat',  1.0, true)
 ON CONFLICT (id) DO UPDATE SET
     name = EXCLUDED.name,
     provider = EXCLUDED.provider,

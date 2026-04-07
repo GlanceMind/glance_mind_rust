@@ -139,6 +139,24 @@ class TestAIModelsAPI:
             assert "cost_multiplier" in model or "costMultiplier" in model, \
                 f"Model {model.get('name')} should have cost_multiplier"
 
+    def test_chat_models_include_glm5(self, api_client):
+        """Test that GLM-5 from LaoZhang is present in chat models."""
+        resp = api_client.get("/api/v1/config/ai-models?model_type=chat")
+        assert_response_success(resp)
+
+        models = extract_data(resp.json())
+        assert isinstance(models, list), "Response should be a list"
+
+        glm5_models = [
+            m for m in models
+            if m.get("model_key") == "glm-5" and m.get("provider") == "laozhang"
+        ]
+        assert len(glm5_models) == 1, \
+            f"Should have exactly 1 GLM-5 model from laozhang, found {len(glm5_models)}"
+        glm5 = glm5_models[0]
+        assert glm5["name"] == "GLM-5", f"Model name should be 'GLM-5', got '{glm5['name']}'"
+        assert glm5.get("model_type") == "chat", "GLM-5 should be a chat model"
+
 
 class TestPricingAPI:
     """Tests for pricing rules configuration endpoint."""

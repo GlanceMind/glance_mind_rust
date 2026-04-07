@@ -74,7 +74,7 @@ impl LlmClient {
         let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set in environment");
         let base_url =
             env::var("OPENAI_BASE_URL").unwrap_or_else(|_| "https://timicc.com/v1".into());
-        let model = env::var("AI_CHAT_MODEL").unwrap_or_else(|_| "gpt-5.2".into());
+        let model = env::var("AI_CHAT_MODEL").unwrap_or_else(|_| "glm-5".into());
         let connect_timeout_secs =
             parse_env_u64("AI_CHAT_CONNECT_TIMEOUT_SECS", DEFAULT_CONNECT_TIMEOUT_SECS);
         let request_timeout_secs =

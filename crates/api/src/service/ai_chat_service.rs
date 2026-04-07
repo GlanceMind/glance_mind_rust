@@ -95,7 +95,7 @@ const GENERIC_WRITING_CUES: &[&str] = &[
     "网红笔记",
 ];
 
-const DEFAULT_CHAT_MODEL_KEY: &str = "gpt-5.2";
+const DEFAULT_CHAT_MODEL_KEY: &str = "glm-5";
 
 fn infer_forced_knowledge_query(content: &str) -> Option<String> {
     let trimmed = content.trim();
