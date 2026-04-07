@@ -109,6 +109,8 @@ jobs:
         XUNHUPAY_APP_SECRET=${{ secrets.XUNHUPAY_APP_SECRET }}
         XUNHUPAY_GATEWAY_URL=${{ secrets.XUNHUPAY_GATEWAY_URL }}
         API_BASE_URL=${{ secrets.API_BASE_URL }}
+        AGENT_HUB_GATEWAY_URL=${{ vars.AGENT_HUB_GATEWAY_URL || 'http://host.docker.internal:8090' }}
+        AGENT_HUB_TIMEOUT_SECS=${{ vars.AGENT_HUB_TIMEOUT_SECS || '30' }}
         OSS_ACCESS_KEY_ID=${{ secrets.OSS_ACCESS_KEY_ID }}
         OSS_ACCESS_KEY_SECRET=${{ secrets.OSS_ACCESS_KEY_SECRET }}
         OSS_ENDPOINT=${{ vars.OSS_ENDPOINT }}

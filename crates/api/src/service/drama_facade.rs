@@ -15,8 +15,17 @@ impl DramaFacade {
         let gateway_base = std::env::var("AGENT_HUB_GATEWAY_URL")
             .unwrap_or_else(|_| "http://localhost:8090".to_string());
         let gateway_base = gateway_base.trim_end_matches('/').to_string();
+        let timeout_secs = std::env::var("AGENT_HUB_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(15);
+        let client = Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(timeout_secs))
+            .build()
+            .unwrap_or_else(|_| Client::new());
         Self {
-            client: Client::new(),
+            client,
             gateway_base,
         }
     }
@@ -243,7 +252,8 @@ impl DramaFacade {
 
     fn gateway_token(&self, user: &User) -> Result<String, FacadeError> {
         let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "dev-secret".to_string());
-        let claims = GatewayClaims::new(user.id, Self::auth_identifier(user)?);
+        let _identifier = Self::auth_identifier(user)?;
+        let claims = GatewayClaims::new(user.id);
         encode(
             &Header::default(),
             &claims,
@@ -303,19 +313,19 @@ impl Default for DramaFacade {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct GatewayClaims {
-    sub: i32,
-    identifier: String,
+    sub: String,
+    user_id: String,
     iat: i64,
     exp: usize,
 }
 
 impl GatewayClaims {
-    fn new(user_id: i32, identifier: String) -> Self {
+    fn new(user_id: i32) -> Self {
         let iat = chrono::Utc::now().timestamp();
         let exp = (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp() as usize;
         Self {
-            sub: user_id,
-            identifier,
+            sub: user_id.to_string(),
+            user_id: user_id.to_string(),
             iat,
             exp,
         }
@@ -346,6 +356,13 @@ mod tests {
     use super::*;
     use jsonwebtoken::{decode, DecodingKey, Validation};
 
+    #[derive(Debug, Serialize, Deserialize)]
+    struct GatewayMiddlewareClaims {
+        sub: String,
+        exp: usize,
+        user_id: String,
+    }
+
     #[test]
     fn gateway_claims_match_gateway_middleware_shape() {
         let facade = DramaFacade::new();
@@ -370,15 +387,15 @@ mod tests {
         };
 
         let token = facade.gateway_token(&user).expect("token should encode");
-        let decoded = decode::<GatewayClaims>(
+        let decoded = decode::<GatewayMiddlewareClaims>(
             &token,
             &DecodingKey::from_secret(b"unit-test-secret"),
             &Validation::default(),
         )
         .expect("token should decode");
 
-        assert_eq!(decoded.claims.sub, 42);
-        assert_eq!(decoded.claims.identifier, "test@example.com");
+        assert_eq!(decoded.claims.sub, "42");
+        assert_eq!(decoded.claims.user_id, "42");
         assert!(decoded.claims.exp > chrono::Utc::now().timestamp() as usize);
     }
 }
