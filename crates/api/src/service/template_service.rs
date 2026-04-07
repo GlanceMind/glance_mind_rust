@@ -4,6 +4,8 @@ use crate::error::db_error::DbError;
 use crate::error::{api_error::ApiError, business_error::BusinessError};
 use crate::repository::campaign_repository::CampaignRepository;
 use crate::repository::template_repository::TemplateRepository;
+use crate::service::ai_service::AiService;
+use crate::dto::ai_dto::AiGenerateRequest;
 use diesel::result::Error as DieselError;
 use std::sync::Arc;
 
@@ -189,35 +191,97 @@ impl TemplateService {
     pub async fn auto_generate_templates(
         &self,
         _user_id: i32,
-        product_info: serde_json::Value,
-        _ai_model_id: i32,
+        product_description: &str,
+        target_audience: &str,
+        style_preference: &str,
         count: i32,
     ) -> Result<Vec<TemplateReadDto>, ApiError> {
-        // TODO: Integrate with real AI model
-        // For now, generate mock templates
-        let mut templates = Vec::new();
+        let product = if product_description.is_empty() { "General product" } else { product_description };
+        let audience = if target_audience.is_empty() { "General audience" } else { target_audience };
 
-        for i in 0..count {
-            templates.push(TemplateReadDto {
-                id: i + 1,      // Mock i32 ID
-                campaign_id: 0, // Mock campaign ID
-                name: Some(format!("Auto-generated Template #{}", i + 1)),
-                weight: 1,
-                dm_prompt: Some(format!(
-                    "Auto-generated DM #{}: Check out this amazing product! {}",
-                    i + 1,
-                    product_info
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("Product")
-                )),
-                reply_prompt: Some("Engaging and friendly reply".to_string()),
-                reply_post_prompt: Some("Thoughtful post reply".to_string()),
-                created_at: chrono::Utc::now(),
-                updated_at: None,
-            });
+        let style_desc = match style_preference {
+            "professional" => "professional, knowledge-driven, data-backed, trust-building",
+            "humorous" => "humorous, witty, playful, high-engagement, meme-worthy",
+            "concise" => "concise, direct, efficient, action-oriented",
+            _ => "friendly, warm, relatable, natural-sounding",
+        };
+
+        let ai_req = AiGenerateRequest {
+            platform: "social media".to_string(),
+            region: "global".to_string(),
+            product_description: product.to_string(),
+            target_audience: Some(audience.to_string()),
+            generation_type: "REPLY".to_string(),
+            reply_requirements: Some(format!(
+                r#"Generate exactly {count} reply style(s) as a JSON array.
+Product/Service: {product}
+Target Audience: {audience}
+Desired Tone: {style_desc}
+
+Each object must have:
+- "name": a short descriptive name
+- "dm_prompt": instructions for AI to send personalized DMs (must include {{{{user_name}}}} placeholder, max 200 words)
+- "reply_prompt": instructions for AI to reply to comments (max 200 words)
+- "reply_post_prompt": instructions for AI to post standalone comments (max 200 words)
+
+All prompts must:
+- Use the {style_desc} tone
+- Reference the product naturally
+- Specify "Match the language of the user's comment/post"
+- Include specific rules (max reply count, sentence limits)
+
+Return ONLY valid JSON array. No markdown, no explanation."#)),
+        };
+
+        match AiService::generate(ai_req).await {
+            Ok(response) => {
+                let cleaned = response.content
+                    .trim()
+                    .trim_start_matches("```json")
+                    .trim_start_matches("```")
+                    .trim_end_matches("```")
+                    .trim();
+
+                if let Ok(parsed) = serde_json::from_str::<Vec<serde_json::Value>>(cleaned) {
+                    let templates: Vec<TemplateReadDto> = parsed
+                        .into_iter()
+                        .enumerate()
+                        .take(count as usize)
+                        .map(|(i, item)| TemplateReadDto {
+                            id: (i + 1) as i32,
+                            campaign_id: 0,
+                            name: item.get("name").and_then(|v| v.as_str()).map(String::from)
+                                .or_else(|| Some(format!("Template #{}", i + 1))),
+                            weight: 1,
+                            dm_prompt: item.get("dm_prompt").and_then(|v| v.as_str()).map(String::from),
+                            reply_prompt: item.get("reply_prompt").and_then(|v| v.as_str()).map(String::from),
+                            reply_post_prompt: item.get("reply_post_prompt").and_then(|v| v.as_str()).map(String::from),
+                            created_at: chrono::Utc::now(),
+                            updated_at: None,
+                        })
+                        .collect();
+                    return Ok(templates);
+                }
+
+                tracing::warn!("Failed to parse AI response as JSON array, building single template from raw text");
+                Ok(vec![TemplateReadDto {
+                    id: 1,
+                    campaign_id: 0,
+                    name: Some("AI Generated Template".to_string()),
+                    weight: 1,
+                    dm_prompt: Some(cleaned.to_string()),
+                    reply_prompt: None,
+                    reply_post_prompt: None,
+                    created_at: chrono::Utc::now(),
+                    updated_at: None,
+                }])
+            }
+            Err(e) => {
+                tracing::error!("AI template generation failed: {}", e);
+                Err(ApiError::from(DbError::SomethingWentWrong(
+                    format!("AI generation failed: {}", e),
+                )))
+            }
         }
-
-        Ok(templates)
     }
 }

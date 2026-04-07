@@ -100,21 +100,35 @@ pub async fn auto_generate(
     Extension(user): Extension<User>,
     axum::Json(payload): axum::Json<serde_json::Value>,
 ) -> Result<ApiResult<impl serde::Serialize>, ApiError> {
-    // Extract parameters from payload
-    let product_info = payload
-        .get("product_info")
-        .cloned()
-        .unwrap_or(serde_json::json!({}));
-    let ai_model_id = payload
-        .get("ai_model_id")
+    let product_description = payload
+        .get("product_description")
         .and_then(|v| v.as_str())
-        .and_then(|s| s.parse::<i32>().ok())
-        .unwrap_or(0);
-    let count = payload.get("count").and_then(|v| v.as_i64()).unwrap_or(3) as i32;
+        .unwrap_or("")
+        .to_string();
+    let target_audience = payload
+        .get("target_audience")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let style_preference = payload
+        .get("style_preference")
+        .and_then(|v| v.as_str())
+        .unwrap_or("friendly")
+        .to_string();
+    let count = payload
+        .get("count")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(1) as i32;
 
     let templates = state
         .template_service
-        .auto_generate_templates(user.id, product_info, ai_model_id, count.min(10))
+        .auto_generate_templates(
+            user.id,
+            &product_description,
+            &target_audience,
+            &style_preference,
+            count.min(10),
+        )
         .await?;
 
     Ok(api_result!(serde_json::json!({
