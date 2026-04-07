@@ -115,10 +115,7 @@ pub async fn auto_generate(
         .and_then(|v| v.as_str())
         .unwrap_or("friendly")
         .to_string();
-    let count = payload
-        .get("count")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(1) as i32;
+    let count = payload.get("count").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
 
     let templates = state
         .template_service

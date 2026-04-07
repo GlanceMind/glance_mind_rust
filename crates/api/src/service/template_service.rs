@@ -1,11 +1,11 @@
 use crate::config::database::Database;
+use crate::dto::ai_dto::AiGenerateRequest;
 use crate::dto::template_dto::{TemplateCreateDto, TemplateReadDto, TemplateUpdateDto};
 use crate::error::db_error::DbError;
 use crate::error::{api_error::ApiError, business_error::BusinessError};
 use crate::repository::campaign_repository::CampaignRepository;
 use crate::repository::template_repository::TemplateRepository;
 use crate::service::ai_service::AiService;
-use crate::dto::ai_dto::AiGenerateRequest;
 use diesel::result::Error as DieselError;
 use std::sync::Arc;
 
@@ -196,8 +196,16 @@ impl TemplateService {
         style_preference: &str,
         count: i32,
     ) -> Result<Vec<TemplateReadDto>, ApiError> {
-        let product = if product_description.is_empty() { "General product" } else { product_description };
-        let audience = if target_audience.is_empty() { "General audience" } else { target_audience };
+        let product = if product_description.is_empty() {
+            "General product"
+        } else {
+            product_description
+        };
+        let audience = if target_audience.is_empty() {
+            "General audience"
+        } else {
+            target_audience
+        };
 
         let style_desc = match style_preference {
             "professional" => "professional, knowledge-driven, data-backed, trust-building",
@@ -230,12 +238,14 @@ All prompts must:
 - Specify "Match the language of the user's comment/post"
 - Include specific rules (max reply count, sentence limits)
 
-Return ONLY valid JSON array. No markdown, no explanation."#)),
+Return ONLY valid JSON array. No markdown, no explanation."#
+            )),
         };
 
         match AiService::generate(ai_req).await {
             Ok(response) => {
-                let cleaned = response.content
+                let cleaned = response
+                    .content
                     .trim()
                     .trim_start_matches("```json")
                     .trim_start_matches("```")
@@ -250,12 +260,24 @@ Return ONLY valid JSON array. No markdown, no explanation."#)),
                         .map(|(i, item)| TemplateReadDto {
                             id: (i + 1) as i32,
                             campaign_id: 0,
-                            name: item.get("name").and_then(|v| v.as_str()).map(String::from)
+                            name: item
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .map(String::from)
                                 .or_else(|| Some(format!("Template #{}", i + 1))),
                             weight: 1,
-                            dm_prompt: item.get("dm_prompt").and_then(|v| v.as_str()).map(String::from),
-                            reply_prompt: item.get("reply_prompt").and_then(|v| v.as_str()).map(String::from),
-                            reply_post_prompt: item.get("reply_post_prompt").and_then(|v| v.as_str()).map(String::from),
+                            dm_prompt: item
+                                .get("dm_prompt")
+                                .and_then(|v| v.as_str())
+                                .map(String::from),
+                            reply_prompt: item
+                                .get("reply_prompt")
+                                .and_then(|v| v.as_str())
+                                .map(String::from),
+                            reply_post_prompt: item
+                                .get("reply_post_prompt")
+                                .and_then(|v| v.as_str())
+                                .map(String::from),
                             created_at: chrono::Utc::now(),
                             updated_at: None,
                         })
@@ -278,9 +300,10 @@ Return ONLY valid JSON array. No markdown, no explanation."#)),
             }
             Err(e) => {
                 tracing::error!("AI template generation failed: {}", e);
-                Err(ApiError::from(DbError::SomethingWentWrong(
-                    format!("AI generation failed: {}", e),
-                )))
+                Err(ApiError::from(DbError::SomethingWentWrong(format!(
+                    "AI generation failed: {}",
+                    e
+                ))))
             }
         }
     }

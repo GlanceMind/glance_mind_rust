@@ -1957,12 +1957,24 @@ impl ToolRegistry {
             }
             "auto_generate_template" => {
                 let product_description = params["product_info"].as_str().unwrap_or("");
-                let target_audience = params.get("target_audience").and_then(|v| v.as_str()).unwrap_or("");
-                let style_preference = params.get("style_preference").and_then(|v| v.as_str()).unwrap_or("friendly");
+                let target_audience = params
+                    .get("target_audience")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let style_preference = params
+                    .get("style_preference")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("friendly");
                 let count = params.get("count").and_then(|v| v.as_i64()).unwrap_or(3) as i32;
                 let templates = state
                     .template_service
-                    .auto_generate_templates(user_id, product_description, target_audience, style_preference, count)
+                    .auto_generate_templates(
+                        user_id,
+                        product_description,
+                        target_audience,
+                        style_preference,
+                        count,
+                    )
                     .await?;
                 serde_json::to_value(&templates).unwrap_or_default()
             }
