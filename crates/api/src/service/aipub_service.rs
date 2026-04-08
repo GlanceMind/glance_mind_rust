@@ -8,6 +8,7 @@ use crate::error::api_error::ApiError;
 use crate::error::business_error::BusinessError;
 use crate::error::db_error::DbError;
 use crate::repository::aipub_repository::AipubRepository;
+use crate::service::seedance_validation;
 use chrono::Utc;
 use diesel::result::Error as DieselError;
 use glance_mind_db::entity::aipub::{
@@ -95,6 +96,12 @@ impl AipubService {
                     return Err(ApiError::BusinessError(BusinessError::InvalidInput(
                         "single_video plan requires video_ai_model_id".to_string(),
                     )));
+                }
+                // Seedance-specific validation when seedance_config is present
+                if seedance_validation::is_seedance_plan(&dto.ai_input) {
+                    if let Some(ref ai_input) = dto.ai_input {
+                        seedance_validation::validate_seedance_config(ai_input)?;
+                    }
                 }
             }
             Some(PlanType::AccountGrooming) => {
@@ -186,10 +193,23 @@ impl AipubService {
                 Some(PlanType::BatchText) => {
                     Some(vec![AiTaskType::ContentGen.as_str().to_string()])
                 }
-                Some(PlanType::SingleVideo) => Some(vec![
-                    AiTaskType::ContentGen.as_str().to_string(),
-                    AiTaskType::VideoGen.as_str().to_string(),
-                ]),
+                Some(PlanType::SingleVideo) => {
+                    if seedance_validation::is_seedance_plan(&dto.ai_input) {
+                        if seedance_validation::has_content_prompt(&dto.ai_input) {
+                            Some(vec![
+                                AiTaskType::ContentGen.as_str().to_string(),
+                                AiTaskType::SeedanceVideo.as_str().to_string(),
+                            ])
+                        } else {
+                            Some(vec![AiTaskType::SeedanceVideo.as_str().to_string()])
+                        }
+                    } else {
+                        Some(vec![
+                            AiTaskType::ContentGen.as_str().to_string(),
+                            AiTaskType::VideoGen.as_str().to_string(),
+                        ])
+                    }
+                }
                 Some(PlanType::AccountGrooming) => {
                     Some(vec![AiTaskType::AccountGrooming.as_str().to_string()])
                 }
@@ -337,22 +357,70 @@ impl AipubService {
                     }
                 }
                 Some(PlanType::SingleVideo) => {
-                    // 1 chat (content gen) + 1 video (video gen)
-                    Some(
-                        self.repo
-                            .freeze_budget(
-                                user_id,
-                                1,
-                                0,
-                                1,
-                                plan.chat_ai_model_id,
-                                None,
-                                plan.video_ai_model_id,
-                                "aipub_plan",
-                                plan.id,
-                            )
-                            .await,
-                    )
+                    if seedance_validation::is_seedance_plan(&dto.ai_input) {
+                        let ai_input_ref = dto.ai_input.as_ref().unwrap();
+                        let validated = seedance_validation::validate_seedance_config(ai_input_ref)
+                            .expect("seedance_config already validated");
+
+                        let model_base_cost = self
+                            .repo
+                            .get_model_cost_multiplier(plan.video_ai_model_id.unwrap())
+                            .map_err(|e| {
+                                ApiError::from(DbError::SomethingWentWrong(e.to_string()))
+                            })?;
+
+                        use bigdecimal::BigDecimal;
+                        use std::str::FromStr;
+
+                        let duration_factor =
+                            BigDecimal::from(validated.duration) / BigDecimal::from(4i64);
+                        let quality_factor = if validated.quality == "720p" {
+                            BigDecimal::from(2)
+                        } else {
+                            BigDecimal::from(1)
+                        };
+                        let audio_factor = if validated.generate_audio {
+                            BigDecimal::from_str("1.5").unwrap()
+                        } else {
+                            BigDecimal::from(1)
+                        };
+
+                        let mut total =
+                            &model_base_cost * &duration_factor * &quality_factor * &audio_factor;
+
+                        if seedance_validation::has_content_prompt(&dto.ai_input) {
+                            if let Some(chat_model_id) = plan.chat_ai_model_id {
+                                if let Ok(chat_cost) =
+                                    self.repo.get_model_cost_multiplier(chat_model_id)
+                                {
+                                    total += chat_cost;
+                                }
+                            }
+                        }
+
+                        Some(
+                            self.repo
+                                .freeze_budget_direct(user_id, total, "aipub_plan", plan.id)
+                                .await,
+                        )
+                    } else {
+                        // Existing LaoZhang/Vidu: 1 chat + 1 video
+                        Some(
+                            self.repo
+                                .freeze_budget(
+                                    user_id,
+                                    1,
+                                    0,
+                                    1,
+                                    plan.chat_ai_model_id,
+                                    None,
+                                    plan.video_ai_model_id,
+                                    "aipub_plan",
+                                    plan.id,
+                                )
+                                .await,
+                        )
+                    }
                 }
                 Some(PlanType::RedditText) | Some(PlanType::RedditLink) => {
                     // 1 chat call generates N variations (one per account)
@@ -875,6 +943,60 @@ impl AipubService {
         &self,
         dto: EstimatePlanCostDto,
     ) -> Result<PlanCostEstimateDto, ApiError> {
+        // Seedance estimation path
+        if let Some(ref seedance) = dto.seedance_config {
+            let video_model_id = dto.video_model_id.ok_or_else(|| {
+                ApiError::BusinessError(BusinessError::InvalidInput(
+                    "video_model_id is required for Seedance estimation".to_string(),
+                ))
+            })?;
+
+            let model_base_cost = self
+                .repo
+                .get_model_cost_multiplier(video_model_id)
+                .map_err(|e| ApiError::from(DbError::SomethingWentWrong(e.to_string())))?;
+
+            use bigdecimal::BigDecimal;
+            use std::str::FromStr;
+
+            let duration_f = BigDecimal::from(seedance.duration) / BigDecimal::from(4i32);
+            let quality_f = if seedance.quality == "720p" {
+                BigDecimal::from(2)
+            } else {
+                BigDecimal::from(1)
+            };
+            let audio_f = if seedance.generate_audio {
+                BigDecimal::from_str("1.5").unwrap()
+            } else {
+                BigDecimal::from(1)
+            };
+
+            let video_cost = &model_base_cost * &duration_f * &quality_f * &audio_f;
+            let chat_cost = if let Some(chat_id) = dto.chat_model_id {
+                self.repo
+                    .get_model_cost_multiplier(chat_id)
+                    .unwrap_or_default()
+            } else {
+                BigDecimal::from(0)
+            };
+            let total = &video_cost + &chat_cost;
+
+            return Ok(PlanCostEstimateDto {
+                video_unit_cost: model_base_cost.clone(),
+                total_cost: total.clone(),
+                seedance_cost: Some(SeedanceCostBreakdown {
+                    base_price: model_base_cost,
+                    duration_factor: duration_f,
+                    quality_factor: quality_f,
+                    audio_factor: audio_f,
+                    video_cost,
+                    chat_cost,
+                    total,
+                }),
+                ..Default::default()
+            });
+        }
+
         let account_count = dto.account_count.unwrap_or(1).max(1);
 
         let row = self
@@ -896,6 +1018,7 @@ impl AipubService {
             account_count: row.account_count,
             total_cost: row.total_cost,
             pricing_snapshot: row.pricing_snapshot,
+            seedance_cost: None,
         })
     }
 

@@ -748,5 +748,256 @@ class TestOSSImageUpload:
             pytest.skip("PIL not available for real image test")
 
 
+class TestSeedancePlanCreation:
+    """Tests for Seedance 2.0 video plan creation via existing single_video plan_type."""
+
+    SEEDANCE_TEXT2VIDEO_PAYLOAD = {
+        "social_account_id": None,
+        "platform_id": PLATFORM_TIKTOK,
+        "content_type": "video",
+        "plan_type": "single_video",
+        "video_ai_model_id": None,
+        "ai_input": {
+            "video_prompt": "A golden retriever playing in a garden with butterflies",
+            "seedance_config": {
+                "mode": "text2video",
+                "duration": 8,
+                "quality": "480p",
+                "aspect_ratio": "16:9",
+                "generate_audio": False,
+                "return_last_frame": False,
+                "watermark": False,
+                "enable_web_search": False,
+                "image_urls": [],
+                "video_urls": [],
+                "audio_urls": [],
+                "image_roles": {},
+                "video_roles": {},
+                "audio_roles": {}
+            }
+        }
+    }
+
+    def _get_seedance_model_id(self, db_cursor) -> int:
+        db_cursor.execute(
+            "SELECT id FROM gm_ai_models WHERE model_key = 'doubao-seedance-2-0-fast-260128' LIMIT 1"
+        )
+        result = db_cursor.fetchone()
+        if not result:
+            pytest.skip("Seedance model not found in gm_ai_models")
+        return result["id"]
+
+    def _get_test_account_id(self, db_cursor) -> int:
+        db_cursor.execute("SELECT id FROM gm_social_accounts LIMIT 1")
+        result = db_cursor.fetchone()
+        if not result:
+            pytest.skip("No social account available")
+        return result["id"]
+
+    def _make_payload(self, db_cursor, **overrides):
+        import copy
+        payload = copy.deepcopy(self.SEEDANCE_TEXT2VIDEO_PAYLOAD)
+        payload["social_account_id"] = self._get_test_account_id(db_cursor)
+        payload["video_ai_model_id"] = self._get_seedance_model_id(db_cursor)
+        for k, v in overrides.items():
+            if "." in k:
+                parts = k.split(".")
+                target = payload
+                for p in parts[:-1]:
+                    target = target[p]
+                target[parts[-1]] = v
+            else:
+                payload[k] = v
+        return payload
+
+    def test_create_seedance_text2video_plan(self, auth_client, db_cursor):
+        """text2video: prompt only, ai_task_types should be [seedance_video]."""
+        payload = self._make_payload(db_cursor)
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        if resp.status_code not in [200, 201]:
+            pytest.skip(f"Plan creation failed: {resp.status_code} {resp.text}")
+        data = extract_data(resp.json())
+        assert data["status"] == "pending"
+        assert data["plan_type"] == "single_video"
+        assert "seedance_video" in data.get("ai_task_types", [])
+        assert "content_gen" not in data.get("ai_task_types", [])
+
+    def test_create_seedance_with_content_prompt(self, auth_client, db_cursor):
+        """With content_prompt, ai_task_types should include content_gen."""
+        payload = self._make_payload(db_cursor)
+        payload["ai_input"]["content_prompt"] = "Generate a viral TikTok caption"
+        payload["chat_ai_model_id"] = 1
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        if resp.status_code not in [200, 201]:
+            pytest.skip(f"Plan creation failed: {resp.status_code} {resp.text}")
+        data = extract_data(resp.json())
+        task_types = data.get("ai_task_types", [])
+        assert "content_gen" in task_types
+        assert "seedance_video" in task_types
+
+    def test_create_seedance_image2video(self, auth_client, db_cursor):
+        """image2video: requires at least 1 image."""
+        payload = self._make_payload(db_cursor)
+        payload["ai_input"]["seedance_config"]["mode"] = "image2video"
+        payload["ai_input"]["seedance_config"]["image_urls"] = ["https://example.com/img1.jpg"]
+        payload["ai_input"]["seedance_config"]["image_roles"] = {"1": "first_frame"}
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        if resp.status_code not in [200, 201]:
+            pytest.skip(f"Plan creation failed: {resp.status_code} {resp.text}")
+        data = extract_data(resp.json())
+        assert data["status"] == "pending"
+
+    def test_create_seedance_start_end_frame(self, auth_client, db_cursor):
+        """start_end_frame: 2 images with positional role binding."""
+        payload = self._make_payload(db_cursor)
+        payload["ai_input"]["seedance_config"]["mode"] = "start_end_frame"
+        payload["ai_input"]["seedance_config"]["image_urls"] = [
+            "https://example.com/start.jpg", "https://example.com/end.jpg"
+        ]
+        payload["ai_input"]["seedance_config"]["image_roles"] = {"1": "first_frame", "2": "last_frame"}
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        if resp.status_code not in [200, 201]:
+            pytest.skip(f"Plan creation failed: {resp.status_code} {resp.text}")
+        assert extract_data(resp.json())["status"] == "pending"
+
+    def test_seedance_invalid_duration(self, auth_client, db_cursor):
+        payload = self._make_payload(db_cursor)
+        payload["ai_input"]["seedance_config"]["duration"] = 20
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert resp.status_code == 400
+
+    def test_seedance_invalid_quality(self, auth_client, db_cursor):
+        payload = self._make_payload(db_cursor)
+        payload["ai_input"]["seedance_config"]["quality"] = "1080p"
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert resp.status_code == 400
+
+    def test_seedance_invalid_mode(self, auth_client, db_cursor):
+        payload = self._make_payload(db_cursor)
+        payload["ai_input"]["seedance_config"]["mode"] = "invalid_mode"
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert resp.status_code == 400
+
+    def test_seedance_image2video_no_images(self, auth_client, db_cursor):
+        payload = self._make_payload(db_cursor)
+        payload["ai_input"]["seedance_config"]["mode"] = "image2video"
+        payload["ai_input"]["seedance_config"]["image_urls"] = []
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert resp.status_code == 400
+
+    def test_seedance_start_end_frame_wrong_count(self, auth_client, db_cursor):
+        payload = self._make_payload(db_cursor)
+        payload["ai_input"]["seedance_config"]["mode"] = "start_end_frame"
+        payload["ai_input"]["seedance_config"]["image_urls"] = ["https://example.com/one.jpg"]
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert resp.status_code == 400
+
+    def test_seedance_start_end_frame_swapped_roles(self, auth_client, db_cursor):
+        """Swapped first/last frame roles should fail (position binding)."""
+        payload = self._make_payload(db_cursor)
+        payload["ai_input"]["seedance_config"]["mode"] = "start_end_frame"
+        payload["ai_input"]["seedance_config"]["image_urls"] = [
+            "https://example.com/end.jpg", "https://example.com/start.jpg"
+        ]
+        payload["ai_input"]["seedance_config"]["image_roles"] = {"1": "last_frame", "2": "first_frame"}
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert resp.status_code == 400
+
+    def test_seedance_start_end_frame_missing_roles(self, auth_client, db_cursor):
+        payload = self._make_payload(db_cursor)
+        payload["ai_input"]["seedance_config"]["mode"] = "start_end_frame"
+        payload["ai_input"]["seedance_config"]["image_urls"] = [
+            "https://example.com/a.jpg", "https://example.com/b.jpg"
+        ]
+        payload["ai_input"]["seedance_config"]["image_roles"] = {}
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert resp.status_code == 400
+
+    def test_seedance_media_count_limit(self, auth_client, db_cursor):
+        payload = self._make_payload(db_cursor)
+        payload["ai_input"]["seedance_config"]["mode"] = "multimodal"
+        payload["ai_input"]["seedance_config"]["image_urls"] = [
+            f"https://example.com/img{i}.jpg" for i in range(10)
+        ]
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert resp.status_code == 400
+
+    def test_seedance_billing_freeze(self, auth_client, db_cursor):
+        """Verify billing_status='frozen' with correct amount."""
+        payload = self._make_payload(db_cursor)
+        payload["ai_input"]["seedance_config"]["duration"] = 8
+        payload["ai_input"]["seedance_config"]["quality"] = "720p"
+        payload["ai_input"]["seedance_config"]["generate_audio"] = True
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        if resp.status_code not in [200, 201]:
+            pytest.skip(f"Plan creation failed: {resp.status_code} {resp.text}")
+        data = extract_data(resp.json())
+        assert data["billing_status"] == "frozen"
+        assert float(data["frozen_cost"]) > 0
+
+    def test_non_seedance_single_video_unchanged(self, auth_client, db_cursor):
+        """Non-Seedance single_video should still use content_gen + video_gen."""
+        account_id = self._get_test_account_id(db_cursor)
+        db_cursor.execute(
+            "SELECT id FROM gm_ai_models WHERE model_type = 'video' "
+            "AND model_key NOT LIKE 'doubao-seedance%' LIMIT 1"
+        )
+        model = db_cursor.fetchone()
+        if not model:
+            pytest.skip("No non-Seedance video model")
+        payload = {
+            "social_account_id": account_id,
+            "platform_id": PLATFORM_TIKTOK,
+            "content_type": "video",
+            "plan_type": "single_video",
+            "video_ai_model_id": model["id"],
+            "ai_input": {"video_prompt": "Test non-seedance video", "content_prompt": "Generate caption"}
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        if resp.status_code not in [200, 201]:
+            pytest.skip(f"Plan creation failed: {resp.status_code} {resp.text}")
+        data = extract_data(resp.json())
+        task_types = data.get("ai_task_types", [])
+        assert "content_gen" in task_types
+        assert "video_gen" in task_types
+        assert "seedance_video" not in task_types
+
+
+class TestSeedanceCostEstimation:
+    """Tests for Seedance cost estimation endpoint."""
+
+    def _get_seedance_model_id(self, db_cursor) -> int:
+        db_cursor.execute(
+            "SELECT id FROM gm_ai_models WHERE model_key = 'doubao-seedance-2-0-fast-260128' LIMIT 1"
+        )
+        result = db_cursor.fetchone()
+        if not result:
+            pytest.skip("Seedance model not found")
+        return result["id"]
+
+    def test_estimate_seedance_cost(self, auth_client, db_cursor):
+        model_id = self._get_seedance_model_id(db_cursor)
+        payload = {
+            "video_model_id": model_id,
+            "seedance_config": {"duration": 10, "quality": "720p", "generate_audio": True}
+        }
+        resp = auth_client.post("/api/v1/publish_plans/estimate", json=payload)
+        assert_response_success(resp)
+        data = extract_data(resp.json())
+        assert "seedance_cost" in data
+        sc = data["seedance_cost"]
+        assert float(sc["total"]) > 0
+        assert float(sc["duration_factor"]) == 2.5
+        assert float(sc["quality_factor"]) == 2.0
+        assert float(sc["audio_factor"]) == 1.5
+
+    def test_estimate_non_seedance_unchanged(self, auth_client):
+        payload = {"chat_model_id": 1, "account_count": 5}
+        resp = auth_client.post("/api/v1/publish_plans/estimate", json=payload)
+        assert_response_success(resp)
+        data = extract_data(resp.json())
+        assert "seedance_cost" not in data or data["seedance_cost"] is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])

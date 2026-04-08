@@ -368,6 +368,37 @@ pub struct PlanStatsDto {
 // Cost Estimate DTOs
 // =============================================================================
 
+/// Seedance-specific cost estimation parameters
+#[derive(Debug, Deserialize)]
+pub struct SeedanceCostParams {
+    #[serde(default = "default_seedance_duration")]
+    pub duration: i32,
+    #[serde(default = "default_seedance_quality")]
+    pub quality: String,
+    #[serde(default)]
+    pub generate_audio: bool,
+}
+
+fn default_seedance_duration() -> i32 {
+    4
+}
+
+fn default_seedance_quality() -> String {
+    "480p".to_string()
+}
+
+/// Seedance cost breakdown in response
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct SeedanceCostBreakdown {
+    pub base_price: BigDecimal,
+    pub duration_factor: BigDecimal,
+    pub quality_factor: BigDecimal,
+    pub audio_factor: BigDecimal,
+    pub video_cost: BigDecimal,
+    pub chat_cost: BigDecimal,
+    pub total: BigDecimal,
+}
+
 /// Estimate plan cost request
 #[derive(Debug, Deserialize, Validate)]
 pub struct EstimatePlanCostDto {
@@ -376,10 +407,11 @@ pub struct EstimatePlanCostDto {
     pub image_model_id: Option<i32>,
     #[validate(range(min = 1, max = 10000))]
     pub account_count: Option<i32>,
+    pub seedance_config: Option<SeedanceCostParams>,
 }
 
 /// Estimate plan cost response
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct PlanCostEstimateDto {
     pub chat_unit_cost: BigDecimal,
     pub video_unit_cost: BigDecimal,
@@ -388,4 +420,6 @@ pub struct PlanCostEstimateDto {
     pub account_count: i32,
     pub total_cost: BigDecimal,
     pub pricing_snapshot: Option<JsonValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seedance_cost: Option<SeedanceCostBreakdown>,
 }

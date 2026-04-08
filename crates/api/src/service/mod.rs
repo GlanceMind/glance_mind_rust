@@ -17,6 +17,7 @@ pub mod oss_service;
 pub mod platform_service;
 pub mod promo_code_service;
 pub mod referral_service;
+pub mod seedance_validation;
 pub mod social_account_service;
 pub mod social_group_service;
 pub mod template_service;

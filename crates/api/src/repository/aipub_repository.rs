@@ -640,6 +640,50 @@ impl AipubRepository {
         Ok(())
     }
 
+    /// Get model cost_multiplier from gm_ai_models by model ID.
+    /// Used to calculate Seedance billing.
+    pub fn get_model_cost_multiplier(
+        &self,
+        model_id: i32,
+    ) -> Result<bigdecimal::BigDecimal, DieselError> {
+        use glance_mind_db::schema::gm_ai_models::dsl::*;
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|_| DieselError::BrokenTransactionManager)?;
+
+        gm_ai_models
+            .filter(id.eq(model_id))
+            .select(cost_multiplier)
+            .first::<bigdecimal::BigDecimal>(&mut conn)
+    }
+
+    /// Freeze a pre-calculated amount directly (for Seedance billing).
+    /// Calls fn_freeze_budget_direct stored procedure.
+    pub async fn freeze_budget_direct(
+        &self,
+        user_id: i32,
+        amount: bigdecimal::BigDecimal,
+        ref_type: &str,
+        ref_id: i32,
+    ) -> Result<bigdecimal::BigDecimal, DieselError> {
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|_| DieselError::BrokenTransactionManager)?;
+
+        let result: bigdecimal::BigDecimal =
+            diesel::sql_query("SELECT fn_freeze_budget_direct($1, $2, $3, $4) as frozen_amount")
+                .bind::<diesel::sql_types::Integer, _>(user_id)
+                .bind::<diesel::sql_types::Numeric, _>(&amount)
+                .bind::<diesel::sql_types::VarChar, _>(ref_type)
+                .bind::<diesel::sql_types::Integer, _>(ref_id)
+                .get_result::<FrozenAmountRow>(&mut conn)?
+                .frozen_amount;
+
+        Ok(result)
+    }
+
     /// Estimate plan cost without actually freezing budget.
     /// Calls the stored procedure fn_estimate_aipub_plan_cost.
     pub async fn estimate_plan_cost(

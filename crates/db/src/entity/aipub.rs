@@ -258,6 +258,7 @@ pub enum AiTaskType {
     Combined,
     /// Account grooming: generate name + avatar for profile
     AccountGrooming,
+    SeedanceVideo,
 }
 
 impl AiTaskType {
@@ -268,6 +269,7 @@ impl AiTaskType {
             AiTaskType::ImageGen => "image_gen",
             AiTaskType::Combined => "combined",
             AiTaskType::AccountGrooming => "account_grooming",
+            AiTaskType::SeedanceVideo => "seedance_video",
         }
     }
 
@@ -278,6 +280,7 @@ impl AiTaskType {
             "image_gen" => Some(AiTaskType::ImageGen),
             "combined" => Some(AiTaskType::Combined),
             "account_grooming" => Some(AiTaskType::AccountGrooming),
+            "seedance_video" => Some(AiTaskType::SeedanceVideo),
             _ => None,
         }
     }
