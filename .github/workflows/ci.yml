@@ -21,7 +21,7 @@ jobs:
           POSTGRES_PASSWORD: aihub_password
           POSTGRES_DB: aihub_db
         ports:
-          - 5432:5432
+          - 15432:5432
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -49,7 +49,7 @@ jobs:
       - name: Run Tests
         run: cargo test --workspace --verbose
         env:
-          DATABASE_URL: postgres://aihub_user:aihub_password@localhost:5432/aihub_db
+          DATABASE_URL: postgres://aihub_user:aihub_password@localhost:15432/aihub_db
           RUST_BACKTRACE: 1
           JWT_SECRET: ${{ vars.JWT_SECRET }}
           JWT_TTL_IN_MINUTES: ${{ vars.JWT_TTL_IN_MINUTES }}
