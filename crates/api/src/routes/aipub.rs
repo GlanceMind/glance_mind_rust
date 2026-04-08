@@ -12,8 +12,8 @@ use axum::{
 /// User-facing API routes (requires JWT auth)
 /// Auth middleware will be applied by root.rs when merging
 pub fn aipub_user_routes() -> Router<UserState> {
-    // Body size limit: 100MB for video uploads
     const MAX_VIDEO_UPLOAD_SIZE: usize = 100 * 1024 * 1024; // 100MB
+    const MAX_AUDIO_UPLOAD_SIZE: usize = 15 * 1024 * 1024; // 15MB
 
     Router::new()
         // Stats & estimate (put before :id routes to avoid conflict)
@@ -28,6 +28,11 @@ pub fn aipub_user_routes() -> Router<UserState> {
         .route(
             "/oss/upload-video",
             post(oss_handler::upload_video).layer(DefaultBodyLimit::max(MAX_VIDEO_UPLOAD_SIZE)),
+        )
+        // Audio upload to OSS - 15MB limit for Seedance multimodal
+        .route(
+            "/oss/upload-audio",
+            post(oss_handler::upload_audio).layer(DefaultBodyLimit::max(MAX_AUDIO_UPLOAD_SIZE)),
         )
         // Plan CRUD
         .route(

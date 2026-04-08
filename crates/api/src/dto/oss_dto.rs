@@ -25,3 +25,14 @@ pub struct UploadVideoResponse {
     /// Video duration in seconds (optional)
     pub duration: Option<i32>,
 }
+
+/// Response for audio upload
+#[derive(Debug, Clone, Serialize)]
+pub struct UploadAudioResponse {
+    /// Public URL of the uploaded audio
+    pub audio_url: String,
+    /// Generated filename
+    pub filename: String,
+    /// File size in bytes
+    pub size: usize,
+}

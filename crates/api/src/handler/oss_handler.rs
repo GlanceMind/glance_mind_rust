@@ -5,7 +5,7 @@
 use axum::extract::Multipart;
 use axum::Extension;
 
-use crate::dto::oss_dto::{UploadImageResponse, UploadVideoResponse};
+use crate::dto::oss_dto::{UploadAudioResponse, UploadImageResponse, UploadVideoResponse};
 use crate::error::{api_error::ApiError, business_error::BusinessError};
 use crate::response::api_result::ApiResult;
 use crate::service::oss_service::{OssConfig, OssService};
@@ -17,6 +17,9 @@ const MAX_IMAGE_FILE_SIZE: usize = 10 * 1024 * 1024;
 
 /// Maximum file size for videos: 100MB
 const MAX_VIDEO_FILE_SIZE: usize = 100 * 1024 * 1024;
+
+/// Maximum file size for audio: 15MB
+const MAX_AUDIO_FILE_SIZE: usize = 15 * 1024 * 1024;
 
 /// Allowed image content types
 const ALLOWED_IMAGE_CONTENT_TYPES: &[&str] = &[
@@ -38,6 +41,19 @@ const ALLOWED_VIDEO_CONTENT_TYPES: &[&str] = &[
     "video/x-flv",
     "video/x-ms-wmv", // wmv
     "video/x-m4v",    // m4v
+];
+
+/// Allowed audio content types
+const ALLOWED_AUDIO_CONTENT_TYPES: &[&str] = &[
+    "audio/mpeg",  // mp3
+    "audio/mp3",   // mp3 alt
+    "audio/wav",   // wav
+    "audio/x-wav", // wav alt
+    "audio/wave",  // wav alt
+    "audio/ogg",   // ogg
+    "audio/aac",   // aac
+    "audio/x-m4a", // m4a
+    "audio/mp4",   // m4a alt
 ];
 
 /// Upload image to OSS
@@ -214,5 +230,87 @@ pub async fn upload_video(
         filename: result.filename,
         size: result.size,
         duration: None, // Duration extraction can be added later if needed
+    }))
+}
+
+/// Upload audio to OSS
+/// POST /api/v1/oss/upload-audio
+/// Content-Type: multipart/form-data
+/// Field: "file" or "audio" - the audio file
+pub async fn upload_audio(
+    Extension(user): Extension<User>,
+    mut multipart: Multipart,
+) -> Result<ApiResult<UploadAudioResponse>, ApiError> {
+    let mut audio_data: Option<Vec<u8>> = None;
+    let mut audio_filename: Option<String> = None;
+    let mut audio_content_type: Option<String> = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| ApiError::BusinessError(BusinessError::FormParsingFailed))?
+    {
+        let field_name = field.name().unwrap_or("").to_string();
+
+        if field_name == "file" || field_name == "audio" {
+            audio_filename = field.file_name().map(|s| s.to_string());
+            audio_content_type = field.content_type().map(|s| s.to_string());
+
+            let data = field.bytes().await.map_err(|e| {
+                error!("Failed to read audio file data: {:?}", e);
+                ApiError::BusinessError(BusinessError::InvalidFormField("file".to_string()))
+            })?;
+
+            audio_data = Some(data.to_vec());
+        }
+    }
+
+    let data = audio_data.ok_or_else(|| {
+        ApiError::BusinessError(BusinessError::MissingRequiredParameter("file".to_string()))
+    })?;
+
+    let filename = audio_filename.unwrap_or_else(|| "audio.mp3".to_string());
+    let content_type = audio_content_type.unwrap_or_else(|| "audio/mpeg".to_string());
+
+    if !ALLOWED_AUDIO_CONTENT_TYPES.contains(&content_type.as_str()) {
+        return Err(ApiError::BusinessError(BusinessError::InvalidFileType(
+            content_type,
+        )));
+    }
+
+    if data.len() > MAX_AUDIO_FILE_SIZE {
+        return Err(ApiError::BusinessError(BusinessError::FileTooLarge(
+            MAX_AUDIO_FILE_SIZE,
+        )));
+    }
+
+    if !OssConfig::is_configured() {
+        return Err(ApiError::InternalServerError(
+            "OSS service not configured".to_string(),
+        ));
+    }
+
+    info!(
+        "Uploading audio: filename={}, content_type={}, size={} bytes, user_id={}",
+        filename,
+        content_type,
+        data.len(),
+        user.id
+    );
+
+    let oss_service = OssService::from_env()?;
+    let result = oss_service
+        .upload_audio(data, user.id, filename.clone(), content_type.clone())
+        .await?;
+
+    info!(
+        "Audio uploaded successfully: url={}, user_id={}",
+        result.image_url, user.id
+    );
+
+    Ok(ApiResult::ok(UploadAudioResponse {
+        audio_url: result.image_url,
+        filename: result.filename,
+        size: result.size,
     }))
 }

@@ -289,6 +289,81 @@ impl OssService {
         })
     }
 
+    /// Upload audio to OSS (async version using reqwest)
+    pub async fn upload_audio(
+        &self,
+        data: Vec<u8>,
+        user_id: i32,
+        original_filename: String,
+        content_type: String,
+    ) -> Result<UploadResult, ApiError> {
+        let extension = Self::get_audio_extension_static(&original_filename, &content_type);
+        let timestamp = Utc::now().format("%Y%m%d%H%M%S");
+        let uuid_short = Uuid::new_v4().to_string()[..8].to_string();
+        let new_filename = format!("{}_{}.{}", timestamp, uuid_short, extension);
+
+        let object_path = format!("audio/user_{}/{}", user_id, new_filename);
+        let data_len = data.len();
+
+        let url = format!(
+            "https://{}.{}/{}",
+            self.config.bucket, self.config.endpoint, object_path
+        );
+
+        let date = Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+
+        let string_to_sign = format!(
+            "PUT\n\n{}\n{}\n/{}/{}",
+            content_type, date, self.config.bucket, object_path
+        );
+
+        let signature = self.calculate_signature(&string_to_sign)?;
+        let authorization = format!("OSS {}:{}", self.config.access_key_id, signature);
+
+        info!(
+            "Uploading audio to OSS: {} ({} bytes)",
+            object_path, data_len
+        );
+
+        let response = self
+            .client
+            .put(&url)
+            .header("Date", &date)
+            .header("Content-Type", &content_type)
+            .header("Authorization", &authorization)
+            .body(data)
+            .send()
+            .await
+            .map_err(|e| {
+                error!("Failed to send audio request to OSS: {:?}", e);
+                ApiError::InternalServerError(format!("OSS request failed: {}", e))
+            })?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let error_body = response.text().await.unwrap_or_default();
+            error!(
+                "OSS audio upload failed with status {}: {}",
+                status, error_body
+            );
+            return Err(ApiError::InternalServerError(format!(
+                "OSS audio upload failed with status {}: {}",
+                status, error_body
+            )));
+        }
+
+        let audio_url = self.build_url(&object_path);
+
+        info!("Audio uploaded to OSS: {} ({} bytes)", audio_url, data_len);
+
+        Ok(UploadResult {
+            image_url: audio_url,
+            filename: new_filename,
+            object_path,
+            size: data_len,
+        })
+    }
+
     /// Get file extension from filename or content type (static version)
     fn get_extension_static(filename: &str, content_type: &str) -> String {
         // Try to get from filename first
@@ -345,6 +420,29 @@ impl OssService {
             "video/x-flv" => "flv",
             "video/x-ms-wmv" => "wmv",
             _ => "mp4", // Default to mp4
+        }
+        .to_string()
+    }
+
+    /// Get audio file extension from filename or content type
+    fn get_audio_extension_static(filename: &str, content_type: &str) -> String {
+        if let Some(ext) = filename.rsplit('.').next() {
+            let ext_lower = ext.to_lowercase();
+            if matches!(
+                ext_lower.as_str(),
+                "mp3" | "wav" | "ogg" | "aac" | "m4a" | "flac"
+            ) {
+                return ext_lower;
+            }
+        }
+
+        match content_type {
+            "audio/mpeg" | "audio/mp3" => "mp3",
+            "audio/wav" | "audio/x-wav" | "audio/wave" => "wav",
+            "audio/ogg" => "ogg",
+            "audio/aac" => "aac",
+            "audio/x-m4a" | "audio/mp4" => "m4a",
+            _ => "mp3",
         }
         .to_string()
     }
