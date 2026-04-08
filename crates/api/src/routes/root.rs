@@ -10,6 +10,7 @@ use crate::service::redis_service::RedisService;
 use crate::state::auth_state::AuthState;
 // use crate::state::token_state::TokenState;
 use crate::state::user_state::UserState;
+use axum::http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use axum::routing::get;
 use axum::{middleware, Router};
 use std::sync::Arc;
@@ -466,6 +467,6 @@ pub fn routes(
             CorsLayer::new()
                 .allow_origin(Any)
                 .allow_methods(Any)
-                .allow_headers(Any),
+                .allow_headers([AUTHORIZATION, CONTENT_TYPE, ACCEPT]),
         )
 }
