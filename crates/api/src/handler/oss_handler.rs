@@ -12,8 +12,8 @@ use crate::service::oss_service::{OssConfig, OssService};
 use glance_mind_db::entity::user::User;
 use tracing::{error, info};
 
-/// Maximum file size for images: 10MB
-const MAX_IMAGE_FILE_SIZE: usize = 10 * 1024 * 1024;
+/// Maximum file size for images: 30MB (Seedance supports up to 20MB, extra buffer)
+const MAX_IMAGE_FILE_SIZE: usize = 30 * 1024 * 1024;
 
 /// Maximum file size for videos: 100MB
 const MAX_VIDEO_FILE_SIZE: usize = 100 * 1024 * 1024;
@@ -29,6 +29,7 @@ const ALLOWED_IMAGE_CONTENT_TYPES: &[&str] = &[
     "image/gif",
     "image/webp",
     "image/bmp",
+    "image/tiff",
 ];
 
 /// Allowed video content types

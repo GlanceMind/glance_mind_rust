@@ -371,7 +371,7 @@ impl OssService {
             let ext_lower = ext.to_lowercase();
             if matches!(
                 ext_lower.as_str(),
-                "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp"
+                "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "tiff" | "tif"
             ) {
                 return match ext_lower.as_str() {
                     "jpg" | "jpeg" => "jpg",
@@ -379,6 +379,7 @@ impl OssService {
                     "gif" => "gif",
                     "webp" => "webp",
                     "bmp" => "bmp",
+                    "tiff" | "tif" => "tiff",
                     _ => "jpg",
                 }
                 .to_string();
@@ -392,6 +393,7 @@ impl OssService {
             "image/gif" => "gif",
             "image/webp" => "webp",
             "image/bmp" => "bmp",
+            "image/tiff" => "tiff",
             _ => "jpg", // Default to jpg
         }
         .to_string()
