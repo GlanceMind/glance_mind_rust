@@ -176,15 +176,9 @@ impl AipubService {
                 }
             }
             Some(PlanType::DirectPublish) => {
-                if dto.group_id.is_none() {
+                if dto.social_account_id.is_none() {
                     return Err(ApiError::BusinessError(BusinessError::InvalidInput(
-                        "direct_publish plan requires group_id".to_string(),
-                    )));
-                }
-                if dto.social_account_id.is_some() {
-                    return Err(ApiError::BusinessError(BusinessError::InvalidInput(
-                        "direct_publish plan cannot have social_account_id, use group_id instead"
-                            .to_string(),
+                        "direct_publish plan requires social_account_id".to_string(),
                     )));
                 }
                 if dto.content.is_none() {

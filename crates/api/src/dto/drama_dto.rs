@@ -682,4 +682,244 @@ mod tests {
         assert_eq!(update.name, None);
         assert_eq!(update.notes, None);
     }
+
+    #[test]
+    fn create_request_flatten_preserves_all_advanced_options() {
+        let input = json!({
+            "title": "Flatten Test Drama",
+            "description": "Testing that serde flatten captures all fields",
+            "content_type": "short_video",
+            "platform": "tiktok",
+            "budget_cents": 1900,
+            "genre": "urban_romance",
+            "narrative_mode": "dramatic",
+            "target_audience": "gen_z_female",
+            "delivery_format": "mp4_1080p",
+            "visual_style": "cinematic_realism",
+            "color_tone": "teal_orange",
+            "aspect_ratio": "9:16",
+            "resolution": "1080p",
+            "lighting_mood": "moody",
+            "voice_language": "en",
+            "narration_enabled": true,
+            "bgm_style": "cinematic",
+            "sfx_enabled": false,
+            "preferred_provider": "vidu",
+            "max_scene_seconds": 8,
+            "split_strategy": "auto_split",
+            "continuity_required": true,
+            "target_duration_seconds": 120,
+            "chapter_count": 5,
+            "characters": [
+                {
+                    "name": "Ava",
+                    "appearance": "sharp suit, tired eyes",
+                    "personality": "calm and tactical",
+                    "reference_image_url": "https://example.com/ava.png"
+                }
+            ],
+            "primary_style": {
+                "id": "sty-dark",
+                "name": "Dark Cinema",
+                "visual_style": "cinematic_realism",
+                "color_tone": "teal_orange",
+                "reference_image_urls": ["https://example.com/style.png"]
+            }
+        });
+
+        let req: DramaProjectCreateRequest =
+            serde_json::from_value(input).expect("deserialize create request with all options");
+
+        assert_eq!(req.title, "Flatten Test Drama");
+        assert_eq!(
+            req.description,
+            "Testing that serde flatten captures all fields"
+        );
+
+        assert_eq!(
+            req.extra.get("genre").and_then(|v| v.as_str()),
+            Some("urban_romance")
+        );
+        assert_eq!(
+            req.extra.get("narrative_mode").and_then(|v| v.as_str()),
+            Some("dramatic")
+        );
+        assert_eq!(
+            req.extra.get("target_audience").and_then(|v| v.as_str()),
+            Some("gen_z_female")
+        );
+        assert_eq!(
+            req.extra.get("visual_style").and_then(|v| v.as_str()),
+            Some("cinematic_realism")
+        );
+        assert_eq!(
+            req.extra.get("color_tone").and_then(|v| v.as_str()),
+            Some("teal_orange")
+        );
+        assert_eq!(
+            req.extra.get("aspect_ratio").and_then(|v| v.as_str()),
+            Some("9:16")
+        );
+        assert_eq!(
+            req.extra.get("resolution").and_then(|v| v.as_str()),
+            Some("1080p")
+        );
+        assert_eq!(
+            req.extra.get("lighting_mood").and_then(|v| v.as_str()),
+            Some("moody")
+        );
+        assert_eq!(
+            req.extra.get("delivery_format").and_then(|v| v.as_str()),
+            Some("mp4_1080p")
+        );
+        assert_eq!(
+            req.extra.get("voice_language").and_then(|v| v.as_str()),
+            Some("en")
+        );
+        assert_eq!(
+            req.extra.get("narration_enabled").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            req.extra.get("bgm_style").and_then(|v| v.as_str()),
+            Some("cinematic")
+        );
+        assert_eq!(
+            req.extra.get("sfx_enabled").and_then(|v| v.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            req.extra.get("preferred_provider").and_then(|v| v.as_str()),
+            Some("vidu")
+        );
+        assert_eq!(
+            req.extra.get("max_scene_seconds").and_then(|v| v.as_i64()),
+            Some(8)
+        );
+        assert_eq!(
+            req.extra.get("split_strategy").and_then(|v| v.as_str()),
+            Some("auto_split")
+        );
+        assert_eq!(
+            req.extra
+                .get("continuity_required")
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            req.extra
+                .get("target_duration_seconds")
+                .and_then(|v| v.as_i64()),
+            Some(120)
+        );
+        assert_eq!(
+            req.extra.get("chapter_count").and_then(|v| v.as_i64()),
+            Some(5)
+        );
+        assert_eq!(
+            req.extra.get("platform").and_then(|v| v.as_str()),
+            Some("tiktok")
+        );
+        assert_eq!(
+            req.extra.get("content_type").and_then(|v| v.as_str()),
+            Some("short_video")
+        );
+        assert_eq!(
+            req.extra.get("budget_cents").and_then(|v| v.as_i64()),
+            Some(1900)
+        );
+
+        let characters = req
+            .extra
+            .get("characters")
+            .expect("characters must be in extra");
+        assert!(characters.is_array());
+        assert_eq!(characters.as_array().unwrap().len(), 1);
+        assert_eq!(characters[0]["name"], "Ava");
+        assert_eq!(characters[0]["appearance"], "sharp suit, tired eyes");
+        assert_eq!(
+            characters[0]["reference_image_url"],
+            "https://example.com/ava.png"
+        );
+
+        let style = req
+            .extra
+            .get("primary_style")
+            .expect("primary_style must be in extra");
+        assert!(style.is_object());
+        assert_eq!(style["id"], "sty-dark");
+        assert_eq!(style["name"], "Dark Cinema");
+        assert_eq!(
+            style["reference_image_urls"][0],
+            "https://example.com/style.png"
+        );
+    }
+
+    #[test]
+    fn create_request_flatten_preserves_boolean_false() {
+        let input = json!({
+            "title": "Bool Test",
+            "description": "Testing false booleans survive flatten",
+            "narration_enabled": false,
+            "sfx_enabled": false,
+            "continuity_required": false
+        });
+
+        let req: DramaProjectCreateRequest =
+            serde_json::from_value(input).expect("deserialize with false booleans");
+
+        assert_eq!(
+            req.extra.get("narration_enabled").and_then(|v| v.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            req.extra.get("sfx_enabled").and_then(|v| v.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            req.extra
+                .get("continuity_required")
+                .and_then(|v| v.as_bool()),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn create_request_worker_payload_round_trip() {
+        let input = json!({
+            "title": "Worker Payload Test",
+            "description": "Testing the worker payload shape",
+            "content_type": "short_video",
+            "platform": "tiktok",
+            "genre": "sci_fi",
+            "visual_style": "anime",
+            "characters": [{"name": "Yuki"}],
+            "primary_style": {"id": "sty-1", "name": "Anime"}
+        });
+
+        let req: DramaProjectCreateRequest =
+            serde_json::from_value(input).expect("deserialize for worker payload test");
+
+        let worker_payload = json!({
+            "project_id": "proj-test",
+            "title": req.title,
+            "description": req.description,
+            "content_type": req.extra.get("content_type"),
+            "platform": req.extra.get("platform"),
+            "extra": req.extra,
+        });
+
+        let extra = worker_payload.get("extra").expect("extra must exist");
+        assert_eq!(extra.get("genre").and_then(|v| v.as_str()), Some("sci_fi"));
+        assert_eq!(
+            extra.get("visual_style").and_then(|v| v.as_str()),
+            Some("anime")
+        );
+        assert_eq!(extra["characters"][0]["name"], "Yuki");
+        assert_eq!(extra["primary_style"]["id"], "sty-1");
+
+        assert_eq!(worker_payload["title"], "Worker Payload Test");
+        assert_eq!(worker_payload["content_type"], "short_video");
+        assert_eq!(worker_payload["platform"], "tiktok");
+    }
 }

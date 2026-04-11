@@ -1,0 +1,52 @@
+# =============================================================================
+# GlanceMind API Full-Pipeline E2E Test Environment
+# =============================================================================
+# Tests the complete flow: API -> Scheduler -> Agent-RS -> DB
+# Uses gm-e2e shared infrastructure as the single source of truth.
+#
+# Usage:
+#   cd glance_mind_rust/crates/api/tests/e2e
+#   docker compose -f docker-compose.full-pipeline.yml up -d
+#   docker compose -f docker-compose.full-pipeline.yml exec test-runner \
+#       pytest -v --tb=short -x
+#   docker compose -f docker-compose.full-pipeline.yml down -v
+# =============================================================================
+
+include:
+  - path: ../../../../../gm-e2e/infra/docker-compose.base.yml
+  - path: ../../../../../gm-e2e/infra/docker-compose.api.yml
+  - path: ../../../../../gm-e2e/infra/docker-compose.worker.yml
+
+services:
+  test-runner:
+    build:
+      context: ../../../../../gm-e2e
+      dockerfile: Dockerfile.test
+    container_name: api-pipeline-e2e-runner
+    working_dir: /app
+    volumes:
+      - .:/app
+      - ../../../../../gm-e2e/gm_e2e_utils:/app/gm_e2e_utils:ro
+    environment:
+      DATABASE_URL: postgresql://glancemind:testpassword@postgres:5432/glancemind_e2e
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: glancemind
+      POSTGRES_PASSWORD: testpassword
+      POSTGRES_DB: glancemind_e2e
+      API_BASE_URL: http://api:8000
+      REDIS_URL: redis://redis:6379
+      NATS_URL: nats://nats:4222
+      XUNHUPAY_MOCK_URL: http://xunhupay-mock:8500
+      PYTHONUNBUFFERED: "1"
+      E2E_TIMEOUT: "60"
+    depends_on:
+      api:
+        condition: service_started
+      scheduler:
+        condition: service_started
+      agent-rs:
+        condition: service_started
+    networks:
+      - e2e-network
+    command: ["tail", "-f", "/dev/null"]
