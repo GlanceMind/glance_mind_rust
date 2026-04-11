@@ -88,6 +88,17 @@ run-e2e-tests:
 test-rust:
 	cargo test --test '*' -- --test-threads=1
 
+# Full-pipeline E2E tests (API + Scheduler + Agent-RS)
+test-pipeline:
+	@echo "\n>>> Running full-pipeline E2E tests..."
+	cd $(TESTS_DIR)/e2e && $(MAKE) run
+
+test-pipeline-up:
+	cd $(TESTS_DIR)/e2e && $(MAKE) up
+
+test-pipeline-down:
+	cd $(TESTS_DIR)/e2e && $(MAKE) down
+
 # All tests
 test-all: test-e2e test-rust
 

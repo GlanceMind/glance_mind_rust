@@ -1,173 +1,21 @@
 # =============================================================================
-# GlanceMind API E2E Test Environment
+# GlanceMind API E2E Test Environment (via gm-e2e infra)
 # =============================================================================
-# Provides a complete testing environment with:
-# - PostgreSQL with all migrations and mock data
-# - API server
+# Uses shared infrastructure from gm-e2e instead of duplicating services.
 #
-# Usage:
-#   make test-e2e  # or
-#   docker-compose -f e2e/docker-compose.e2e.yml up -d
+# Usage (mock — default):
+#   docker compose -f tests/docker-compose.e2e.yml up -d
+#   # run API tests...
+#   docker compose -f tests/docker-compose.e2e.yml down -v
+#
+# Usage (real — no mocks):
+#   GM_ENV_FILE=env/real.env docker compose \
+#       -f tests/docker-compose.e2e.yml --profile real up -d
+#
+# Alternative: cd ../../../../gm-e2e && make infra-api-up
 # =============================================================================
 
-services:
-  # Test Database - uses shared db image from crates/db
-  db:
-    build:
-      context: ../../db
-      dockerfile: docker/Dockerfile.test
-    container_name: api-e2e-db
-    environment:
-      POSTGRES_USER: glancemind
-      POSTGRES_PASSWORD: testpassword
-      POSTGRES_DB: glancemind_test
-    ports:
-      - "5434:5432" # Use 5434 to avoid conflicts
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U glancemind -d glancemind_test"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 15s
-
-  nats:
-    image: nats:2.10-alpine
-    container_name: api-e2e-nats
-    command: ["-js", "--auth", "glancemind-dev-token", "-m", "8222"]
-    ports:
-      - "4223:4222"
-      - "8223:8222"
-
-  xunhupay-mock:
-    build:
-      context: ../../../../mock-services
-      dockerfile: Dockerfile
-    container_name: api-e2e-xunhupay-mock
-    command: ["python", "-m", "uvicorn", "mock_services.xunhupay_mock:app", "--host", "0.0.0.0", "--port", "8500"]
-    ports:
-      - "8500:8500"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8500/health')"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 10s
-
-  laozhang-mock:
-    build:
-      context: ../../../../mock-services
-      dockerfile: Dockerfile
-    container_name: api-e2e-laozhang-mock
-    command: ["python", "-m", "uvicorn", "mock_services.laozhang_mock:app", "--host", "0.0.0.0", "--port", "8100"]
-    ports:
-      - "8100:8100"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/health')"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 10s
-
-  tikhub-mock:
-    build:
-      context: ../../../../mock-services
-      dockerfile: Dockerfile
-    container_name: api-e2e-tikhub-mock
-    command: ["python", "-m", "uvicorn", "mock_services.tikhub_mock:app", "--host", "0.0.0.0", "--port", "8200"]
-    ports:
-      - "8200:8200"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8200/health')"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 10s
-
-  jimeng-mock:
-    build:
-      context: ../../../../mock-services
-      dockerfile: Dockerfile
-    container_name: api-e2e-jimeng-mock
-    command: ["python", "-m", "uvicorn", "mock_services.jimeng_mock:app", "--host", "0.0.0.0", "--port", "8300"]
-    ports:
-      - "8300:8300"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8300/health')"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 10s
-
-  vidu-mock:
-    build:
-      context: ../../../../mock-services
-      dockerfile: Dockerfile
-    container_name: api-e2e-vidu-mock
-    command: ["python", "-m", "uvicorn", "mock_services.vidu_mock:app", "--host", "0.0.0.0", "--port", "8400"]
-    ports:
-      - "8400:8400"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8400/health')"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 10s
-
-  # API Server
-  api:
-    build:
-      context: ../../..
-      dockerfile: crates/api/Dockerfile
-    container_name: api-e2e-server
-    environment:
-      DATABASE_URL: postgres://glancemind:testpassword@db:5432/glancemind_test
-      PORT: 8080
-      JWT_SECRET: e2e_test_jwt_secret_key_12345
-      RUST_LOG: info
-      NATS_URL: nats://nats:4222
-      NATS_TOKEN: glancemind-dev-token
-      OPENAI_API_KEY: mock-openai-key
-      OPENAI_BASE_URL: http://laozhang-mock:8100/v1
-      LAOZHANG_API_KEY: mock-laozhang-key
-      LAOZHANG_BASE_URL: http://laozhang-mock:8100
-      TIKHUB_BASE_URL: http://tikhub-mock:8200
-      JIMENG_ACCESS_KEY_ID: mock-jimeng-ak
-      JIMENG_SECRET_ACCESS_KEY: mock-jimeng-sk
-      JIMENG_BASE_URL: http://jimeng-mock:8300
-      VIDU_API_KEY: mock-vidu-key
-      VIDU_BASE_URL: http://vidu-mock:8400
-      RESEND_API_KEY: ""
-      TURNSTILE_SECRET_KEY: ""
-      # XunhuPay -> mock
-      XUNHUPAY_APP_ID: mock-app-id
-      XUNHUPAY_APP_SECRET: mock-xunhupay-secret
-      XUNHUPAY_GATEWAY_URL: http://xunhupay-mock:8500
-      API_BASE_URL: http://api:8080
-    ports:
-      - "8080:8080"
-    depends_on:
-      db:
-        condition: service_healthy
-      nats:
-        condition: service_started
-      laozhang-mock:
-        condition: service_healthy
-      tikhub-mock:
-        condition: service_healthy
-      jimeng-mock:
-        condition: service_healthy
-      vidu-mock:
-        condition: service_healthy
-      xunhupay-mock:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 10s
-
-volumes:
-  api_e2e_db_data:
+include:
+  - path: ../../../../gm-e2e/infra/docker-compose.base.yml
+  - path: ../../../../gm-e2e/infra/docker-compose.mocks.yml
+  - path: ../../../../gm-e2e/infra/docker-compose.api.yml

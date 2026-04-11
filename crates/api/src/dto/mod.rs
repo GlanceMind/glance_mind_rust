@@ -13,6 +13,7 @@ pub mod google_auth_dto;
 pub mod jimeng_dto;
 pub mod laozhang_dto;
 pub mod material_dto;
+pub mod material_folder_dto;
 pub mod notification_dto;
 pub mod novel_dto;
 pub mod oss_dto;

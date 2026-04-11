@@ -1465,10 +1465,24 @@ diesel::table! {
 }
 
 diesel::table! {
+    gm_material_folders (id) {
+        id -> Int4,
+        user_id -> Int4,
+        parent_id -> Nullable<Int4>,
+        #[max_length = 255]
+        name -> Varchar,
+        depth -> Int2,
+        sort_order -> Int4,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
     gm_user_materials (id) {
         id -> Int4,
         user_id -> Int4,
-        video_url -> Text,
+        video_url -> Nullable<Text>,
         prompt -> Nullable<Text>,
         thumbnail_url -> Nullable<Text>,
         #[max_length = 100]
@@ -1481,6 +1495,13 @@ diesel::table! {
         is_active -> Nullable<Bool>,
         created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
+        folder_id -> Nullable<Int4>,
+        #[max_length = 20]
+        media_type -> Varchar,
+        #[max_length = 100]
+        mime_type -> Nullable<Varchar>,
+        #[max_length = 1024]
+        file_url -> Nullable<Varchar>,
     }
 }
 
@@ -1760,6 +1781,7 @@ diesel::joinable!(gm_social_groups -> gm_users (user_id));
 diesel::joinable!(gm_upload_tasks -> gm_platforms (platform_id));
 diesel::joinable!(gm_upload_tasks -> gm_social_accounts (social_account_id));
 diesel::joinable!(gm_upload_tasks -> gm_users (user_id));
+diesel::joinable!(gm_user_materials -> gm_material_folders (folder_id));
 diesel::joinable!(gm_user_notification_reads -> gm_notifications (notification_id));
 diesel::joinable!(gm_user_notification_reads -> gm_users (user_id));
 diesel::joinable!(gm_user_wallets -> gm_users (user_id));
@@ -1842,6 +1864,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     gm_regions,
     gm_social_accounts,
     gm_social_groups,
+    gm_material_folders,
     gm_upload_tasks,
     gm_user_materials,
     gm_user_notification_reads,

@@ -17,6 +17,7 @@ use crate::service::dashboard_service::DashboardService;
 use crate::service::email_verification_service::EmailVerificationService;
 use crate::service::jimeng_client::JimengClient;
 use crate::service::laozhang_client::LaoZhangClient;
+use crate::service::material_folder_service::MaterialFolderService;
 use crate::service::material_service::MaterialService;
 use crate::service::nats_dm_service::NatsDmService;
 use crate::service::platform_service::PlatformService;
@@ -56,6 +57,7 @@ pub struct UserState {
     pub upload_task_service: UploadTaskService,
     pub aipub_service: AipubService,
     pub material_service: MaterialService,
+    pub material_folder_service: MaterialFolderService,
     pub charging_manager: ChargingManager,
     /// NATS DM service (None if NATS is not configured)
     pub nats_dm_service: Option<NatsDmService>,
@@ -130,6 +132,7 @@ impl UserState {
                 laozhang_client_for_material,
                 VideoCaseService::new(db_conn.pool.clone()),
             ),
+            material_folder_service: MaterialFolderService::new(db_conn),
             charging_manager,
             nats_dm_service: None, // Initialized async in lib.rs::run()
             redis_service: None,   // Initialized in lib.rs::run() from REDIS_URL

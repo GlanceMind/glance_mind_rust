@@ -7,13 +7,14 @@ use validator::Validate;
 /// Create material request (user upload)
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct CreateMaterialRequest {
-    #[validate(length(min = 1, message = "Video URL is required"))]
-    pub video_url: String,
-    #[validate(length(min = 1, message = "Tag is required"))]
-    pub tag: String,
-    #[validate(length(min = 1, message = "Title is required"))]
-    pub title: String,
+    pub video_url: Option<String>,
+    pub file_url: Option<String>,
+    pub tag: Option<String>,
+    pub title: Option<String>,
     pub description: Option<String>,
+    pub folder_id: Option<i32>,
+    pub media_type: Option<String>,
+    pub mime_type: Option<String>,
 }
 
 /// Update material request
@@ -23,6 +24,7 @@ pub struct UpdateMaterialRequest {
     pub tag: Option<String>,
     pub title: Option<String>,
     pub description: Option<String>,
+    pub folder_id: Option<Option<i32>>,
 }
 
 /// Material list item response
@@ -30,14 +32,18 @@ pub struct UpdateMaterialRequest {
 pub struct MaterialListItem {
     pub id: i32,
     pub user_id: i32,
-    pub video_url: String,
-    pub prompt: Option<String>, // AI-generated prompt
+    pub video_url: Option<String>,
+    pub file_url: Option<String>,
+    pub media_type: String,
+    pub mime_type: Option<String>,
+    pub prompt: Option<String>,
     pub thumbnail_url: Option<String>,
-    pub tag: Option<String>, // Single tag for categorization
+    pub tag: Option<String>,
     pub title: Option<String>,
     pub description: Option<String>,
     pub duration: Option<i32>,
     pub file_size: Option<i64>,
+    pub folder_id: Option<i32>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -46,7 +52,10 @@ pub struct MaterialListItem {
 pub struct MaterialDetail {
     pub id: i32,
     pub user_id: i32,
-    pub video_url: String,
+    pub video_url: Option<String>,
+    pub file_url: Option<String>,
+    pub media_type: String,
+    pub mime_type: Option<String>,
     pub prompt: Option<String>,
     pub thumbnail_url: Option<String>,
     pub tag: Option<String>,
@@ -54,6 +63,7 @@ pub struct MaterialDetail {
     pub description: Option<String>,
     pub duration: Option<i32>,
     pub file_size: Option<i64>,
+    pub folder_id: Option<i32>,
     pub is_active: Option<bool>,
     pub created_at: DateTime<Utc>,
     pub updated_at: Option<DateTime<Utc>>,
@@ -90,43 +100,53 @@ pub struct MaterialListQuery {
     pub page_size: Option<i32>,
     pub tag: Option<String>,
     pub search: Option<String>,
+    pub folder_id: Option<String>,
+    pub media_type: Option<String>,
 }
 
 /// Conversion from entity to DTO
 impl From<glance_mind_db::entity::material::UserMaterial> for MaterialListItem {
-    fn from(material: glance_mind_db::entity::material::UserMaterial) -> Self {
+    fn from(m: glance_mind_db::entity::material::UserMaterial) -> Self {
         Self {
-            id: material.id,
-            user_id: material.user_id,
-            video_url: material.video_url,
-            prompt: material.prompt,
-            thumbnail_url: material.thumbnail_url,
-            tag: material.tag,
-            title: material.title,
-            description: material.description,
-            duration: material.duration,
-            file_size: material.file_size,
-            created_at: material.created_at,
+            id: m.id,
+            user_id: m.user_id,
+            video_url: m.video_url,
+            file_url: m.file_url,
+            media_type: m.media_type,
+            mime_type: m.mime_type,
+            prompt: m.prompt,
+            thumbnail_url: m.thumbnail_url,
+            tag: m.tag,
+            title: m.title,
+            description: m.description,
+            duration: m.duration,
+            file_size: m.file_size,
+            folder_id: m.folder_id,
+            created_at: m.created_at,
         }
     }
 }
 
 impl From<glance_mind_db::entity::material::UserMaterial> for MaterialDetail {
-    fn from(material: glance_mind_db::entity::material::UserMaterial) -> Self {
+    fn from(m: glance_mind_db::entity::material::UserMaterial) -> Self {
         Self {
-            id: material.id,
-            user_id: material.user_id,
-            video_url: material.video_url,
-            prompt: material.prompt,
-            thumbnail_url: material.thumbnail_url,
-            tag: material.tag,
-            title: material.title,
-            description: material.description,
-            duration: material.duration,
-            file_size: material.file_size,
-            is_active: material.is_active,
-            created_at: material.created_at,
-            updated_at: material.updated_at,
+            id: m.id,
+            user_id: m.user_id,
+            video_url: m.video_url,
+            file_url: m.file_url,
+            media_type: m.media_type,
+            mime_type: m.mime_type,
+            prompt: m.prompt,
+            thumbnail_url: m.thumbnail_url,
+            tag: m.tag,
+            title: m.title,
+            description: m.description,
+            duration: m.duration,
+            file_size: m.file_size,
+            folder_id: m.folder_id,
+            is_active: m.is_active,
+            created_at: m.created_at,
+            updated_at: m.updated_at,
         }
     }
 }

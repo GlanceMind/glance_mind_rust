@@ -48,6 +48,7 @@ impl MaterialRepository {
     }
 
     /// List materials for a user with pagination and filters
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_by_user(
         &self,
         user_id: i32,
@@ -55,6 +56,8 @@ impl MaterialRepository {
         page_size: i64,
         tag: Option<String>,
         search: Option<String>,
+        folder_id: Option<String>,
+        media_type: Option<String>,
     ) -> Result<(Vec<UserMaterial>, i64), DieselError> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || {
@@ -78,6 +81,22 @@ impl MaterialRepository {
                 );
             }
 
+            match folder_id.as_deref() {
+                Some("null") => {
+                    query = query.filter(user_materials::folder_id.is_null());
+                }
+                Some(id_str) => {
+                    if let Ok(fid) = id_str.parse::<i32>() {
+                        query = query.filter(user_materials::folder_id.eq(fid));
+                    }
+                }
+                None => {}
+            }
+
+            if let Some(ref mt) = media_type {
+                query = query.filter(user_materials::media_type.eq(mt));
+            }
+
             let mut total_query = user_materials::table
                 .filter(user_materials::user_id.eq(user_id))
                 .filter(user_materials::is_active.eq(Some(true)))
@@ -93,6 +112,20 @@ impl MaterialRepository {
                         .ilike(search_pattern.clone())
                         .or(user_materials::description.ilike(search_pattern)),
                 );
+            }
+            match folder_id.as_deref() {
+                Some("null") => {
+                    total_query = total_query.filter(user_materials::folder_id.is_null());
+                }
+                Some(id_str) => {
+                    if let Ok(fid) = id_str.parse::<i32>() {
+                        total_query = total_query.filter(user_materials::folder_id.eq(fid));
+                    }
+                }
+                None => {}
+            }
+            if let Some(ref mt) = media_type {
+                total_query = total_query.filter(user_materials::media_type.eq(mt));
             }
 
             let total = total_query.count().get_result::<i64>(&mut conn)?;
@@ -133,7 +166,7 @@ impl MaterialRepository {
             let mut material = target.first::<UserMaterial>(&mut conn)?;
 
             if let Some(v) = video_url {
-                material.video_url = v;
+                material.video_url = Some(v);
             }
             if let Some(p) = prompt {
                 material.prompt = Some(p);

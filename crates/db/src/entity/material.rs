@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 pub struct UserMaterial {
     pub id: i32,
     pub user_id: i32,
-    pub video_url: String,
+    pub video_url: Option<String>,
     pub prompt: Option<String>,
     pub thumbnail_url: Option<String>,
     pub tag: Option<String>,
@@ -31,6 +31,10 @@ pub struct UserMaterial {
     pub is_active: Option<bool>,
     pub created_at: DateTime<Utc>,
     pub updated_at: Option<DateTime<Utc>>,
+    pub folder_id: Option<i32>,
+    pub media_type: String,
+    pub mime_type: Option<String>,
+    pub file_url: Option<String>,
 }
 
 /// New user material for insertion
@@ -38,7 +42,7 @@ pub struct UserMaterial {
 #[diesel(table_name = gm_user_materials)]
 pub struct NewUserMaterial {
     pub user_id: i32,
-    pub video_url: String,
+    pub video_url: Option<String>,
     pub prompt: Option<String>,
     pub thumbnail_url: Option<String>,
     pub tag: Option<String>,
@@ -49,4 +53,8 @@ pub struct NewUserMaterial {
     pub is_active: Option<bool>,
     pub created_at: DateTime<Utc>,
     pub updated_at: Option<DateTime<Utc>>,
+    pub folder_id: Option<i32>,
+    pub media_type: String,
+    pub mime_type: Option<String>,
+    pub file_url: Option<String>,
 }

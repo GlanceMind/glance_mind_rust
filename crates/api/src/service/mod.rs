@@ -11,6 +11,7 @@ pub(crate) mod dashboard_service;
 pub mod email_verification_service;
 pub mod jimeng_client;
 pub mod laozhang_client;
+pub mod material_folder_service;
 pub mod material_service;
 pub mod notification_service;
 pub mod oss_service;

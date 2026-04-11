@@ -1716,6 +1716,8 @@ impl ToolRegistry {
                     page_size: Some(page_size as i32),
                     tag: None,
                     search: None,
+                    folder_id: None,
+                    media_type: None,
                 };
                 let materials = state
                     .material_service

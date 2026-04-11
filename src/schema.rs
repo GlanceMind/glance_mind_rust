@@ -545,6 +545,16 @@ diesel::table! {
         status -> Varchar,
         created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
+        #[max_length = 200]
+        name -> Nullable<Varchar>,
+        image_ai_model_id -> Nullable<Int4>,
+        #[max_length = 20]
+        billing_status -> Varchar,
+        frozen_cost -> Numeric,
+        consumed_cost -> Numeric,
+        frozen_at -> Nullable<Timestamptz>,
+        chat_ai_model_id -> Nullable<Int4>,
+        video_ai_model_id -> Nullable<Int4>,
     }
 }
 
@@ -564,6 +574,8 @@ diesel::table! {
         created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
         published_at -> Nullable<Timestamptz>,
+        video_stage_started_at -> Nullable<Timestamptz>,
+        video_ai_task_id -> Nullable<Int4>,
     }
 }
 
@@ -770,6 +782,20 @@ diesel::table! {
         failure_reason -> Nullable<Text>,
         login_at -> Timestamptz,
         created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_material_folders (id) {
+        id -> Int4,
+        user_id -> Int4,
+        parent_id -> Nullable<Int4>,
+        #[max_length = 255]
+        name -> Varchar,
+        depth -> Int2,
+        sort_order -> Int4,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -1315,6 +1341,33 @@ diesel::table! {
 }
 
 diesel::table! {
+    gm_user_materials (id) {
+        id -> Int4,
+        user_id -> Int4,
+        video_url -> Nullable<Text>,
+        prompt -> Nullable<Text>,
+        thumbnail_url -> Nullable<Text>,
+        #[max_length = 100]
+        tag -> Nullable<Varchar>,
+        #[max_length = 255]
+        title -> Nullable<Varchar>,
+        description -> Nullable<Text>,
+        duration -> Nullable<Int4>,
+        file_size -> Nullable<Int8>,
+        is_active -> Nullable<Bool>,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+        folder_id -> Nullable<Int4>,
+        #[max_length = 20]
+        media_type -> Varchar,
+        #[max_length = 100]
+        mime_type -> Nullable<Varchar>,
+        #[max_length = 1024]
+        file_url -> Nullable<Varchar>,
+    }
+}
+
+diesel::table! {
     gm_user_notification_reads (id) {
         id -> Int4,
         user_id -> Int4,
@@ -1420,6 +1473,8 @@ diesel::table! {
         description -> Nullable<Text>,
         created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
+        #[max_length = 50]
+        reference_type -> Nullable<Varchar>,
     }
 }
 
@@ -1527,6 +1582,7 @@ diesel::joinable!(gm_agent_twitter_tweets -> gm_crawler_tasks (task_id));
 diesel::joinable!(gm_agent_videos -> gm_campaigns (campaign_id));
 diesel::joinable!(gm_agent_videos -> gm_crawler_tasks (task_id));
 diesel::joinable!(gm_aipub_ai_tasks -> gm_aipub_plans (plan_id));
+diesel::joinable!(gm_aipub_plans -> gm_ai_models (image_ai_model_id));
 diesel::joinable!(gm_aipub_plans -> gm_platforms (platform_id));
 diesel::joinable!(gm_aipub_plans -> gm_social_accounts (social_account_id));
 diesel::joinable!(gm_aipub_plans -> gm_social_groups (group_id));
@@ -1597,6 +1653,7 @@ diesel::joinable!(gm_social_groups -> gm_users (user_id));
 diesel::joinable!(gm_upload_tasks -> gm_platforms (platform_id));
 diesel::joinable!(gm_upload_tasks -> gm_social_accounts (social_account_id));
 diesel::joinable!(gm_upload_tasks -> gm_users (user_id));
+diesel::joinable!(gm_user_materials -> gm_material_folders (folder_id));
 diesel::joinable!(gm_user_notification_reads -> gm_notifications (notification_id));
 diesel::joinable!(gm_user_notification_reads -> gm_users (user_id));
 diesel::joinable!(gm_user_wallets -> gm_users (user_id));
@@ -1644,6 +1701,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     gm_drama_project_projections,
     gm_email_verifications,
     gm_login_logs,
+    gm_material_folders,
     gm_notifications,
     gm_novel_architecture_checkpoints,
     gm_novel_architectures,
@@ -1674,6 +1732,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     gm_social_accounts,
     gm_social_groups,
     gm_upload_tasks,
+    gm_user_materials,
     gm_user_notification_reads,
     gm_user_wallets,
     gm_users,

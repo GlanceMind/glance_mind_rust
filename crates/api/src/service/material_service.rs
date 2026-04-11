@@ -6,6 +6,7 @@ use crate::dto::material_dto::{
 use crate::error::{api_error::ApiError, db_error::DbError};
 use crate::repository::material_repository::MaterialRepository;
 use crate::service::laozhang_client::LaoZhangClient;
+use crate::service::oss_service::{OssConfig, OssService};
 use crate::service::video_case_service::VideoCaseService;
 use chrono::Utc;
 use diesel::result::Error as DieselError;
@@ -171,7 +172,9 @@ impl MaterialService {
             material.prompt.is_some()
         );
 
-        self.spawn_background_analysis(id, material.video_url.clone());
+        if let Some(ref video_url) = material.video_url {
+            self.spawn_background_analysis(id, video_url.clone());
+        }
 
         Ok(MaterialDetail::from(material))
     }
@@ -183,21 +186,25 @@ impl MaterialService {
         user_id: i32,
         request: CreateMaterialRequest,
     ) -> Result<MaterialDetail, ApiError> {
-        let video_url = request.video_url.clone();
+        let media_type = request.media_type.unwrap_or_else(|| "video".to_string());
 
         let new_material = NewUserMaterial {
             user_id,
-            video_url: request.video_url,
+            video_url: request.video_url.clone(),
             prompt: None,
             thumbnail_url: None,
-            tag: Some(request.tag),
-            title: Some(request.title),
+            tag: request.tag,
+            title: request.title,
             description: request.description,
             duration: None,
             file_size: None,
             is_active: Some(true),
             created_at: Utc::now(),
             updated_at: None,
+            folder_id: request.folder_id,
+            media_type: media_type.clone(),
+            mime_type: request.mime_type,
+            file_url: request.file_url,
         };
 
         let material = self
@@ -211,7 +218,11 @@ impl MaterialService {
             material.id, user_id
         );
 
-        self.spawn_background_analysis(material.id, video_url);
+        if media_type == "video" {
+            if let Some(ref video_url) = request.video_url {
+                self.spawn_background_analysis(material.id, video_url.clone());
+            }
+        }
 
         Ok(MaterialDetail::from(material))
     }
@@ -233,6 +244,8 @@ impl MaterialService {
                 page_size as i64,
                 query.tag.clone(),
                 query.search.clone(),
+                query.folder_id.clone(),
+                query.media_type.clone(),
             )
             .await
             .map_err(|e| ApiError::from(DbError::SomethingWentWrong(e.to_string())))?;
@@ -397,7 +410,7 @@ impl MaterialService {
 
         let new_material = NewUserMaterial {
             user_id,
-            video_url,
+            video_url: Some(video_url),
             prompt,
             thumbnail_url,
             tag,
@@ -408,6 +421,10 @@ impl MaterialService {
             is_active: Some(true),
             created_at: Utc::now(),
             updated_at: None,
+            folder_id: None,
+            media_type: "video".to_string(),
+            mime_type: None,
+            file_url: None,
         };
 
         let material = self
@@ -422,5 +439,42 @@ impl MaterialService {
         );
 
         Ok(MaterialDetail::from(material))
+    }
+
+    pub async fn upload_to_oss(
+        &self,
+        data: &[u8],
+        filename: &str,
+        content_type: &str,
+    ) -> Result<String, ApiError> {
+        if !OssConfig::is_configured() {
+            return Err(ApiError::InternalServerError(
+                "OSS is not configured".into(),
+            ));
+        }
+        let oss = OssService::from_env()?;
+        let ct = content_type.to_lowercase();
+
+        if ct.starts_with("video/") {
+            let result = oss
+                .upload_video(data.to_vec(), 0, filename.to_string(), ct)
+                .await?;
+            Ok(result.image_url)
+        } else if ct.starts_with("image/") {
+            let result = oss
+                .upload_image(data.to_vec(), 0, filename.to_string(), ct)
+                .await?;
+            Ok(result.image_url)
+        } else if ct.starts_with("audio/") {
+            let result = oss
+                .upload_audio(data.to_vec(), 0, filename.to_string(), ct)
+                .await?;
+            Ok(result.image_url)
+        } else {
+            Err(ApiError::BadRequest(format!(
+                "Unsupported content type: {}",
+                content_type
+            )))
+        }
     }
 }
