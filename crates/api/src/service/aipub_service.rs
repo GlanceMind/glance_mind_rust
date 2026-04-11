@@ -49,7 +49,7 @@ impl AipubService {
         // Validate plan_type
         if PlanType::parse(&plan_type).is_none() {
             return Err(ApiError::BusinessError(BusinessError::InvalidInput(
-                format!("Invalid plan_type: {}. Supported: batch_text, single_video, account_grooming, reddit_text, reddit_image, reddit_link", plan_type),
+                format!("Invalid plan_type: {}. Supported: batch_text, single_video, account_grooming, reddit_text, reddit_image, reddit_link, direct_publish", plan_type),
             )));
         }
 
@@ -175,6 +175,24 @@ impl AipubService {
                     }
                 }
             }
+            Some(PlanType::DirectPublish) => {
+                if dto.group_id.is_none() {
+                    return Err(ApiError::BusinessError(BusinessError::InvalidInput(
+                        "direct_publish plan requires group_id".to_string(),
+                    )));
+                }
+                if dto.social_account_id.is_some() {
+                    return Err(ApiError::BusinessError(BusinessError::InvalidInput(
+                        "direct_publish plan cannot have social_account_id, use group_id instead"
+                            .to_string(),
+                    )));
+                }
+                if dto.content.is_none() {
+                    return Err(ApiError::BusinessError(BusinessError::InvalidInput(
+                        "direct_publish plan requires content with video_url".to_string(),
+                    )));
+                }
+            }
             _ => {}
         }
 
@@ -232,6 +250,7 @@ impl AipubService {
                         Some(vec![AiTaskType::ContentGen.as_str().to_string()])
                     }
                 }
+                Some(PlanType::DirectPublish) => None,
                 None => None,
             }
         });
@@ -474,6 +493,7 @@ impl AipubService {
                         None
                     }
                 }
+                Some(PlanType::DirectPublish) => None,
                 None => None,
             };
 

@@ -137,6 +137,8 @@ pub enum PlanType {
     RedditImage,
     /// Reddit link post (title + link URL + optional body)
     RedditLink,
+    /// Direct publish: skip AI, directly create publish tasks for existing media
+    DirectPublish,
 }
 
 impl PlanType {
@@ -148,6 +150,7 @@ impl PlanType {
             PlanType::RedditText => "reddit_text",
             PlanType::RedditImage => "reddit_image",
             PlanType::RedditLink => "reddit_link",
+            PlanType::DirectPublish => "direct_publish",
         }
     }
 
@@ -159,6 +162,7 @@ impl PlanType {
             "reddit_text" => Some(PlanType::RedditText),
             "reddit_image" => Some(PlanType::RedditImage),
             "reddit_link" => Some(PlanType::RedditLink),
+            "direct_publish" => Some(PlanType::DirectPublish),
             _ => None,
         }
     }
