@@ -120,3 +120,7 @@ jobs:
         JIMENG_ACCESS_KEY_ID=${{ secrets.JIMENG_ACCESS_KEY_ID }}
         JIMENG_SECRET_ACCESS_KEY=${{ secrets.JIMENG_SECRET_ACCESS_KEY }}
         VIDU_API_KEY=${{ secrets.VIDU_API_KEY }}
+        REDIS_URL=${{ vars.REDIS_URL }}
+        DRAMA_DIRECT_WORKER_MODE=${{ vars.DRAMA_DIRECT_WORKER_MODE || 'false' }}
+        DRAMA_CANONICAL_READS=${{ vars.DRAMA_CANONICAL_READS || 'false' }}
+        DRAMA_CALLBACK_SECRET=${{ secrets.DRAMA_CALLBACK_SECRET }}
