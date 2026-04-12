@@ -370,6 +370,34 @@ impl DramaProjectionService {
                 .execute(conn)
                 .map_err(|e| format!("apply canonical render_progress: {}", e))?;
             }
+            "script_data_stored" => {
+                let script_payload = serde_json::to_value(&event.payload).unwrap_or(Value::Null);
+                diesel::sql_query(
+                    "UPDATE gm_drama_project_projections \
+                     SET interaction_payload = jsonb_set(COALESCE(interaction_payload, '{}'::jsonb), '{script_data}', $2, true), \
+                         last_event_sequence = $3, updated_at = NOW() \
+                     WHERE project_id = $1 AND last_event_sequence < $3",
+                )
+                .bind::<Text, _>(&event.project_id)
+                .bind::<Jsonb, _>(&script_payload)
+                .bind::<BigInt, _>(event.sequence)
+                .execute(conn)
+                .map_err(|e| format!("apply script_data_stored: {}", e))?;
+            }
+            "shots_data_stored" => {
+                let shots_payload = serde_json::to_value(&event.payload).unwrap_or(Value::Null);
+                diesel::sql_query(
+                    "UPDATE gm_drama_project_projections \
+                     SET interaction_payload = jsonb_set(COALESCE(interaction_payload, '{}'::jsonb), '{shots_data}', $2, true), \
+                         last_event_sequence = $3, updated_at = NOW() \
+                     WHERE project_id = $1 AND last_event_sequence < $3",
+                )
+                .bind::<Text, _>(&event.project_id)
+                .bind::<Jsonb, _>(&shots_payload)
+                .bind::<BigInt, _>(event.sequence)
+                .execute(conn)
+                .map_err(|e| format!("apply shots_data_stored: {}", e))?;
+            }
             "cost_recorded" => {
                 let cents = event
                     .payload

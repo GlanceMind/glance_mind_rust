@@ -1529,7 +1529,7 @@ pub async fn get_script(
                 Ok(row) => row,
                 Err(resp) => return resp,
             };
-            if let Some(payload) = row.interaction_payload {
+            if let Some(ref payload) = row.interaction_payload {
                 if payload.get("type").and_then(|v| v.as_str()) == Some("script_approval") {
                     return gateway_response(
                         200,
@@ -1539,6 +1539,18 @@ pub async fn get_script(
                         }),
                     )
                     .into_response();
+                }
+                if let Some(script_data) = payload.get("script_data") {
+                    if let Some(script) = script_data.get("script") {
+                        return gateway_response(
+                            200,
+                            serde_json::json!({
+                                "project_id": row.project_id,
+                                "script": script
+                            }),
+                        )
+                        .into_response();
+                    }
                 }
             }
         }
@@ -1562,6 +1574,27 @@ pub async fn get_shots(
                 Ok(row) => row,
                 Err(resp) => return resp,
             };
+            if let Some(ref payload) = row.interaction_payload {
+                if let Some(shots_data) = payload.get("shots_data") {
+                    let shots = shots_data
+                        .get("shots")
+                        .cloned()
+                        .unwrap_or(Value::Array(vec![]));
+                    let visual_style = shots_data
+                        .get("visual_style")
+                        .cloned()
+                        .unwrap_or(serde_json::json!({}));
+                    return gateway_response(
+                        200,
+                        serde_json::json!({
+                            "project_id": row.project_id,
+                            "shots": shots,
+                            "visual_style": visual_style
+                        }),
+                    )
+                    .into_response();
+                }
+            }
             let shots = row
                 .interaction_payload
                 .as_ref()

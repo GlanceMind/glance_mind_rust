@@ -429,29 +429,31 @@ impl CampaignService {
 
     async fn calculate_min_cost(
         &self,
-        _platform_id: i32,
+        platform_id: i32,
         scan_count: i32,
-        _ai_model_id: i32,
+        ai_model_id: i32,
     ) -> Result<BigDecimal, ApiError> {
         use diesel::prelude::*;
 
-        let model_id_sql = if _ai_model_id > 0 {
-            _ai_model_id.to_string()
+        let model_id: Option<i32> = if ai_model_id > 0 {
+            Some(ai_model_id)
         } else {
-            "NULL".to_string()
+            None
         };
-
-        let query = format!(
-            "SELECT calculate_min_campaign_cost({}, {}, {})",
-            _platform_id, scan_count, model_id_sql
-        );
 
         let mut conn = self
             .pool
             .get()
             .map_err(|e| ApiError::InternalServerError(format!("DB pool error: {}", e)))?;
 
-        match diesel::sql_query(&query).get_result::<MinCostRow>(&mut conn) {
+        match diesel::sql_query(
+            "SELECT calculate_min_campaign_cost($1, $2, $3) AS calculate_min_campaign_cost",
+        )
+        .bind::<diesel::sql_types::Integer, _>(platform_id)
+        .bind::<diesel::sql_types::Integer, _>(scan_count)
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(model_id)
+        .get_result::<MinCostRow>(&mut conn)
+        {
             Ok(row) => Ok(row.calculate_min_campaign_cost),
             Err(e) => {
                 tracing::warn!(
