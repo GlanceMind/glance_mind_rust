@@ -1,18 +1,24 @@
 use crate::handler::{material_folder_handler, material_handler};
 use crate::state::user_state::UserState;
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{get, post, put},
     Router,
 };
 
 pub fn material_routes() -> Router<UserState> {
+    const MAX_UPLOAD_SIZE: usize = 100 * 1024 * 1024; // 100MB (video ceiling)
+
     Router::new()
         // User materials management
         .route(
             "/materials",
             get(material_handler::list_materials).post(material_handler::create_material),
         )
-        .route("/materials/upload", post(material_handler::upload_material))
+        .route(
+            "/materials/upload",
+            post(material_handler::upload_material).layer(DefaultBodyLimit::max(MAX_UPLOAD_SIZE)),
+        )
         .route(
             "/materials/:id",
             get(material_handler::get_material)
