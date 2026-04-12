@@ -142,15 +142,10 @@ impl MaterialFolderService {
             }
         }
 
-        let mut remaining_children: Vec<(i32, FolderTreeNode)> = Vec::new();
-        for (id, node) in nodes.drain() {
-            if node.parent_id.is_some() {
-                remaining_children.push((id, node));
-            }
-        }
-
-        let folders: Vec<FolderTreeNode> =
-            root_ids.iter().filter_map(|id| nodes.remove(id)).collect();
+        let folders: Vec<FolderTreeNode> = root_ids
+            .into_iter()
+            .filter_map(|id| nodes.remove(&id))
+            .collect();
 
         Ok(FolderTreeResponse { folders })
     }
