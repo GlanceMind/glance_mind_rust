@@ -8,7 +8,6 @@ use crate::state::user_state::UserState;
 
 pub fn routes() -> Router<UserState> {
     Router::new()
-        .route("/upload-image", post(drama_handler::upload_image))
         .route("/preflight", post(drama_handler::preflight))
         .route(
             "/characters",

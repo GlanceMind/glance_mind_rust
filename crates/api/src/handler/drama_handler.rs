@@ -1,6 +1,6 @@
 use axum::{
     body::BoxBody,
-    extract::{Multipart, Path, Query},
+    extract::{Path, Query},
     http::StatusCode,
     response::{IntoResponse, Response},
     Extension, Json,
@@ -12,9 +12,6 @@ use uuid::Uuid;
 
 use crate::dto::drama_dto::DramaChapterSceneAssetsRequest;
 use crate::dto::drama_dto::*;
-use crate::dto::oss_dto::UploadImageResponse;
-use crate::error::{api_error::ApiError, business_error::BusinessError};
-use crate::response::api_result::ApiResult;
 use crate::service::drama_billing::DramaBillingGuard;
 use crate::service::drama_facade::{DramaFacade, FacadeError};
 use crate::service::drama_private_assets_service::{
@@ -1980,86 +1977,6 @@ pub async fn scene_rerun(
         Ok((status, body)) => gateway_response(status, body),
         Err(e) => map_facade_err(e),
     }
-}
-
-const MAX_IMAGE_FILE_SIZE: usize = 10 * 1024 * 1024;
-
-const ALLOWED_IMAGE_CONTENT_TYPES: &[&str] = &[
-    "image/jpeg",
-    "image/jpg",
-    "image/png",
-    "image/gif",
-    "image/webp",
-    "image/bmp",
-];
-
-pub async fn upload_image(
-    Extension(user): Extension<User>,
-    mut multipart: Multipart,
-) -> Result<ApiResult<UploadImageResponse>, ApiError> {
-    use crate::service::oss_service::{OssConfig, OssService};
-
-    if !OssConfig::is_configured() {
-        return Err(ApiError::InternalServerError(
-            "OSS service not configured".to_string(),
-        ));
-    }
-
-    let mut image_data: Option<Vec<u8>> = None;
-    let mut image_filename: Option<String> = None;
-    let mut image_content_type: Option<String> = None;
-
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|_| ApiError::BusinessError(BusinessError::FormParsingFailed))?
-    {
-        let field_name = field.name().unwrap_or("").to_string();
-        if field_name == "file" || field_name == "image" {
-            image_filename = field.file_name().map(|s| s.to_string());
-            image_content_type = field.content_type().map(|s| s.to_string());
-            let data = field.bytes().await.map_err(|e| {
-                tracing::error!("Failed to read drama image data: {:?}", e);
-                ApiError::BusinessError(BusinessError::InvalidFormField("file".to_string()))
-            })?;
-            image_data = Some(data.to_vec());
-        }
-    }
-
-    let data = image_data.ok_or_else(|| {
-        ApiError::BusinessError(BusinessError::MissingRequiredParameter("file".to_string()))
-    })?;
-    let filename = image_filename.unwrap_or_else(|| "image.jpg".to_string());
-    let content_type = image_content_type.unwrap_or_else(|| "image/jpeg".to_string());
-
-    if !ALLOWED_IMAGE_CONTENT_TYPES.contains(&content_type.as_str()) {
-        return Err(ApiError::BusinessError(BusinessError::InvalidFileType(
-            content_type,
-        )));
-    }
-    if data.len() > MAX_IMAGE_FILE_SIZE {
-        return Err(ApiError::BusinessError(BusinessError::FileTooLarge(
-            MAX_IMAGE_FILE_SIZE,
-        )));
-    }
-
-    tracing::info!(
-        "Drama upload-image: filename={}, size={} bytes, user_id={}",
-        filename,
-        data.len(),
-        user.id
-    );
-
-    let oss_service = OssService::from_env()?;
-    let result = oss_service
-        .upload_image(data, user.id, filename.clone(), content_type.clone())
-        .await?;
-
-    Ok(ApiResult::ok(UploadImageResponse {
-        image_url: result.image_url,
-        filename: result.filename,
-        size: result.size,
-    }))
 }
 
 #[cfg(test)]
