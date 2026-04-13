@@ -1,13 +1,20 @@
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{get, post, put},
     Router,
 };
 
-use crate::handler::{drama_callback_handler, drama_handler, drama_stream_handler};
+use crate::handler::{drama_callback_handler, drama_handler, drama_stream_handler, oss_handler};
 use crate::state::user_state::UserState;
 
 pub fn routes() -> Router<UserState> {
+    const MAX_IMAGE_UPLOAD_SIZE: usize = 30 * 1024 * 1024; // 30MB, same as aipub
+
     Router::new()
+        .route(
+            "/upload-image",
+            post(oss_handler::upload_image).layer(DefaultBodyLimit::max(MAX_IMAGE_UPLOAD_SIZE)),
+        )
         .route("/preflight", post(drama_handler::preflight))
         .route(
             "/characters",
