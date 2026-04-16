@@ -1,5 +1,7 @@
 use crate::config::database::{DBPool, Database};
 use crate::dto::novel_dto::*;
+use crate::repository::wallet_repository::WalletRepository;
+use bigdecimal::BigDecimal;
 use chrono::{DateTime, Utc};
 use diesel::dsl::max;
 use diesel::prelude::*;
@@ -16,9 +18,33 @@ use serde_json::json;
 use std::sync::Arc;
 use uuid::Uuid;
 
+/// Minimum wallet balance (in points) required before a user can create a Novel
+/// project or trigger any Novel `generate_*` endpoint.
+///
+/// Novel has no per-action pricing rules yet, so we use a single threshold as
+/// a gate so the unified `code: 4100` insufficient-balance popup can surface
+/// early instead of after several AI calls burn through credits.
+pub const NOVEL_MIN_BALANCE_POINTS: i64 = 100;
+
+/// Error variants for Novel service balance checks.
+pub enum NovelBalanceError {
+    Insufficient,
+    Internal(String),
+}
+
+impl std::fmt::Display for NovelBalanceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NovelBalanceError::Insufficient => write!(f, "insufficient balance"),
+            NovelBalanceError::Internal(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct NovelService {
     pool: DBPool,
+    wallet_repo: WalletRepository,
 }
 
 struct ParsedChapter {
@@ -36,6 +62,26 @@ impl NovelService {
     pub fn new(db_conn: &Arc<Database>) -> Self {
         Self {
             pool: db_conn.pool.clone(),
+            wallet_repo: WalletRepository::new(db_conn.pool.clone()),
+        }
+    }
+
+    /// Validate that the user's available wallet balance meets the Novel
+    /// entry threshold. Returns `Ok(())` on pass, `Err(Insufficient)` on fail,
+    /// `Err(Internal)` on wallet lookup failure.
+    pub async fn check_balance_threshold(&self, user_id: i32) -> Result<(), NovelBalanceError> {
+        let required = BigDecimal::from(NOVEL_MIN_BALANCE_POINTS);
+        match self
+            .wallet_repo
+            .validate_available_balance(user_id, &required)
+            .await
+        {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(NovelBalanceError::Insufficient),
+            Err(e) => Err(NovelBalanceError::Internal(format!(
+                "wallet lookup failed: {}",
+                e
+            ))),
         }
     }
 

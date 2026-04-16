@@ -12,7 +12,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use crate::dto::novel_dto::*;
-use crate::service::novel_service::NovelService;
+use crate::service::novel_service::{NovelBalanceError, NovelService};
 use crate::service::novel_worker_dispatcher::NovelWorkerDispatcher;
 
 fn ok_response(data: serde_json::Value) -> impl IntoResponse {
@@ -48,6 +48,40 @@ fn err_response(status: StatusCode, msg: &str) -> impl IntoResponse {
             "msg_cn": msg,
         })),
     )
+}
+
+/// HTTP 402 response aligned with `ErrorCode::InsufficientBalance` (code 4100).
+/// The front-end's global insufficient-balance popup (`insufficientBalanceStore`)
+/// subscribes to this code and prompts the user to top up.
+fn insufficient_balance_response() -> axum::response::Response {
+    (
+        StatusCode::PAYMENT_REQUIRED,
+        Json(serde_json::json!({
+            "code": 4100,
+            "msg": "Insufficient balance, please top up",
+            "msg_cn": "余额不足，请先充值",
+            "data": null,
+        })),
+    )
+        .into_response()
+}
+
+/// Run the Novel balance gate. On insufficient balance, returns an HTTP 402
+/// response with `code: 4100`. On internal failure, returns HTTP 500.
+/// Handlers should short-circuit on `Err(resp)`.
+async fn enforce_novel_balance(
+    service: &NovelService,
+    user_id: i32,
+) -> Result<(), axum::response::Response> {
+    match service.check_balance_threshold(user_id).await {
+        Ok(()) => Ok(()),
+        Err(NovelBalanceError::Insufficient) => Err(insufficient_balance_response()),
+        Err(NovelBalanceError::Internal(msg)) => Err(err_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("wallet check failed: {}", msg),
+        )
+        .into_response()),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +169,9 @@ pub async fn create_project(
     Extension(service): Extension<NovelService>,
     Json(req): Json<NovelProjectCreateRequest>,
 ) -> impl IntoResponse {
+    if let Err(resp) = enforce_novel_balance(&service, user.id).await {
+        return resp;
+    }
     match service.create_project(user.id, &req) {
         Ok(project) => {
             created_response(serde_json::to_value(&project).unwrap_or_default()).into_response()
@@ -530,6 +567,9 @@ pub async fn generate_architecture(
     Path(project_id): Path<String>,
     Json(req): Json<NovelArchitectureGenerateRequest>,
 ) -> impl IntoResponse {
+    if let Err(resp) = enforce_novel_balance(&service, user.id).await {
+        return resp;
+    }
     let dispatcher = match require_dispatcher(&dispatcher) {
         Ok(d) => d,
         Err(e) => return e.into_response(),
@@ -688,6 +728,9 @@ pub async fn generate_blueprint(
     Path(project_id): Path<String>,
     Json(req): Json<NovelBlueprintGenerateRequest>,
 ) -> impl IntoResponse {
+    if let Err(resp) = enforce_novel_balance(&service, user.id).await {
+        return resp;
+    }
     let dispatcher = match require_dispatcher(&dispatcher) {
         Ok(d) => d,
         Err(e) => return e.into_response(),
@@ -871,6 +914,9 @@ pub async fn generate_chapter_draft(
     Path((project_id, chapter_number)): Path<(String, i32)>,
     Json(req): Json<NovelChapterDraftGenerateRequest>,
 ) -> impl IntoResponse {
+    if let Err(resp) = enforce_novel_balance(&service, user.id).await {
+        return resp;
+    }
     let dispatcher = match require_dispatcher(&dispatcher) {
         Ok(d) => d,
         Err(e) => return e.into_response(),
@@ -953,6 +999,9 @@ pub async fn enrich_chapter(
     Path((project_id, chapter_number)): Path<(String, i32)>,
     Json(req): Json<NovelChapterEnrichRequest>,
 ) -> impl IntoResponse {
+    if let Err(resp) = enforce_novel_balance(&service, user.id).await {
+        return resp;
+    }
     let dispatcher = match require_dispatcher(&dispatcher) {
         Ok(d) => d,
         Err(e) => return e.into_response(),
@@ -997,6 +1046,9 @@ pub async fn finalize_chapter(
     Path((project_id, chapter_number)): Path<(String, i32)>,
     Json(req): Json<NovelChapterFinalizeRequest>,
 ) -> impl IntoResponse {
+    if let Err(resp) = enforce_novel_balance(&service, user.id).await {
+        return resp;
+    }
     let dispatcher = match require_dispatcher(&dispatcher) {
         Ok(d) => d,
         Err(e) => return e.into_response(),
@@ -1041,6 +1093,9 @@ pub async fn batch_generate_chapters(
     Path(project_id): Path<String>,
     Json(req): Json<NovelChapterBatchGenerateRequest>,
 ) -> impl IntoResponse {
+    if let Err(resp) = enforce_novel_balance(&service, user.id).await {
+        return resp;
+    }
     let dispatcher = match require_dispatcher(&dispatcher) {
         Ok(d) => d,
         Err(e) => return e.into_response(),

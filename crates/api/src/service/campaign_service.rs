@@ -15,7 +15,6 @@ use bigdecimal::BigDecimal;
 pub struct CampaignService {
     repo: CampaignRepository,
     pool: DBPool,
-    #[allow(dead_code)]
     wallet_repo: WalletRepository,
 }
 
@@ -45,17 +44,40 @@ impl CampaignService {
             ));
         }
 
-        // Validate budget_cap against minimum cost using DB stored procedure
+        // Validate budget_cap against minimum cost using DB stored procedure.
+        // Always compute min_cost so we can also check wallet balance up-front.
+        let min_cost = self
+            .calculate_min_cost(dto.platform_id, scan_count, dto.ai_model_id)
+            .await?;
+
         if let Some(ref cap) = dto.budget_cap {
-            let min_cost = self
-                .calculate_min_cost(dto.platform_id, scan_count, dto.ai_model_id)
-                .await?;
             if cap < &min_cost {
                 return Err(ApiError::BadRequest(format!(
                     "Budget too low: minimum {} points required / 预算不足：最低需要 {} 积分",
                     min_cost, min_cost
                 )));
             }
+        }
+
+        // Balance gate: even though budget freeze happens on activation, require the
+        // user's available wallet balance to cover the greater of min_cost or
+        // budget_cap at creation time. This keeps UX consistent with other apps and
+        // lets the front-end show the unified insufficient-balance popup before the
+        // user invests time in drafting a campaign they can't activate.
+        let required = match &dto.budget_cap {
+            Some(cap) if cap > &min_cost => cap.clone(),
+            _ => min_cost.clone(),
+        };
+        let has_balance = self
+            .wallet_repo
+            .validate_available_balance(user_id, &required)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to check wallet balance for campaign: {:?}", e);
+                ApiError::InternalServerError("Failed to check balance".to_string())
+            })?;
+        if !has_balance {
+            return Err(ApiError::InsufficientBalance);
         }
 
         // Create campaign in DRAFT status (budget not frozen yet)
