@@ -199,6 +199,8 @@ impl CampaignService {
             dms: agg.dms,
             friend_requests: agg.friend_requests,
             mentions: agg.mentions,
+            received_likes: agg.received_likes,
+            received_comments: agg.received_comments,
             last_updated_at: agg.last_updated_at,
         })
     }

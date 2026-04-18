@@ -271,6 +271,8 @@ impl CampaignRepository {
                     s.received_dms,
                     s.received_friend_requests,
                     s.received_mentions,
+                    s.received_likes,
+                    s.received_comments,
                     s.collected_at
                 FROM gm_patrol_account_stats s
                 INNER JOIN gm_campaign_accounts ca
@@ -286,6 +288,8 @@ impl CampaignRepository {
                 COALESCE(SUM(received_dms), 0)::BIGINT            AS dms,
                 COALESCE(SUM(received_friend_requests), 0)::BIGINT AS friend_requests,
                 COALESCE(SUM(received_mentions), 0)::BIGINT       AS mentions,
+                COALESCE(SUM(received_likes), 0)::BIGINT          AS received_likes,
+                COALESCE(SUM(received_comments), 0)::BIGINT       AS received_comments,
                 COUNT(DISTINCT social_account_id)::BIGINT         AS tracked_raw,
                 MAX(collected_at)                                  AS last_updated_at
             FROM dedup
@@ -306,6 +310,8 @@ impl CampaignRepository {
             dms: row.dms,
             friend_requests: row.friend_requests,
             mentions: row.mentions,
+            received_likes: row.received_likes,
+            received_comments: row.received_comments,
             last_updated_at: row.last_updated_at,
         })
     }
@@ -360,6 +366,10 @@ struct LeadMetricsRow {
     #[diesel(sql_type = BigInt)]
     mentions: i64,
     #[diesel(sql_type = BigInt)]
+    received_likes: i64,
+    #[diesel(sql_type = BigInt)]
+    received_comments: i64,
+    #[diesel(sql_type = BigInt)]
     tracked_raw: i64,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     last_updated_at: Option<DateTime<Utc>>,
@@ -374,5 +384,7 @@ pub struct LeadMetricsAggregate {
     pub dms: i64,
     pub friend_requests: i64,
     pub mentions: i64,
+    pub received_likes: i64,
+    pub received_comments: i64,
     pub last_updated_at: Option<DateTime<Utc>>,
 }
