@@ -102,13 +102,14 @@ def patrol_stats_inserter(db_cursor, db_connection):
         received_dms=0,
         received_friend_requests=0,
         received_mentions=0,
+        received_likes=0,
+        received_comments=0,
         report_type="notification",
         report_id=None,
         collected_at=None,
     ):
         rid = report_id or f"lm-e2e-{uuid.uuid4().hex}"
         ts = collected_at or _now_str()
-        # Insert the report (idempotent on report_id)
         db_cursor.execute(
             """INSERT INTO gm_patrol_reports
                 (report_id, report_type, user_id, device_id, started_at, completed_at,
@@ -117,7 +118,6 @@ def patrol_stats_inserter(db_cursor, db_connection):
                ON CONFLICT (report_id) DO NOTHING""",
             (rid, report_type, user_id, ts, ts),
         )
-        # Insert stats (NOT idempotent — same pair can be written many times per Branch B)
         db_cursor.execute(
             """INSERT INTO gm_patrol_account_stats
                 (report_id, report_type, social_account_id, device_id, user_id,
@@ -130,13 +130,14 @@ def patrol_stats_inserter(db_cursor, db_connection):
                VALUES (%s, %s, %s, 'lm-e2e-device', %s,
                        %s, 'tiktok', 'lm_e2e_user',
                        0, 0, 0, 0,
-                       %s, 0, 0,
+                       %s, %s, %s,
                        %s, 0, %s,
                        %s,
                        false, NULL, %s)""",
             (
                 rid, report_type, social_account_id, user_id, platform_id,
-                new_followers, received_dms, received_mentions,
+                new_followers, received_likes, received_comments,
+                received_dms, received_mentions,
                 received_friend_requests, ts,
             ),
         )
@@ -260,17 +261,20 @@ class TestLeadMetricsAggregation:
         patrol_stats_inserter(
             user_id=user_id, social_account_id=sa_id, platform_id=platform_id,
             new_followers=3, received_dms=2, received_friend_requests=1,
-            received_mentions=1, report_type="notification",
+            received_mentions=1, received_likes=4, received_comments=6,
+            report_type="notification",
         )
         patrol_stats_inserter(
             user_id=user_id, social_account_id=sa_id, platform_id=platform_id,
             new_followers=4, received_dms=3, received_friend_requests=2,
-            received_mentions=1, report_type="notification",
+            received_mentions=1, received_likes=11, received_comments=9,
+            report_type="notification",
         )
         patrol_stats_inserter(
             user_id=user_id, social_account_id=sa_id, platform_id=platform_id,
             new_followers=999, received_dms=999, received_friend_requests=999,
-            received_mentions=999, report_type="profile",
+            received_mentions=999, received_likes=999, received_comments=999,
+            report_type="profile",
         )
 
         resp = auth_client.get(f"/api/v1/campaigns/{campaign_id}/lead-metrics")
@@ -281,6 +285,8 @@ class TestLeadMetricsAggregation:
         assert data["dms"] == 5
         assert data["friend_requests"] == 3
         assert data["mentions"] == 2
+        assert data["received_likes"] == 15
+        assert data["received_comments"] == 15
         assert data["account_count"] == 1
         assert data["tracked_account_count"] == 1
         assert data["last_updated_at"] is not None
@@ -335,7 +341,8 @@ class TestLeadMetricsAggregation:
             patrol_stats_inserter(
                 user_id=user_id, social_account_id=sa_id, platform_id=platform_id,
                 new_followers=10, received_dms=20, received_friend_requests=5,
-                received_mentions=4, report_type="notification",
+                received_mentions=4, received_likes=8, received_comments=9,
+                report_type="notification",
                 report_id=fixed_report_id,
             )
 
@@ -348,5 +355,7 @@ class TestLeadMetricsAggregation:
         assert data["dms"] == 20
         assert data["friend_requests"] == 5
         assert data["mentions"] == 4
+        assert data["received_likes"] == 8
+        assert data["received_comments"] == 9
         assert data["account_count"] == 1
         assert data["tracked_account_count"] == 1
