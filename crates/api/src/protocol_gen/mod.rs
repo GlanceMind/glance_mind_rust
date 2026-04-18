@@ -204,7 +204,7 @@ fn default_platform() -> String {
 }
 
 /// Optimized response structure: campaign config extracted, comments as array
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
 pub struct DeviceCommentsResponse {
     /// Campaign configuration (returned once)
     pub campaign: CampaignConfig,
@@ -215,7 +215,7 @@ pub struct DeviceCommentsResponse {
 }
 
 /// Campaign auto-interaction configuration
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
 pub struct CampaignConfig {
     pub campaign_id: i32,
     pub auto_like: bool,
@@ -886,7 +886,7 @@ pub struct SeedanceVideoConfig {
 /// - Video content: Set both `video_prompt` (for video AI) and `content_prompt` (for text/captions)
 /// - Text-only content: Only set `content_prompt`
 /// - Legacy API calls: Only set `prompt` (both tasks will use this)
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
 pub struct AiPubInput {
     /// Video generation prompt - describes the visual content, scenes, transitions, and style
     /// Used by video AI models (e.g., Sora, Veo) to generate video content
@@ -920,21 +920,6 @@ pub struct AiPubInput {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seedance_config: Option<SeedanceVideoConfig>,
-}
-
-impl Default for AiPubInput {
-    fn default() -> Self {
-        Self {
-            video_prompt: String::new(),
-            content_prompt: String::new(),
-            prompt: String::new(),
-            default_images: None,
-            account_images: None,
-            reference_video: None,
-            video_config: None,
-            seedance_config: None,
-        }
-    }
 }
 
 impl AiPubInput {
@@ -1104,20 +1089,6 @@ impl AiPubTaskContent {
 // Default implementations
 // ============================================================
 
-impl Default for CampaignConfig {
-    fn default() -> Self {
-        Self {
-            campaign_id: 0,
-            auto_like: false,
-            auto_follow: false,
-            auto_dm: false,
-            auto_reply_comments: false,
-            auto_reply_post: false,
-            profile_name: None,
-        }
-    }
-}
-
 impl Default for Pagination {
     fn default() -> Self {
         Self {
@@ -1125,16 +1096,6 @@ impl Default for Pagination {
             page: 1,
             per_page: 20,
             total_pages: 0,
-        }
-    }
-}
-
-impl Default for DeviceCommentsResponse {
-    fn default() -> Self {
-        Self {
-            campaign: CampaignConfig::default(),
-            comments: Vec::new(),
-            pagination: Pagination::default(),
         }
     }
 }
@@ -1550,12 +1511,15 @@ mod tests {
             followers_count: 1500,
             following_count: 200,
             posts_count: 42,
+            total_likes: 2500,
             new_followers: 5,
             received_likes: 120,
             received_comments: 8,
             received_dms: 3,
             received_shares: 2,
             received_mentions: 1,
+            received_friend_requests: 0,
+            unread_total: 0,
             collected_at: "2026-04-15T10:00:00Z".to_string(),
             collection_type: "profile".to_string(),
             partial: false,
