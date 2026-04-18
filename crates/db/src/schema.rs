@@ -1689,6 +1689,60 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    gm_patrol_reports (id) {
+        id -> Int4,
+        #[max_length = 36]
+        report_id -> Varchar,
+        #[max_length = 20]
+        report_type -> Varchar,
+        user_id -> Int4,
+        #[max_length = 255]
+        device_id -> Varchar,
+        started_at -> Timestamptz,
+        completed_at -> Timestamptz,
+        total_accounts -> Int4,
+        success_count -> Int4,
+        error_count -> Int4,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_patrol_account_stats (id) {
+        id -> Int4,
+        #[max_length = 36]
+        report_id -> Varchar,
+        #[max_length = 20]
+        report_type -> Varchar,
+        social_account_id -> Int4,
+        #[max_length = 255]
+        device_id -> Varchar,
+        user_id -> Int4,
+        platform_id -> Int4,
+        #[max_length = 50]
+        platform_name -> Varchar,
+        #[max_length = 255]
+        username -> Varchar,
+        followers_count -> Int4,
+        following_count -> Int4,
+        posts_count -> Int4,
+        total_likes -> Int4,
+        new_followers -> Int4,
+        received_likes -> Int4,
+        received_comments -> Int4,
+        received_dms -> Int4,
+        received_shares -> Int4,
+        received_mentions -> Int4,
+        received_friend_requests -> Int4,
+        unread_total -> Int4,
+        partial -> Bool,
+        error -> Nullable<Text>,
+        collected_at -> Timestamptz,
+        created_at -> Timestamptz,
+    }
+}
+
 // drama tables use Int8 user_id vs gm_users Int4 id - cannot use joinable!
 diesel::joinable!(gm_agent_comments -> gm_agent_videos (video_db_id));
 diesel::joinable!(gm_agent_comments -> gm_campaigns (campaign_id));
@@ -1770,6 +1824,7 @@ diesel::joinable!(gm_novel_stage_events -> gm_novel_projects (project_id));
 diesel::joinable!(gm_novel_stage_events -> gm_novel_stage_runs (stage_run_id));
 diesel::joinable!(gm_novel_stage_runs -> gm_novel_jobs (job_id));
 diesel::joinable!(gm_novel_stage_runs -> gm_novel_projects (project_id));
+diesel::joinable!(gm_patrol_reports -> gm_users (user_id));
 diesel::joinable!(gm_pricing_rules -> gm_platforms (platform_id));
 diesel::joinable!(gm_referral_earnings -> gm_referrals (referral_id));
 diesel::joinable!(gm_regions -> gm_platforms (platform_id));
@@ -1856,6 +1911,8 @@ diesel::allow_tables_to_appear_in_same_query!(
     gm_novel_projects,
     gm_novel_stage_events,
     gm_novel_stage_runs,
+    gm_patrol_account_stats,
+    gm_patrol_reports,
     gm_platforms,
     gm_pricing_rules,
     gm_promo_codes,

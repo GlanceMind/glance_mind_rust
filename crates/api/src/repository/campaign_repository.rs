@@ -1,10 +1,11 @@
 use crate::config::database::DBPool;
 use crate::platform_routing::SupportedPlatform;
 use bigdecimal::BigDecimal;
+use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel::result::Error as DieselError;
 use diesel::sql_query;
-use diesel::sql_types::{Bool, Integer, Numeric, Text};
+use diesel::sql_types::{BigInt, Bool, Integer, Nullable, Numeric, Text, Timestamptz};
 use diesel::SelectableHelper;
 use glance_mind_db::entity::campaign::{Campaign, NewCampaign};
 use glance_mind_db::schema::gm_campaigns as campaigns;
@@ -229,6 +230,86 @@ impl CampaignRepository {
         Ok(result)
     }
 
+    /// Aggregate lead metrics (engagement feedback) for a campaign within a time window.
+    ///
+    /// **Branch B implementation** (see Task 0 findings 2026-04-17):
+    /// the patrol writer is not idempotent for `gm_patrol_account_stats`, but the
+    /// upstream-generated `(report_id, social_account_id)` pair is a stable business key.
+    /// We dedup via `DISTINCT ON (report_id, social_account_id)` before summing.
+    ///
+    /// Only `report_type = 'notification'` rows are aggregated (incremental data);
+    /// `'profile'` rows are cumulative snapshots and MUST NOT be summed.
+    ///
+    /// Returns: `(account_count, tracked_account_count, new_followers, dms,
+    ///           friend_requests, mentions, last_updated_at)`
+    ///
+    /// `tracked_account_count` is clamped by `min(tracked_raw, account_count)` at the
+    /// Rust layer to prevent concurrent-read inconsistency (D5).
+    pub async fn aggregate_lead_metrics(
+        &self,
+        campaign_id: i32,
+        window_start: DateTime<Utc>,
+        window_end: DateTime<Utc>,
+    ) -> Result<LeadMetricsAggregate, DieselError> {
+        use glance_mind_db::schema::gm_campaign_accounts;
+
+        let mut conn = self.pool.get().expect("Connection error");
+
+        // Campaign account count (hard-delete only — schema has no deleted_at; see Task 0.7.2)
+        let account_count: i64 = gm_campaign_accounts::table
+            .filter(gm_campaign_accounts::campaign_id.eq(campaign_id))
+            .count()
+            .get_result(&mut conn)?;
+
+        // Branch B: dedup by (report_id, social_account_id) then aggregate
+        let row: LeadMetricsRow = sql_query(
+            r#"
+            WITH dedup AS (
+                SELECT DISTINCT ON (s.report_id, s.social_account_id)
+                    s.social_account_id,
+                    s.new_followers,
+                    s.received_dms,
+                    s.received_friend_requests,
+                    s.received_mentions,
+                    s.collected_at
+                FROM gm_patrol_account_stats s
+                INNER JOIN gm_campaign_accounts ca
+                    ON ca.account_id = s.social_account_id
+                WHERE ca.campaign_id = $1
+                  AND s.report_type = 'notification'
+                  AND s.collected_at >= $2
+                  AND s.collected_at <= $3
+                ORDER BY s.report_id, s.social_account_id, s.id
+            )
+            SELECT
+                COALESCE(SUM(new_followers), 0)::BIGINT           AS new_followers,
+                COALESCE(SUM(received_dms), 0)::BIGINT            AS dms,
+                COALESCE(SUM(received_friend_requests), 0)::BIGINT AS friend_requests,
+                COALESCE(SUM(received_mentions), 0)::BIGINT       AS mentions,
+                COUNT(DISTINCT social_account_id)::BIGINT         AS tracked_raw,
+                MAX(collected_at)                                  AS last_updated_at
+            FROM dedup
+            "#,
+        )
+        .bind::<Integer, _>(campaign_id)
+        .bind::<Timestamptz, _>(window_start)
+        .bind::<Timestamptz, _>(window_end)
+        .get_result(&mut conn)?;
+
+        // D5 fix: clamp tracked to [0, account_count]
+        let tracked_account_count = std::cmp::min(row.tracked_raw, account_count);
+
+        Ok(LeadMetricsAggregate {
+            account_count,
+            tracked_account_count,
+            new_followers: row.new_followers,
+            dms: row.dms,
+            friend_requests: row.friend_requests,
+            mentions: row.mentions,
+            last_updated_at: row.last_updated_at,
+        })
+    }
+
     /// Stop campaign gracefully using stored procedure
     pub async fn stop_gracefully(&self, campaign_id: i32) -> Result<StopCampaignResult, String> {
         let mut conn = self.pool.get().map_err(|e| e.to_string())?;
@@ -265,4 +346,33 @@ pub struct StopCampaignResult {
     pub immediate_stopped: bool,
     #[diesel(sql_type = Numeric)]
     pub refunded_amount: BigDecimal,
+}
+
+/// Raw row returned by the dedup-then-aggregate SQL in `aggregate_lead_metrics`.
+#[derive(Debug, QueryableByName)]
+struct LeadMetricsRow {
+    #[diesel(sql_type = BigInt)]
+    new_followers: i64,
+    #[diesel(sql_type = BigInt)]
+    dms: i64,
+    #[diesel(sql_type = BigInt)]
+    friend_requests: i64,
+    #[diesel(sql_type = BigInt)]
+    mentions: i64,
+    #[diesel(sql_type = BigInt)]
+    tracked_raw: i64,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    last_updated_at: Option<DateTime<Utc>>,
+}
+
+/// Cleaned / clamped aggregate returned to the service layer.
+#[derive(Debug, Clone)]
+pub struct LeadMetricsAggregate {
+    pub account_count: i64,
+    pub tracked_account_count: i64,
+    pub new_followers: i64,
+    pub dms: i64,
+    pub friend_requests: i64,
+    pub mentions: i64,
+    pub last_updated_at: Option<DateTime<Utc>>,
 }

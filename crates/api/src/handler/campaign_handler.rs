@@ -66,3 +66,12 @@ pub async fn get_campaign_logs(
     let logs = campaign_service.get_campaign_logs(id, user.id).await?;
     Ok(api_result!(logs))
 }
+
+pub async fn get_campaign_lead_metrics(
+    Extension(user): Extension<User>,
+    Extension(campaign_service): Extension<CampaignService>,
+    Path(id): Path<i32>,
+) -> Result<ApiResult<impl serde::Serialize>, ApiError> {
+    let metrics = campaign_service.get_lead_metrics(id, user.id).await?;
+    Ok(api_result!(metrics))
+}

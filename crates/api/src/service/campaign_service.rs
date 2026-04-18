@@ -2,9 +2,11 @@ use crate::config::database::{DBPool, Database};
 use crate::dto::campaign_dto::{
     CampaignCreateDto, CampaignLogDto, CampaignReadDto, CampaignStatus, CampaignUpdateDto,
 };
+use crate::dto::campaign_lead_metrics_dto::CampaignLeadMetricsDto;
 use crate::error::{api_error::ApiError, business_error::BusinessError};
 use crate::repository::campaign_repository::CampaignRepository;
 use crate::repository::wallet_repository::WalletRepository;
+use chrono::Utc;
 use diesel::result::Error as DieselError;
 use glance_mind_db::entity::campaign::{Campaign, NewCampaign};
 use std::sync::Arc;
@@ -136,6 +138,69 @@ impl CampaignService {
         let ai_replies = self.repo.get_ai_replies_count(id).await.unwrap_or(0);
 
         Ok(self.to_dto_with_stats(campaign, total_scans, ai_replies))
+    }
+
+    /// Aggregate engagement feedback (lead metrics) for a campaign.
+    ///
+    /// Window:
+    /// - start = `campaign.created_at`
+    /// - end   = `min(now, campaign.end_date)` (end_date is TIMESTAMPTZ — see Task 0.7.4)
+    ///
+    /// Semantics: **associated engagement**, NOT caused engagement. See DTO docs.
+    pub async fn get_lead_metrics(
+        &self,
+        id: i32,
+        user_id: i32,
+    ) -> Result<CampaignLeadMetricsDto, ApiError> {
+        let campaign = self
+            .repo
+            .find_by_id_and_user(id, user_id)
+            .await
+            .map_err(|e| match e {
+                DieselError::NotFound => ApiError::BusinessError(BusinessError::CampaignNotFound),
+                e => {
+                    tracing::error!("Failed to fetch campaign for lead metrics: {:?}", e);
+                    ApiError::InternalServerError("Failed to fetch campaign".to_string())
+                }
+            })?;
+
+        let window_start = campaign.created_at;
+        let now = Utc::now();
+
+        // end_date is TIMESTAMPTZ per Task 0.7.4 — no +1 day adjustment needed.
+        let window_end = match campaign.end_date {
+            Some(end) if end < now => end,
+            _ => now,
+        };
+
+        tracing::debug!(
+            campaign_id = id,
+            window_start = %window_start,
+            window_end = %window_end,
+            "aggregating campaign lead metrics"
+        );
+
+        let agg = self
+            .repo
+            .aggregate_lead_metrics(id, window_start, window_end)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to aggregate lead metrics: {:?}", e);
+                ApiError::InternalServerError("Failed to aggregate lead metrics".to_string())
+            })?;
+
+        Ok(CampaignLeadMetricsDto {
+            campaign_id: id,
+            window_start_at: window_start,
+            window_end_at: window_end,
+            account_count: agg.account_count,
+            tracked_account_count: agg.tracked_account_count,
+            new_followers: agg.new_followers,
+            dms: agg.dms,
+            friend_requests: agg.friend_requests,
+            mentions: agg.mentions,
+            last_updated_at: agg.last_updated_at,
+        })
     }
 
     pub async fn list_campaigns(

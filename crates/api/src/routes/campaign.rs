@@ -19,6 +19,10 @@ pub fn routes() -> Router<UserState> {
         )
         .route("/:id/logs", get(campaign_handler::get_campaign_logs))
         .route(
+            "/:id/lead-metrics",
+            get(campaign_handler::get_campaign_lead_metrics),
+        )
+        .route(
             "/:id/crawler-tasks",
             get(crawler_handler::list_campaign_tasks),
         )

@@ -370,6 +370,20 @@ pub fn routes(
                     )
                     .with_state(user_state.clone()),
             )
+            // Patrol Stats Collection Routes (requires auth)
+            .nest(
+                "/patrol",
+                crate::routes::patrol::routes()
+                    .layer(
+                        ServiceBuilder::new()
+                            .layer(middleware::from_fn_with_state(
+                                user_state.clone(),
+                                auth_middleware::auth,
+                            ))
+                            .layer(axum::Extension(user_state.clone())),
+                    )
+                    .with_state(user_state.clone()),
+            )
             // AI Chat Mode Routes (requires auth)
             .nest(
                 "/ai-chat",

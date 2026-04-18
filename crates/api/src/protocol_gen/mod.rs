@@ -86,7 +86,6 @@ pub enum CommentStatus {
     Pending = 1,
     Processing = 2,
     Completed = 3,
-    Failed = 4,
 }
 
 impl CommentStatus {
@@ -96,7 +95,6 @@ impl CommentStatus {
             Self::Pending => "COMMENT_STATUS_PENDING",
             Self::Processing => "COMMENT_STATUS_PROCESSING",
             Self::Completed => "COMMENT_STATUS_COMPLETED",
-            Self::Failed => "COMMENT_STATUS_FAILED",
         }
     }
 
@@ -106,7 +104,6 @@ impl CommentStatus {
             "COMMENT_STATUS_PENDING" => Some(Self::Pending),
             "COMMENT_STATUS_PROCESSING" => Some(Self::Processing),
             "COMMENT_STATUS_COMPLETED" => Some(Self::Completed),
-            "COMMENT_STATUS_FAILED" => Some(Self::Failed),
             _ => None,
         }
     }
@@ -134,6 +131,9 @@ pub struct CrawlerTaskMeta {
     pub source: String,
     #[serde(default)]
     pub timestamp: f64,
+    /// Campaign ID when the task originates from a campaign dispatch
+    #[serde(default)]
+    pub campaign_id: i32,
 }
 
 /// Task specification
@@ -204,7 +204,7 @@ fn default_platform() -> String {
 }
 
 /// Optimized response structure: campaign config extracted, comments as array
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct DeviceCommentsResponse {
     /// Campaign configuration (returned once)
     pub campaign: CampaignConfig,
@@ -215,7 +215,7 @@ pub struct DeviceCommentsResponse {
 }
 
 /// Campaign auto-interaction configuration
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct CampaignConfig {
     pub campaign_id: i32,
     pub auto_like: bool,
@@ -275,7 +275,7 @@ pub struct CommentData {
     /// Direct URL to the comment (for platforms that support it)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment_url: Option<String>,
-    /// Direct URL to the comment author's profile (for DM direct navigation)
+    /// Direct URL to the comment author's profile page
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment_user_url: Option<String>,
     /// Profile name for task execution
@@ -534,7 +534,6 @@ impl CommentStatus {
             CommentStatus::Pending => "pending",
             CommentStatus::Processing => "processing",
             CommentStatus::Completed => "completed",
-            CommentStatus::Failed => "failed",
         }
     }
 
@@ -543,7 +542,6 @@ impl CommentStatus {
             "pending" => Some(CommentStatus::Pending),
             "processing" => Some(CommentStatus::Processing),
             "completed" => Some(CommentStatus::Completed),
-            "failed" => Some(CommentStatus::Failed),
             "unspecified" => Some(CommentStatus::Unspecified),
             _ => None,
         }
@@ -555,7 +553,6 @@ impl CommentStatus {
             0 => CommentStatus::Pending,
             1 => CommentStatus::Processing,
             2 => CommentStatus::Completed,
-            3 => CommentStatus::Failed,
             _ => CommentStatus::Unspecified,
         }
     }
@@ -566,7 +563,6 @@ impl CommentStatus {
             CommentStatus::Pending => 0,
             CommentStatus::Processing => 1,
             CommentStatus::Completed => 2,
-            CommentStatus::Failed => 3,
             CommentStatus::Unspecified => -1,
         }
     }
@@ -578,7 +574,6 @@ impl CommentStatus {
             "pending" => CommentStatus::Pending,
             "processing" => CommentStatus::Processing,
             "completed" => CommentStatus::Completed,
-            "failed" => CommentStatus::Failed,
             _ => CommentStatus::Unspecified,
         }
     }
@@ -810,6 +805,73 @@ impl AiTaskResult {
     }
 }
 
+/// Reference video configuration for prompt enhancement (mirrors aipub.proto).
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub struct ReferenceVideoConfig {
+    pub video_url: String,
+    pub model_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_duration: Option<i32>,
+}
+
+impl ReferenceVideoConfig {
+    pub fn new(video_url: impl Into<String>, model_name: impl Into<String>) -> Self {
+        Self {
+            video_url: video_url.into(),
+            model_name: model_name.into(),
+            target_duration: None,
+        }
+    }
+}
+
+/// Video generation configuration (duration, orientation, size).
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+pub struct VideoGenerationConfig {
+    #[serde(default)]
+    pub duration: i32,
+    #[serde(default)]
+    pub orientation: String,
+    #[serde(default)]
+    pub size: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aspect_ratio: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<String>,
+}
+
+/// Seedance 2.0 video generation configuration (mirrors aipub.proto).
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+pub struct SeedanceVideoConfig {
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub duration: i32,
+    #[serde(default)]
+    pub quality: String,
+    #[serde(default)]
+    pub aspect_ratio: String,
+    #[serde(default)]
+    pub generate_audio: bool,
+    #[serde(default)]
+    pub return_last_frame: bool,
+    #[serde(default)]
+    pub watermark: bool,
+    #[serde(default)]
+    pub enable_web_search: bool,
+    #[serde(default)]
+    pub image_urls: Vec<String>,
+    #[serde(default)]
+    pub video_urls: Vec<String>,
+    #[serde(default)]
+    pub audio_urls: Vec<String>,
+    #[serde(default)]
+    pub image_roles: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub video_roles: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub audio_roles: std::collections::HashMap<String, String>,
+}
+
 /// AI Publish input configuration.
 /// Used by API to create plans and by Scheduler to generate AI tasks.
 ///
@@ -824,7 +886,7 @@ impl AiTaskResult {
 /// - Video content: Set both `video_prompt` (for video AI) and `content_prompt` (for text/captions)
 /// - Text-only content: Only set `content_prompt`
 /// - Legacy API calls: Only set `prompt` (both tasks will use this)
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct AiPubInput {
     /// Video generation prompt - describes the visual content, scenes, transitions, and style
     /// Used by video AI models (e.g., Sora, Veo) to generate video content
@@ -849,6 +911,30 @@ pub struct AiPubInput {
     /// Overrides default_images for specific accounts
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account_images: Option<std::collections::HashMap<String, AiPubImageConfig>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference_video: Option<ReferenceVideoConfig>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_config: Option<VideoGenerationConfig>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seedance_config: Option<SeedanceVideoConfig>,
+}
+
+impl Default for AiPubInput {
+    fn default() -> Self {
+        Self {
+            video_prompt: String::new(),
+            content_prompt: String::new(),
+            prompt: String::new(),
+            default_images: None,
+            account_images: None,
+            reference_video: None,
+            video_config: None,
+            seedance_config: None,
+        }
+    }
 }
 
 impl AiPubInput {
@@ -860,6 +946,9 @@ impl AiPubInput {
             content_prompt: String::new(),
             default_images: None,
             account_images: None,
+            reference_video: None,
+            video_config: None,
+            seedance_config: None,
         }
     }
 
@@ -874,7 +963,19 @@ impl AiPubInput {
             prompt: String::new(),
             default_images: None,
             account_images: None,
+            reference_video: None,
+            video_config: None,
+            seedance_config: None,
         }
+    }
+
+    pub fn has_reference_video(&self) -> bool {
+        self.reference_video.is_some()
+    }
+
+    pub fn with_reference_video(mut self, reference_video: ReferenceVideoConfig) -> Self {
+        self.reference_video = Some(reference_video);
+        self
     }
 
     /// Get the effective video prompt (falls back to legacy prompt if empty)
@@ -1003,6 +1104,20 @@ impl AiPubTaskContent {
 // Default implementations
 // ============================================================
 
+impl Default for CampaignConfig {
+    fn default() -> Self {
+        Self {
+            campaign_id: 0,
+            auto_like: false,
+            auto_follow: false,
+            auto_dm: false,
+            auto_reply_comments: false,
+            auto_reply_post: false,
+            profile_name: None,
+        }
+    }
+}
+
 impl Default for Pagination {
     fn default() -> Self {
         Self {
@@ -1010,6 +1125,16 @@ impl Default for Pagination {
             page: 1,
             per_page: 20,
             total_pages: 0,
+        }
+    }
+}
+
+impl Default for DeviceCommentsResponse {
+    fn default() -> Self {
+        Self {
+            campaign: CampaignConfig::default(),
+            comments: Vec::new(),
+            pagination: Pagination::default(),
         }
     }
 }
@@ -1044,6 +1169,143 @@ impl DeviceCommentsResponse {
             },
         }
     }
+}
+
+// ============================================================
+// Patrol Group Control Types (from patrol.proto)
+// NATS JetStream message formats for account statistics patrol
+//
+// Streams:   PATROL (subject: patrol.>)
+// Subjects:  patrol.profile.{user_id}, patrol.notif.{user_id}
+// KV:        patrol_latest (key: {user_id}), patrol_config (key: {device_id})
+// ============================================================
+
+/// Platform-agnostic collection result for a single account.
+/// Profile fields are filled by low-frequency collection; notification fields by high-frequency.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+pub struct AccountStats {
+    #[serde(default)]
+    pub followers_count: i32,
+    #[serde(default)]
+    pub following_count: i32,
+    #[serde(default)]
+    pub posts_count: i32,
+    #[serde(default)]
+    pub total_likes: i32,
+    #[serde(default)]
+    pub new_followers: i32,
+    #[serde(default)]
+    pub received_likes: i32,
+    #[serde(default)]
+    pub received_comments: i32,
+    #[serde(default)]
+    pub received_dms: i32,
+    #[serde(default)]
+    pub received_shares: i32,
+    #[serde(default)]
+    pub received_mentions: i32,
+    #[serde(default)]
+    pub received_friend_requests: i32,
+    #[serde(default)]
+    pub collected_at: String,
+    #[serde(default)]
+    pub collection_type: String,
+    #[serde(default)]
+    pub partial: bool,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+    #[serde(default)]
+    pub error: String,
+    #[serde(default)]
+    pub unread_total: i32,
+}
+
+/// Single account patrol snapshot published to NATS.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+pub struct AccountPatrolStats {
+    #[serde(default)]
+    pub social_account_id: i32,
+    #[serde(default)]
+    pub device_id: String,
+    #[serde(default)]
+    pub user_id: i32,
+    #[serde(default)]
+    pub platform_id: i32,
+    #[serde(default)]
+    pub platform_name: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub profile_name: String,
+    #[serde(default)]
+    pub stats: AccountStats,
+    #[serde(default)]
+    pub collected_at: String,
+    #[serde(default)]
+    pub error: String,
+}
+
+/// One collection cycle report.
+/// Published to patrol.profile.{user_id} or patrol.notif.{user_id}.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+pub struct PatrolReport {
+    #[serde(default)]
+    pub report_id: String,
+    #[serde(default)]
+    pub report_type: String,
+    #[serde(default)]
+    pub device_id: String,
+    #[serde(default)]
+    pub user_id: i32,
+    #[serde(default)]
+    pub accounts: Vec<AccountPatrolStats>,
+    #[serde(default)]
+    pub started_at: String,
+    #[serde(default)]
+    pub completed_at: String,
+    #[serde(default)]
+    pub total_accounts: i32,
+    #[serde(default)]
+    pub success_count: i32,
+    #[serde(default)]
+    pub error_count: i32,
+}
+
+/// Patrol configuration stored in NATS KV patrol_config, key: {device_id}.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub struct PatrolConfig {
+    #[serde(default)]
+    pub device_id: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_profile_interval")]
+    pub profile_interval_seconds: i32,
+    #[serde(default = "default_notif_interval")]
+    pub notification_interval_seconds: i32,
+    #[serde(default)]
+    pub platforms: Vec<String>,
+    #[serde(default)]
+    pub updated_at: String,
+}
+
+impl Default for PatrolConfig {
+    fn default() -> Self {
+        Self {
+            device_id: String::new(),
+            enabled: false,
+            profile_interval_seconds: 600,
+            notification_interval_seconds: 180,
+            platforms: Vec::new(),
+            updated_at: String::new(),
+        }
+    }
+}
+
+fn default_profile_interval() -> i32 {
+    600
+}
+fn default_notif_interval() -> i32 {
+    180
 }
 
 #[cfg(test)]
@@ -1141,6 +1403,7 @@ mod tests {
                 task_id: 123,
                 source: "campaign-456".to_string(),
                 timestamp: 1234567890.0,
+                campaign_id: 456,
             }),
             spec: Some(CrawlerTaskSpec {
                 platform: Platform::Tiktok.into(),
@@ -1192,6 +1455,9 @@ mod tests {
                 end_frame_url: Some("https://example.com/end.png".to_string()),
             }),
             account_images: None,
+            reference_video: None,
+            video_config: None,
+            seedance_config: None,
         };
 
         let json = serde_json::to_string_pretty(&input).unwrap();
@@ -1229,6 +1495,9 @@ mod tests {
                 end_frame_url: None,
             }),
             account_images: Some(account_images),
+            reference_video: None,
+            video_config: None,
+            seedance_config: None,
         };
 
         // Account 123 should get its own images
@@ -1267,8 +1536,95 @@ mod tests {
             prompt: "Fallback prompt".to_string(),
             default_images: None,
             account_images: None,
+            reference_video: None,
+            video_config: None,
+            seedance_config: None,
         };
         assert_eq!(mixed_input.get_video_prompt(), "Specific video prompt");
         assert_eq!(mixed_input.get_content_prompt(), "Fallback prompt");
+    }
+
+    #[test]
+    fn test_account_stats_round_trip() {
+        let stats = AccountStats {
+            followers_count: 1500,
+            following_count: 200,
+            posts_count: 42,
+            new_followers: 5,
+            received_likes: 120,
+            received_comments: 8,
+            received_dms: 3,
+            received_shares: 2,
+            received_mentions: 1,
+            collected_at: "2026-04-15T10:00:00Z".to_string(),
+            collection_type: "profile".to_string(),
+            partial: false,
+            warnings: vec![],
+            error: String::new(),
+        };
+        let json = serde_json::to_string(&stats).unwrap();
+        let parsed: AccountStats = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, stats);
+    }
+
+    #[test]
+    fn test_account_stats_defaults() {
+        let json = "{}";
+        let stats: AccountStats = serde_json::from_str(json).unwrap();
+        assert_eq!(stats.followers_count, 0);
+        assert_eq!(stats.collection_type, "");
+        assert!(!stats.partial);
+        assert!(stats.warnings.is_empty());
+    }
+
+    #[test]
+    fn test_patrol_report_round_trip() {
+        let report = PatrolReport {
+            report_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+            report_type: "profile".to_string(),
+            device_id: "dev-001".to_string(),
+            user_id: 42,
+            accounts: vec![AccountPatrolStats {
+                social_account_id: 1,
+                device_id: "dev-001".to_string(),
+                user_id: 42,
+                platform_id: 2,
+                platform_name: "tiktok".to_string(),
+                username: "testuser".to_string(),
+                profile_name: "profile_1".to_string(),
+                stats: AccountStats {
+                    followers_count: 1000,
+                    collection_type: "profile".to_string(),
+                    collected_at: "2026-04-15T10:00:00Z".to_string(),
+                    ..Default::default()
+                },
+                collected_at: "2026-04-15T10:00:00Z".to_string(),
+                error: String::new(),
+            }],
+            started_at: "2026-04-15T10:00:00Z".to_string(),
+            completed_at: "2026-04-15T10:00:05Z".to_string(),
+            total_accounts: 1,
+            success_count: 1,
+            error_count: 0,
+        };
+        let json = serde_json::to_string_pretty(&report).unwrap();
+        let parsed: PatrolReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.report_id, report.report_id);
+        assert_eq!(parsed.accounts.len(), 1);
+        assert_eq!(parsed.accounts[0].stats.followers_count, 1000);
+    }
+
+    #[test]
+    fn test_patrol_config_defaults() {
+        let config = PatrolConfig::default();
+        assert!(!config.enabled);
+        assert_eq!(config.profile_interval_seconds, 600);
+        assert_eq!(config.notification_interval_seconds, 180);
+
+        let json = r#"{"device_id":"d1","enabled":true}"#;
+        let parsed: PatrolConfig = serde_json::from_str(json).unwrap();
+        assert!(parsed.enabled);
+        assert_eq!(parsed.profile_interval_seconds, 600);
+        assert_eq!(parsed.notification_interval_seconds, 180);
     }
 }
