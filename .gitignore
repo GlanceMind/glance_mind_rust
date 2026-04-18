@@ -33,3 +33,6 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+
+# worktrees (superpowers skill)
+.worktrees/
