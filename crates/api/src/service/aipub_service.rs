@@ -191,12 +191,7 @@ impl AipubService {
                 }
                 Some(PlanType::RedditImage) => {
                     // If image_prompt is provided, need image_gen; otherwise just content_gen
-                    let has_ai_image = dto
-                        .ai_input
-                        .as_ref()
-                        .and_then(|ai| ai["reddit_config"]["image_prompt"].as_str())
-                        .is_some_and(|s| !s.is_empty());
-                    if has_ai_image {
+                    if reddit_validation::has_ai_image_prompt(dto.ai_input.as_ref()) {
                         Some(vec![
                             AiTaskType::ContentGen.as_str().to_string(),
                             AiTaskType::ImageGen.as_str().to_string(),
@@ -444,11 +439,8 @@ impl AipubService {
                                 .max(1)
                         });
 
-                    let has_ai_image = plan
-                        .ai_input
-                        .as_ref()
-                        .and_then(|ai| ai["reddit_config"]["image_prompt"].as_str())
-                        .is_some_and(|s| !s.is_empty());
+                    let has_ai_image =
+                        reddit_validation::has_ai_image_prompt(plan.ai_input.as_ref());
                     let image_count = match (v2_per_account, has_ai_image) {
                         (Some(per_acct), _) => per_acct * n,
                         (None, true) => n,

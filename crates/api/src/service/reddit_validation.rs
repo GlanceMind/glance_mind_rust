@@ -103,6 +103,33 @@ fn invalid(msg: String) -> ApiError {
     ApiError::BusinessError(BusinessError::InvalidInput(msg))
 }
 
+/// Typed check: does the plan's `ai_input.reddit_config.image_prompt`
+/// contain a non-empty prompt requesting AI image generation?
+///
+/// Returns false when ai_input is None, reddit_config is missing/malformed,
+/// or image_prompt is absent/empty. Used by RedditImage plan routing:
+///   - `true` -> dispatch content_gen + image_gen tasks (pre-bill both)
+///   - `false` -> content_gen only (images are user-uploaded)
+pub fn has_ai_image_prompt(ai_input: Option<&JsonValue>) -> bool {
+    let Some(ai_input) = ai_input else {
+        return false;
+    };
+    let Some(reddit_config_json) = ai_input.get("reddit_config") else {
+        return false;
+    };
+    if reddit_config_json.is_null() {
+        return false;
+    }
+    let reddit_config: RedditPostConfig = match serde_json::from_value(reddit_config_json.clone()) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    reddit_config
+        .image_prompt
+        .as_deref()
+        .is_some_and(|s| !s.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,6 +227,30 @@ mod tests {
         input["reddit_config"]["reddit_post_type"] = json!("IMAGE");
         input["reddit_config"]["uploaded_image_urls"] = json!(["https://cdn.example/a.jpg"]);
         assert!(validate(PlanType::RedditImage, Some(&input)).is_ok());
+    }
+
+    #[test]
+    fn has_ai_image_prompt_basics() {
+        // None ai_input → false
+        assert!(!has_ai_image_prompt(None));
+        // Missing reddit_config → false
+        let j1 = json!({});
+        assert!(!has_ai_image_prompt(Some(&j1)));
+        // reddit_config null → false
+        let j2 = json!({"reddit_config": null});
+        assert!(!has_ai_image_prompt(Some(&j2)));
+        // Empty image_prompt → false
+        let j3 = json!({"reddit_config": {"subreddit": "x", "image_prompt": ""}});
+        assert!(!has_ai_image_prompt(Some(&j3)));
+        // Missing image_prompt → false
+        let j4 = json!({"reddit_config": {"subreddit": "x"}});
+        assert!(!has_ai_image_prompt(Some(&j4)));
+        // Non-empty image_prompt → true
+        let j5 = json!({"reddit_config": {"subreddit": "x", "image_prompt": "a cat"}});
+        assert!(has_ai_image_prompt(Some(&j5)));
+        // Malformed reddit_config → false (graceful fallback)
+        let j6 = json!({"reddit_config": "not an object"});
+        assert!(!has_ai_image_prompt(Some(&j6)));
     }
 
     #[test]
