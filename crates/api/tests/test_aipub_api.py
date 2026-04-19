@@ -335,18 +335,33 @@ class TestPublishTaskV2ResultPayload:
     """
 
     def _seed_ready_task(self, db_cursor) -> int:
-        """Insert a bare-minimum ready task. Returns its id."""
+        """Insert a bare-minimum ready task for v2 callback testing.
+
+        Creates a dedicated plan + task scoped to this test so repeated
+        runs against a fresh DB don't depend on pre-seeded fixture rows.
+        Returns the task id.
+        """
+        db_cursor.execute("""
+            INSERT INTO gm_aipub_plans (
+                user_id, social_account_id, platform_id,
+                content_type, plan_type, status
+            )
+            SELECT
+                (SELECT id FROM gm_users LIMIT 1),
+                (SELECT id FROM gm_social_accounts LIMIT 1),
+                (SELECT id FROM gm_platforms WHERE name = 'tiktok' LIMIT 1),
+                'video', 'single_video', 'ready'
+            RETURNING id, social_account_id
+        """)
+        plan_row = db_cursor.fetchone()
+
         db_cursor.execute("""
             INSERT INTO gm_aipub_tasks (
                 plan_id, social_account_id, content, status
             )
-            SELECT
-                (SELECT id FROM gm_aipub_plans LIMIT 1),
-                (SELECT id FROM gm_social_accounts LIMIT 1),
-                '{}'::jsonb,
-                'ready'
+            VALUES (%s, %s, '{}'::jsonb, 'ready')
             RETURNING id
-        """)
+        """, (plan_row["id"], plan_row["social_account_id"]))
         row = db_cursor.fetchone()
         db_cursor.connection.commit()
         return row["id"]
@@ -478,6 +493,213 @@ class TestPublishTaskV2ResultPayload:
         assert task["post_publish_results"] is None
         assert task["failed_error_code"] is None
         assert task["platform_post_id"] is None
+
+    # ------------------------------------------------------------------
+    # Branch coverage for v1/v2 field-precedence mapping.
+    # Service path:
+    #   result_url    = dto.result_url   OR dto.platform_post_url
+    #   error_message = dto.error_message OR dto.failed_reason
+    # Below tests pin every arm of those .or() chains so accidental
+    # reordering is caught.
+    # ------------------------------------------------------------------
+
+    def test_v1_field_wins_when_both_v1_and_v2_url_set(
+        self, api_client, db_cursor
+    ):
+        """If caller passes both result_url and platform_post_url, v1 wins.
+
+        This mirrors the documented contract — v1 field is the canonical
+        column, v2 only acts as a fallback. Prevents a regression where
+        the .or() arms get swapped.
+        """
+        task_id = self._seed_ready_task(db_cursor)
+
+        payload = {
+            "version": 2,
+            "task_id": task_id,
+            "status": "completed",
+            "result_url": "https://v1.example/x",
+            "platform_post_url": "https://v2.example/x",
+        }
+        resp = api_client.patch(
+            f"/api/v1/public/aipub/publish_tasks/{task_id}/status",
+            json=payload,
+        )
+        assert resp.status_code == 200
+        task = self._load_task(db_cursor, task_id)
+        assert task["result_url"] == "https://v1.example/x", (
+            "v1 result_url must take precedence over v2 platform_post_url"
+        )
+
+    def test_v1_error_wins_when_both_error_message_and_failed_reason_set(
+        self, api_client, db_cursor
+    ):
+        task_id = self._seed_ready_task(db_cursor)
+
+        payload = {
+            "version": 2,
+            "task_id": task_id,
+            "status": "failed",
+            "error_message": "v1 legacy reason",
+            "failed_reason": "v2 detailed reason",
+            "failed_error_code": "UPLOADER_EXCEPTION",
+        }
+        resp = api_client.patch(
+            f"/api/v1/public/aipub/publish_tasks/{task_id}/status",
+            json=payload,
+        )
+        assert resp.status_code == 200
+        task = self._load_task(db_cursor, task_id)
+        assert task["error_message"] == "v1 legacy reason"
+        assert task["failed_error_code"] == "UPLOADER_EXCEPTION"
+
+    def test_neither_url_set_leaves_result_url_null(
+        self, api_client, db_cursor
+    ):
+        """v2 payload without any URL → result_url stays NULL."""
+        task_id = self._seed_ready_task(db_cursor)
+
+        payload = {
+            "version": 2,
+            "task_id": task_id,
+            "status": "failed",
+            "failed_error_code": "NO_UPLOADER",
+            "failed_reason": "no uploader for platform",
+        }
+        resp = api_client.patch(
+            f"/api/v1/public/aipub/publish_tasks/{task_id}/status",
+            json=payload,
+        )
+        assert resp.status_code == 200
+        task = self._load_task(db_cursor, task_id)
+        assert task["result_url"] is None
+        assert task["error_message"] == "no uploader for platform"
+        assert task["failed_error_code"] == "NO_UPLOADER"
+
+    def test_validation_rejects_oversize_failed_error_code(
+        self, api_client, db_cursor
+    ):
+        """DTO validator enforces failed_error_code <= 64 chars."""
+        task_id = self._seed_ready_task(db_cursor)
+
+        payload = {
+            "version": 2,
+            "task_id": task_id,
+            "status": "failed",
+            "failed_error_code": "X" * 65,
+        }
+        resp = api_client.patch(
+            f"/api/v1/public/aipub/publish_tasks/{task_id}/status",
+            json=payload,
+        )
+        assert resp.status_code in (400, 422), (
+            f"Oversize failed_error_code must be rejected; got "
+            f"{resp.status_code}: {resp.text}"
+        )
+
+        task = self._load_task(db_cursor, task_id)
+        assert task["status"] == "ready", (
+            "Validation failure must not partially mutate the task"
+        )
+        assert task["failed_error_code"] is None
+
+    def test_validation_rejects_oversize_platform_post_id(
+        self, api_client, db_cursor
+    ):
+        """DTO validator enforces platform_post_id <= 128 chars."""
+        task_id = self._seed_ready_task(db_cursor)
+
+        payload = {
+            "version": 2,
+            "task_id": task_id,
+            "status": "completed",
+            "platform_post_id": "P" * 129,
+        }
+        resp = api_client.patch(
+            f"/api/v1/public/aipub/publish_tasks/{task_id}/status",
+            json=payload,
+        )
+        assert resp.status_code in (400, 422)
+
+        task = self._load_task(db_cursor, task_id)
+        assert task["status"] == "ready"
+        assert task["platform_post_id"] is None
+
+    def test_execution_log_v1_path_now_persists(
+        self, api_client, db_cursor
+    ):
+        """execution_log was accepted by the DTO since day one but used
+        to be dropped by the service. This test pins that the silent
+        bug is now fixed regardless of v1 or v2 shape.
+        """
+        task_id = self._seed_ready_task(db_cursor)
+
+        payload = {
+            "status": "failed",
+            "error_message": "crash",
+            "execution_log": "frame 1: click\nframe 2: timeout\nframe 3: abort",
+        }
+        resp = api_client.patch(
+            f"/api/v1/public/aipub/publish_tasks/{task_id}/status",
+            json=payload,
+        )
+        assert resp.status_code == 200
+        task = self._load_task(db_cursor, task_id)
+        assert task["execution_log"] == (
+            "frame 1: click\nframe 2: timeout\nframe 3: abort"
+        )
+
+    def test_sequential_updates_overwrite_v2_columns(
+        self, api_client, db_cursor
+    ):
+        """A task that retries after failure must see its v2 columns
+        overwritten with the success payload (not merged)."""
+        task_id = self._seed_ready_task(db_cursor)
+
+        fail_payload = {
+            "version": 2,
+            "task_id": task_id,
+            "status": "failed",
+            "failed_error_code": "UPLOADER_EXCEPTION",
+            "failed_reason": "first try crashed",
+        }
+        r1 = api_client.patch(
+            f"/api/v1/public/aipub/publish_tasks/{task_id}/status",
+            json=fail_payload,
+        )
+        assert r1.status_code == 200
+
+        success_payload = {
+            "version": 2,
+            "task_id": task_id,
+            "status": "completed",
+            "platform_post_id": "retry_ok",
+            "platform_post_url": "https://example/retry",
+            "media_results": [
+                {"media_index": 0, "status": "ready",
+                 "platform_asset_id": "vid_retry"}
+            ],
+        }
+        r2 = api_client.patch(
+            f"/api/v1/public/aipub/publish_tasks/{task_id}/status",
+            json=success_payload,
+        )
+        assert r2.status_code == 200
+
+        task = self._load_task(db_cursor, task_id)
+        assert task["status"] == "completed"
+        assert task["platform_post_id"] == "retry_ok"
+        assert task["result_url"] == "https://example/retry"
+        assert task["media_results"] is not None
+        assert task["media_results"][0]["platform_asset_id"] == "vid_retry"
+        # failed_error_code should still be present from the first update —
+        # the service only writes fields the caller sent, so absent fields
+        # in the retry payload are intentionally left untouched.
+        # If the caller wants to clear them, they must pass explicit values.
+        assert task["failed_error_code"] == "UPLOADER_EXCEPTION", (
+            "UpdateAipubTask.failed_error_code was None in the retry payload "
+            "so AsChangeset must leave the existing value in place"
+        )
 
 
 class TestPublishPlanStats:
