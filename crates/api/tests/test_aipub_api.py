@@ -307,6 +307,179 @@ class TestPublishTaskPublicAPI:
             print(f"\nUpdated task status: {data}")
 
 
+class TestPublishTaskV2ResultPayload:
+    """Phase 4 Round 3 Task 3 — verify UnifiedPublishResult (v2) payload
+    fields are persisted to new dedicated columns on gm_aipub_tasks.
+
+    The Round 2 worker wire shape is:
+
+        {
+          "version": 2,
+          "task_id": 42,
+          "status": "completed",
+          "platform_post_id": "t3_abc",
+          "platform_post_url": "https://x/p",
+          "media_results": [...],
+          "post_publish_results": [...],
+          "failed_error_code": "UPLOADER_EXCEPTION",
+          "failed_reason": "uploader blew up",
+          "execution_log": "...",
+          ...
+        }
+
+    Before Task 3 the API side only knew about
+    status/result_url/error_message/execution_log (and even execution_log
+    was accepted by the DTO but dropped in the service). All v2 fields
+    were silently ignored by serde. These tests pin the new behaviour:
+    every v2 field lands in its own DB column.
+    """
+
+    def _seed_ready_task(self, db_cursor) -> int:
+        """Insert a bare-minimum ready task. Returns its id."""
+        db_cursor.execute("""
+            INSERT INTO gm_aipub_tasks (
+                plan_id, social_account_id, content, status
+            )
+            SELECT
+                (SELECT id FROM gm_aipub_plans LIMIT 1),
+                (SELECT id FROM gm_social_accounts LIMIT 1),
+                '{}'::jsonb,
+                'ready'
+            RETURNING id
+        """)
+        row = db_cursor.fetchone()
+        db_cursor.connection.commit()
+        return row["id"]
+
+    def _load_task(self, db_cursor, task_id: int) -> dict:
+        db_cursor.execute("""
+            SELECT id, status, result_url, error_message, execution_log,
+                   media_results, post_publish_results,
+                   failed_error_code, platform_post_id
+            FROM gm_aipub_tasks
+            WHERE id = %s
+        """, (task_id,))
+        return db_cursor.fetchone()
+
+    def test_v2_success_payload_lands_all_fields(
+        self, api_client, db_cursor
+    ):
+        """v2 completed payload → every v2 field present in DB."""
+        task_id = self._seed_ready_task(db_cursor)
+
+        payload = {
+            "version": 2,
+            "task_id": task_id,
+            "status": "completed",
+            "platform_post_id": "t3_abc123",
+            "platform_post_url": "https://example.com/posts/t3_abc123",
+            "media_results": [
+                {
+                    "media_index": 0,
+                    "status": "ready",
+                    "platform_asset_id": "vid_987",
+                }
+            ],
+            "post_publish_results": [
+                {
+                    "action_kind": "add_comment",
+                    "succeeded": True,
+                    "platform_action_id": "cmt_1",
+                }
+            ],
+            "failed_error_code": None,
+            "failed_reason": None,
+            "execution_log": "ok",
+        }
+
+        resp = api_client.patch(
+            f"/api/v1/public/aipub/publish_tasks/{task_id}/status",
+            json=payload,
+        )
+        assert resp.status_code == 200, (
+            f"Expected 200, got {resp.status_code}: {resp.text}"
+        )
+
+        task = self._load_task(db_cursor, task_id)
+        assert task["status"] == "completed"
+        assert task["result_url"] == "https://example.com/posts/t3_abc123", (
+            "platform_post_url must fall back into result_url column"
+        )
+        assert task["platform_post_id"] == "t3_abc123"
+        assert task["media_results"] is not None, (
+            "media_results column must exist and be populated"
+        )
+        assert isinstance(task["media_results"], list)
+        assert task["media_results"][0]["platform_asset_id"] == "vid_987"
+        assert task["post_publish_results"] is not None
+        assert task["post_publish_results"][0]["action_kind"] == "add_comment"
+        assert task["failed_error_code"] is None
+        assert task["execution_log"] == "ok"
+
+    def test_v2_failure_payload_preserves_error_code(
+        self, api_client, db_cursor
+    ):
+        """v2 failed payload → failed_error_code + failed_reason mapped."""
+        task_id = self._seed_ready_task(db_cursor)
+
+        payload = {
+            "version": 2,
+            "task_id": task_id,
+            "status": "failed",
+            "failed_error_code": "UPLOADER_EXCEPTION",
+            "failed_reason": "playwright crashed",
+            "media_results": [
+                {
+                    "media_index": 0,
+                    "status": "failed",
+                    "failed_reason": "timeout",
+                }
+            ],
+        }
+
+        resp = api_client.patch(
+            f"/api/v1/public/aipub/publish_tasks/{task_id}/status",
+            json=payload,
+        )
+        assert resp.status_code == 200, (
+            f"Expected 200, got {resp.status_code}: {resp.text}"
+        )
+
+        task = self._load_task(db_cursor, task_id)
+        assert task["status"] == "failed"
+        assert task["failed_error_code"] == "UPLOADER_EXCEPTION"
+        assert task["error_message"] == "playwright crashed", (
+            "failed_reason must fall back into error_message column"
+        )
+        assert task["media_results"][0]["status"] == "failed"
+
+    def test_v1_payload_backward_compat(self, api_client, db_cursor):
+        """Legacy v1 payload (no version key) still works unchanged."""
+        task_id = self._seed_ready_task(db_cursor)
+
+        payload = {
+            "status": "completed",
+            "result_url": "https://example.com/legacy",
+            "error_message": None,
+        }
+
+        resp = api_client.patch(
+            f"/api/v1/public/aipub/publish_tasks/{task_id}/status",
+            json=payload,
+        )
+        assert resp.status_code == 200, (
+            f"Expected 200, got {resp.status_code}: {resp.text}"
+        )
+
+        task = self._load_task(db_cursor, task_id)
+        assert task["status"] == "completed"
+        assert task["result_url"] == "https://example.com/legacy"
+        assert task["media_results"] is None
+        assert task["post_publish_results"] is None
+        assert task["failed_error_code"] is None
+        assert task["platform_post_id"] is None
+
+
 class TestPublishPlanStats:
     """Tests for plan statistics endpoint."""
 
