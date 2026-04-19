@@ -8,7 +8,7 @@ use crate::error::api_error::ApiError;
 use crate::error::business_error::BusinessError;
 use crate::error::db_error::DbError;
 use crate::repository::aipub_repository::AipubRepository;
-use crate::service::seedance_validation;
+use crate::service::{image_generation_validation, seedance_validation};
 use chrono::Utc;
 use diesel::result::Error as DieselError;
 use glance_mind_db::entity::aipub::{
@@ -60,6 +60,12 @@ impl AipubService {
                 ))),
                 _ => Err(ApiError::from(DbError::SomethingWentWrong(err.to_string()))),
             };
+        }
+
+        // Validate ai_input.image_generations[] (V2 ImageGenerationSpec).
+        // No-op when the field is absent (legacy V1 plans).
+        if let Some(ai_input) = dto.ai_input.as_ref() {
+            image_generation_validation::validate(ai_input)?;
         }
 
         // Validate target based on plan_type
@@ -454,19 +460,45 @@ impl AipubService {
                     )
                 }
                 Some(PlanType::RedditImage) => {
-                    // 1 chat + N images (one per account, if AI-generated)
+                    // 1 chat + N images (one per account, if AI-generated).
+                    //
+                    // V2 path: when ai_input.image_generations[] is set, the
+                    // total image count = sum(spec.count) per account so
+                    // multi-image carousels pre-bill correctly. Otherwise
+                    // fall back to legacy "1 image per account" rule.
                     let account_ids = self
                         .repo
                         .get_group_account_ids(plan.group_id.unwrap_or(0))
                         .await
                         .unwrap_or_default();
                     let n = account_ids.len() as i32;
+
+                    let v2_per_account = plan
+                        .ai_input
+                        .as_ref()
+                        .and_then(|ai| ai.get("image_generations"))
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .map(|spec| {
+                                    let c = spec.get("count").and_then(|v| v.as_u64()).unwrap_or(1)
+                                        as i32;
+                                    c.max(1)
+                                })
+                                .sum::<i32>()
+                                .max(1)
+                        });
+
                     let has_ai_image = plan
                         .ai_input
                         .as_ref()
                         .and_then(|ai| ai["reddit_config"]["image_prompt"].as_str())
                         .is_some_and(|s| !s.is_empty());
-                    let image_count = if has_ai_image { n } else { 0 };
+                    let image_count = match (v2_per_account, has_ai_image) {
+                        (Some(per_acct), _) => per_acct * n,
+                        (None, true) => n,
+                        (None, false) => 0,
+                    };
                     if n > 0 {
                         Some(
                             self.repo

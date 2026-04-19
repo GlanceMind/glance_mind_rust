@@ -38,6 +38,9 @@ tracing-subscriber.workspace = true
 # Error handling
 thiserror.workspace = true
 
+# Regex (used by image_generation_validation)
+regex = "1"
+
 # Async
 async-trait.workspace = true
 

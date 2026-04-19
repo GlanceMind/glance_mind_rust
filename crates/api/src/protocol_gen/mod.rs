@@ -602,6 +602,95 @@ pub struct AiPubImageConfig {
     pub end_frame_url: Option<String>,
 }
 
+/// v2 ImageGenerationSpec — describes ONE image generation job in
+/// `UnifiedAiPubInput.image_generations[]` (or, for back-compat,
+/// `gm_aipub_plans.ai_input.image_generations[]` JSONB).
+///
+/// Provider routing:
+///   - `model.starts_with("flux-kontext-")` -> FluxClient
+///   - `model.starts_with("seedream-")`     -> SeedreamClient
+///   - else / "gpt-4o-image"                -> LegacyOpenAIClient
+///   - `provider_hint` overrides the prefix-based routing.
+///
+/// See `docs/image-provider-param-matrix.md` for per-field provider
+/// HTTP mapping.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+pub struct ImageGenerationSpec {
+    /// Prompt(s). v2.0: callers pass length 1; longer is reserved for
+    /// per-variation prompts.
+    #[serde(default)]
+    pub prompts: Vec<String>,
+
+    /// Number of images to produce for this spec. Default 1; range 1..=10.
+    #[serde(default)]
+    pub count: u32,
+
+    /// Specific image model id (e.g. "flux-kontext-pro",
+    /// "seedream-4-5-251128", "gpt-4o-image").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+
+    /// Output dimensions. 0 = use model default. SeeDream / Nano Banana
+    /// honor explicit pixel sizes; Flux ignores and uses aspect_ratio.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub width_px: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub height_px: u32,
+
+    /// What role the produced images should fill in the publish payload.
+    /// Stored as int32 (matches MediaRole enum on the proto side).
+    #[serde(default)]
+    pub role_hint: i32,
+
+    /// Reference images for image-to-image / style transfer / edit.
+    #[serde(default)]
+    pub reference_image_urls: Vec<String>,
+
+    /// Aspect ratio "W:H". Primary knob for Flux; SeeDream also accepts
+    /// common ratios. If both this and width_px/height_px are set,
+    /// explicit pixels win (validator must reject conflicting input).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aspect_ratio: Option<String>,
+
+    /// "jpeg" | "png" | "webp". Honored by Flux only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_format: Option<String>,
+
+    /// Provider-specific knobs that haven't graduated to typed fields.
+    /// See matrix doc for whitelisted keys per provider. Unknown keys
+    /// are forwarded as-is by the client; validator enforces a global
+    /// blacklist (api_key/authorization/base_url/n/response_format).
+    #[serde(default)]
+    pub extras: std::collections::HashMap<String, String>,
+
+    /// Random seed (Flux only; SeeDream silently ignores).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
+
+    /// Watermark output (SeeDream only). Defaults to false when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub watermark: Option<bool>,
+
+    /// Force routing to "flux" | "seedream" | "openai".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_hint: Option<String>,
+
+    /// "text_to_image" | "image_edit". When unset, scheduler infers
+    /// from `reference_image_urls.is_empty()`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+
+    /// Flux content safety strictness, 0..=6 (0 strictest). SeeDream
+    /// ignores.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub safety_tolerance: Option<u32>,
+}
+
+#[allow(dead_code)]
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+
 // ============================================================
 // AI Task Input/Result Protocol
 // Structure for gm_aipub_ai_tasks.input and result fields
@@ -1511,7 +1600,6 @@ mod tests {
             followers_count: 1500,
             following_count: 200,
             posts_count: 42,
-            total_likes: 2500,
             new_followers: 5,
             received_likes: 120,
             received_comments: 8,
@@ -1519,6 +1607,7 @@ mod tests {
             received_shares: 2,
             received_mentions: 1,
             received_friend_requests: 0,
+            total_likes: 0,
             unread_total: 0,
             collected_at: "2026-04-15T10:00:00Z".to_string(),
             collection_type: "profile".to_string(),
