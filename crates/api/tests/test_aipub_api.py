@@ -1050,6 +1050,7 @@ class TestPlanPublishBehavior:
             "social_account_id": account_id,
             "platform_id": PLATFORM_FACEBOOK,
             "content_type": "post",
+            "plan_type": "direct_publish",
             "content": {"title": "T", "description": "D"},
             "behavior": self._full_behavior(),
         }
@@ -1086,6 +1087,7 @@ class TestPlanPublishBehavior:
             "social_account_id": account_id,
             "platform_id": PLATFORM_FACEBOOK,
             "content_type": "post",
+            "plan_type": "direct_publish",
             "content": {"title": "T", "description": "D"},
         }
         resp = auth_client.post("/api/v1/publish_plans", json=payload)
@@ -1114,6 +1116,7 @@ class TestPlanPublishBehavior:
             "social_account_id": account_id,
             "platform_id": PLATFORM_FACEBOOK,
             "content_type": "post",
+            "plan_type": "direct_publish",
             "content": {"title": "T"},
             "behavior": {
                 "visibility": "private",
@@ -1147,6 +1150,7 @@ class TestPlanPublishBehavior:
                 "social_account_id": account_id,
                 "platform_id": PLATFORM_FACEBOOK,
                 "content_type": "post",
+                "plan_type": "direct_publish",
                 "content": {"title": "T"},
                 "behavior": {"visibility": "private", "is_nsfw": False},
             },
@@ -1192,6 +1196,7 @@ class TestPlanPublishBehavior:
             "social_account_id": account_id,
             "platform_id": PLATFORM_FACEBOOK,
             "content_type": "post",
+            "plan_type": "direct_publish",
             "content": {"title": "T", "description": "D"},
             "behavior": behavior,
         }
@@ -1233,6 +1238,7 @@ class TestPlanPublishBehavior:
             "social_account_id": account_id,
             "platform_id": PLATFORM_FACEBOOK,
             "content_type": "post",
+            "plan_type": "direct_publish",
             "content": {"title": "T", "description": "D"},
         }
         resp = auth_client.post("/api/v1/publish_plans", json=payload)

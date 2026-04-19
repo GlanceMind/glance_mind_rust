@@ -33,6 +33,10 @@ pub struct CreatePlanDto {
     pub chat_ai_model_id: Option<i32>,
     pub video_ai_model_id: Option<i32>,
     pub image_ai_model_id: Option<i32>,
+    /// Phase 4 R3 Task 7a — plan-level PublishBehavior (proto §960).
+    /// Validated by `behavior_validation::validate_behavior` before
+    /// being persisted. Merged into task.content.behavior at derivation.
+    pub behavior: Option<JsonValue>,
 }
 
 /// Plan response DTO
@@ -60,6 +64,8 @@ pub struct PlanResponseDto {
     pub ai_service_config: Option<JsonValue>,
     pub ai_input: Option<JsonValue>,
     pub content: Option<JsonValue>,
+    /// Phase 4 R3 Task 7a — plan-level PublishBehavior (proto §960).
+    pub behavior: Option<JsonValue>,
     pub status: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: Option<DateTime<Utc>>,
@@ -112,6 +118,11 @@ pub struct UpdatePlanDto {
     pub video_ai_model_id: Option<i32>,
     pub image_ai_model_id: Option<i32>,
     pub ai_input: Option<JsonValue>,
+    /// Phase 4 R3 Task 7a — plan-level PublishBehavior (proto §960).
+    /// When present in the request, replaces the existing behavior
+    /// wholesale (no JSON merge — clients should resend the full
+    /// behavior dict).
+    pub behavior: Option<JsonValue>,
 }
 
 /// Retry plan request
@@ -155,6 +166,7 @@ impl From<glance_mind_db::entity::aipub::AipubPlan> for PlanResponseDto {
             ai_service_config: plan.ai_service_config,
             ai_input: plan.ai_input,
             content: plan.content,
+            behavior: plan.behavior,
             status: plan.status,
             created_at: plan.created_at,
             updated_at: plan.updated_at,

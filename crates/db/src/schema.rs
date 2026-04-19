@@ -632,6 +632,7 @@ diesel::table! {
         frozen_cost -> Numeric,
         consumed_cost -> Numeric,
         frozen_at -> Nullable<Timestamptz>,
+        behavior -> Nullable<Jsonb>,
     }
 }
 
