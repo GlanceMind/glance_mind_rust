@@ -356,6 +356,16 @@ pub struct AipubTask {
     pub ai_task_id: Option<i32>,
     pub video_stage_started_at: Option<DateTime<Utc>>,
     pub video_ai_task_id: Option<i32>,
+    /// Phase 4 Round 3 — v2 UnifiedPublishResult.media_results[] snapshot
+    pub media_results: Option<JsonValue>,
+    /// Phase 4 Round 3 — v2 UnifiedPublishResult.post_publish_results[] snapshot
+    pub post_publish_results: Option<JsonValue>,
+    /// Phase 4 Round 3 — machine-readable failure class (e.g. UPLOADER_EXCEPTION)
+    pub failed_error_code: Option<String>,
+    /// Phase 4 Round 3 — execution trace attached by the executor
+    pub execution_log: Option<String>,
+    /// Phase 4 Round 3 — platform-assigned post id (TikTok video_id, Reddit t3_xxx, …)
+    pub platform_post_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Insertable)]
@@ -378,6 +388,12 @@ pub struct UpdateAipubTask {
     pub retry_count: Option<i32>,
     pub updated_at: Option<DateTime<Utc>>,
     pub published_at: Option<DateTime<Utc>>,
+    /// Phase 4 Round 3 — v2 UnifiedPublishResult landing columns.
+    pub media_results: Option<JsonValue>,
+    pub post_publish_results: Option<JsonValue>,
+    pub failed_error_code: Option<String>,
+    pub execution_log: Option<String>,
+    pub platform_post_id: Option<String>,
 }
 
 /// Publish Task Status enum

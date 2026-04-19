@@ -653,6 +653,13 @@ diesel::table! {
         published_at -> Nullable<Timestamptz>,
         video_stage_started_at -> Nullable<Timestamptz>,
         video_ai_task_id -> Nullable<Int4>,
+        media_results -> Nullable<Jsonb>,
+        post_publish_results -> Nullable<Jsonb>,
+        #[max_length = 64]
+        failed_error_code -> Nullable<Varchar>,
+        execution_log -> Nullable<Text>,
+        #[max_length = 128]
+        platform_post_id -> Nullable<Varchar>,
     }
 }
 
