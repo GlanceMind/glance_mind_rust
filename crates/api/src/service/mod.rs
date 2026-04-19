@@ -18,6 +18,7 @@ pub mod notification_service;
 pub mod oss_service;
 pub mod platform_service;
 pub mod promo_code_service;
+pub mod reddit_validation;
 pub mod referral_service;
 pub mod seedance_validation;
 pub mod social_account_service;

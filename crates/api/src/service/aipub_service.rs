@@ -8,7 +8,7 @@ use crate::error::api_error::ApiError;
 use crate::error::business_error::BusinessError;
 use crate::error::db_error::DbError;
 use crate::repository::aipub_repository::AipubRepository;
-use crate::service::{image_generation_validation, seedance_validation};
+use crate::service::{image_generation_validation, reddit_validation, seedance_validation};
 use chrono::Utc;
 use diesel::result::Error as DieselError;
 use glance_mind_db::entity::aipub::{
@@ -131,55 +131,10 @@ impl AipubService {
                         format!("{} plan requires group_id", plan_type),
                     )));
                 }
-                // Validate reddit_config in ai_input
-                if let Some(ref ai_input) = dto.ai_input {
-                    let reddit_config = &ai_input["reddit_config"];
-                    if reddit_config.is_null() {
-                        return Err(ApiError::BusinessError(BusinessError::InvalidInput(
-                            format!("{} plan requires ai_input.reddit_config", plan_type),
-                        )));
-                    }
-                    // subreddit is required for all Reddit types
-                    if reddit_config["subreddit"].as_str().unwrap_or("").is_empty() {
-                        return Err(ApiError::BusinessError(BusinessError::InvalidInput(
-                            "Reddit plan requires reddit_config.subreddit".to_string(),
-                        )));
-                    }
-                    // reddit_link requires link_url
-                    if pt == PlanType::RedditLink
-                        && reddit_config["link_url"].as_str().unwrap_or("").is_empty()
-                    {
-                        return Err(ApiError::BusinessError(BusinessError::InvalidInput(
-                            "reddit_link plan requires reddit_config.link_url".to_string(),
-                        )));
-                    }
-                    // reddit_image requires either image_prompt (AI gen) or uploaded_image_urls
-                    if pt == PlanType::RedditImage {
-                        let has_image_prompt = reddit_config["image_prompt"]
-                            .as_str()
-                            .is_some_and(|s| !s.is_empty());
-                        let has_uploaded = reddit_config["uploaded_image_urls"]
-                            .as_array()
-                            .is_some_and(|a| !a.is_empty());
-                        if !has_image_prompt && !has_uploaded {
-                            return Err(ApiError::BusinessError(BusinessError::InvalidInput(
-                                "reddit_image plan requires reddit_config.image_prompt or reddit_config.uploaded_image_urls".to_string(),
-                            )));
-                        }
-                    }
-                } else {
-                    return Err(ApiError::BusinessError(BusinessError::InvalidInput(
-                        format!("{} plan requires ai_input with reddit_config", plan_type),
-                    )));
-                }
-                // content_prompt is required for all Reddit types
-                if let Some(ref ai_input) = dto.ai_input {
-                    if ai_input["content_prompt"].as_str().unwrap_or("").is_empty() {
-                        return Err(ApiError::BusinessError(BusinessError::InvalidInput(
-                            "Reddit plan requires ai_input.content_prompt".to_string(),
-                        )));
-                    }
-                }
+                // Typed Reddit validation (moved to dedicated module to
+                // drop inline string-key JSON indexing). Handles subreddit /
+                // link_url / image_prompt / uploaded_image_urls + content_prompt.
+                reddit_validation::validate(pt, dto.ai_input.as_ref())?;
             }
             Some(PlanType::DirectPublish) => {
                 if dto.social_account_id.is_none() {
