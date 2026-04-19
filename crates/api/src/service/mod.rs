@@ -9,6 +9,7 @@ pub mod config_service;
 pub mod crawler_service;
 pub(crate) mod dashboard_service;
 pub mod email_verification_service;
+pub mod image_generation_validation;
 pub mod jimeng_client;
 pub mod laozhang_client;
 pub mod material_folder_service;
