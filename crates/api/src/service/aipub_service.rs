@@ -1374,16 +1374,29 @@ impl AipubService {
             })?;
 
         let now = Utc::now();
+
+        // Phase 4 Round 3 Task 3 — v1/v2 field mapping. v2 UnifiedPublishResult
+        // carries platform_post_url / failed_reason at the top level; when the
+        // caller sent only the v2 shape these must fall through to the v1
+        // result_url / error_message columns so downstream queries keep working.
+        let result_url = dto.result_url.or(dto.platform_post_url);
+        let error_message = dto.error_message.or(dto.failed_reason);
+
         let update = UpdateAipubTask {
             status: Some(dto.status.clone()),
-            result_url: dto.result_url,
-            error_message: dto.error_message,
+            result_url,
+            error_message,
             updated_at: Some(now),
             published_at: if dto.status == PublishTaskStatus::Completed.as_str() {
                 Some(now)
             } else {
                 None
             },
+            media_results: dto.media_results,
+            post_publish_results: dto.post_publish_results,
+            failed_error_code: dto.failed_error_code,
+            execution_log: dto.execution_log,
+            platform_post_id: dto.platform_post_id,
             ..Default::default()
         };
 

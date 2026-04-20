@@ -323,7 +323,18 @@ fn default_limit() -> i64 {
     10
 }
 
-/// Public: Update publish task status request
+/// Public: Update publish task status request.
+///
+/// Accepts both the legacy v1 `ExecutorTaskStatusUpdate` shape and the v2
+/// `UnifiedPublishResult` shape emitted by the Round 2 worker. All v2
+/// fields are `Option<_>` so v1 payloads continue to deserialize cleanly.
+///
+/// Field mapping when the v2 shape is present (see
+/// `aipub_service::update_publish_task_status`):
+///   * `platform_post_url` → DB `result_url` (fallback if top-level not set)
+///   * `failed_reason`     → DB `error_message` (fallback)
+///   * `media_results`, `post_publish_results`, `failed_error_code`,
+///     `execution_log`, `platform_post_id` land in their own columns.
 #[derive(Debug, Deserialize, Validate)]
 pub struct UpdatePublishTaskStatusDto {
     #[validate(length(min = 1, max = 20))]
@@ -331,6 +342,22 @@ pub struct UpdatePublishTaskStatusDto {
     pub result_url: Option<String>,
     pub error_message: Option<String>,
     pub execution_log: Option<String>,
+    #[serde(default)]
+    pub version: Option<i32>,
+    #[serde(default)]
+    pub media_results: Option<JsonValue>,
+    #[serde(default)]
+    pub post_publish_results: Option<JsonValue>,
+    #[serde(default)]
+    #[validate(length(max = 64))]
+    pub failed_error_code: Option<String>,
+    #[serde(default)]
+    pub failed_reason: Option<String>,
+    #[serde(default)]
+    #[validate(length(max = 128))]
+    pub platform_post_id: Option<String>,
+    #[serde(default)]
+    pub platform_post_url: Option<String>,
 }
 
 /// Public: Task heartbeat request
