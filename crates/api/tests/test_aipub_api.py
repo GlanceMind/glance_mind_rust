@@ -2027,5 +2027,335 @@ class TestPlanPublishBehaviorAcrossPlanTypes:
         assert row["behavior"]["extras"]["plan_type_marker"] == "task7a-coverage"
 
 
+# =============================================================================
+# Phase 4 Round 3 Task 8 — PublishSchedule persistence + propagation
+# =============================================================================
+
+
+class TestPlanPublishSchedule:
+    """API must accept, persist and propagate PublishSchedule on plans.
+
+    PublishSchedule (proto: glance_mind_protocol/proto/aipub.proto §996)
+    is plan-level scheduling config (scheduled_at UTC / timezone /
+    save_as_draft). It mirrors the PublishBehavior plumbing from
+    Task 7a: stored on gm_aipub_plans.schedule JSONB and merged into
+    every derived task.content.schedule by the same
+    expand_plan_to_tasks path so workers see the schedule natively
+    via UnifiedPublishContent.from_dict.
+    """
+
+    def _schedule(self, **overrides) -> Dict[str, Any]:
+        base = {
+            "scheduled_at": "2027-06-01T12:30:00Z",
+            "timezone": "America/Los_Angeles",
+            "save_as_draft": False,
+        }
+        base.update(overrides)
+        return base
+
+    def _resolve_test_account(self, db_cursor) -> Optional[int]:
+        db_cursor.execute("SELECT id FROM gm_social_accounts LIMIT 1")
+        row = db_cursor.fetchone()
+        return row["id"] if row else None
+
+    # -------------------------------------------------------------------
+    # Persistence — DB column behaviour
+    # -------------------------------------------------------------------
+
+    def test_create_plan_with_schedule_persists_to_db(self, auth_client, db_cursor):
+        account_id = self._resolve_test_account(db_cursor)
+        if not account_id:
+            pytest.skip("No social account available")
+
+        payload = {
+            "social_account_id": account_id,
+            "platform_id": PLATFORM_FACEBOOK,
+            "content_type": "post",
+            "plan_type": "direct_publish",
+            "content": {"title": "T", "description": "D"},
+            "schedule": self._schedule(),
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert_response_success(resp)
+        plan = extract_data(resp.json())
+
+        db_cursor.execute(
+            "SELECT schedule FROM gm_aipub_plans WHERE id = %s",
+            (plan["id"],),
+        )
+        row = db_cursor.fetchone()
+        assert row is not None
+        assert row["schedule"] is not None
+        s = row["schedule"]
+        assert s["scheduled_at"] == "2027-06-01T12:30:00Z"
+        assert s["timezone"] == "America/Los_Angeles"
+        assert s["save_as_draft"] is False
+
+    def test_create_plan_without_schedule_leaves_field_null(
+        self, auth_client, db_cursor
+    ):
+        account_id = self._resolve_test_account(db_cursor)
+        if not account_id:
+            pytest.skip("No social account available")
+
+        payload = {
+            "social_account_id": account_id,
+            "platform_id": PLATFORM_FACEBOOK,
+            "content_type": "post",
+            "plan_type": "direct_publish",
+            "content": {"title": "T", "description": "D"},
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert_response_success(resp)
+        plan = extract_data(resp.json())
+
+        db_cursor.execute(
+            "SELECT schedule FROM gm_aipub_plans WHERE id = %s",
+            (plan["id"],),
+        )
+        row = db_cursor.fetchone()
+        assert row is not None
+        assert row["schedule"] is None
+
+    # -------------------------------------------------------------------
+    # Round-trip via API responses
+    # -------------------------------------------------------------------
+
+    def test_get_plan_returns_schedule_field(self, auth_client, db_cursor):
+        account_id = self._resolve_test_account(db_cursor)
+        if not account_id:
+            pytest.skip("No social account available")
+
+        create_resp = auth_client.post("/api/v1/publish_plans", json={
+            "social_account_id": account_id,
+            "platform_id": PLATFORM_FACEBOOK,
+            "content_type": "post",
+            "plan_type": "direct_publish",
+            "content": {"title": "T"},
+            "schedule": self._schedule(save_as_draft=True),
+        })
+        assert_response_success(create_resp)
+        plan_id = extract_data(create_resp.json())["id"]
+
+        resp = auth_client.get(f"/api/v1/publish_plans/{plan_id}")
+        assert_response_success(resp)
+        data = extract_data(resp.json())
+        assert "schedule" in data
+        assert data["schedule"]["scheduled_at"] == "2027-06-01T12:30:00Z"
+        assert data["schedule"]["save_as_draft"] is True
+
+    def test_update_plan_can_change_schedule(self, auth_client, db_cursor):
+        account_id = self._resolve_test_account(db_cursor)
+        if not account_id:
+            pytest.skip("No social account available")
+
+        create_resp = auth_client.post(
+            "/api/v1/publish_plans",
+            json={
+                "social_account_id": account_id,
+                "platform_id": PLATFORM_FACEBOOK,
+                "content_type": "post",
+                "plan_type": "direct_publish",
+                "content": {"title": "T"},
+                "schedule": self._schedule(),
+            },
+        )
+        assert_response_success(create_resp)
+        plan_id = extract_data(create_resp.json())["id"]
+
+        update_resp = auth_client.put(
+            f"/api/v1/publish_plans/{plan_id}",
+            json={
+                "schedule": {
+                    "scheduled_at": "2028-01-15T09:00:00Z",
+                    "timezone": "UTC",
+                    "save_as_draft": True,
+                }
+            },
+        )
+        assert_response_success(update_resp)
+
+        db_cursor.execute(
+            "SELECT schedule FROM gm_aipub_plans WHERE id = %s",
+            (plan_id,),
+        )
+        s = db_cursor.fetchone()["schedule"]
+        assert s["scheduled_at"] == "2028-01-15T09:00:00Z"
+        assert s["timezone"] == "UTC"
+        assert s["save_as_draft"] is True
+
+    # -------------------------------------------------------------------
+    # Task derivation — schedule MUST land on task.content.schedule
+    # -------------------------------------------------------------------
+
+    def test_direct_publish_plan_propagates_schedule_to_task_content(
+        self, auth_client, db_cursor
+    ):
+        account_id = self._resolve_test_account(db_cursor)
+        if not account_id:
+            pytest.skip("No social account available")
+
+        schedule = self._schedule(save_as_draft=True)
+        payload = {
+            "social_account_id": account_id,
+            "platform_id": PLATFORM_FACEBOOK,
+            "content_type": "post",
+            "plan_type": "direct_publish",
+            "content": {"title": "T", "description": "D"},
+            "schedule": schedule,
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert_response_success(resp)
+        plan_id = extract_data(resp.json())["id"]
+
+        db_cursor.execute(
+            "SELECT content FROM gm_aipub_tasks WHERE plan_id = %s",
+            (plan_id,),
+        )
+        rows = db_cursor.fetchall()
+        assert rows
+        for row in rows:
+            c = row["content"]
+            assert "schedule" in c, (
+                "task.content must carry the merged schedule block; "
+                f"got keys={sorted(c.keys())}"
+            )
+            assert c["schedule"]["scheduled_at"] == "2027-06-01T12:30:00Z"
+            assert c["schedule"]["save_as_draft"] is True
+            # Original content fields preserved alongside schedule.
+            assert c["title"] == "T"
+            assert c["description"] == "D"
+
+    def test_direct_publish_without_schedule_does_not_inject_empty_schedule(
+        self, auth_client, db_cursor
+    ):
+        """NULL plan.schedule → task.content.schedule absent. Worker
+        must see no schedule key rather than an empty PublishSchedule
+        (which proto would interpret as `scheduled_at=""` → immediate
+        publish by accident but with dangling timezone / draft flags)."""
+        account_id = self._resolve_test_account(db_cursor)
+        if not account_id:
+            pytest.skip("No social account available")
+
+        payload = {
+            "social_account_id": account_id,
+            "platform_id": PLATFORM_FACEBOOK,
+            "content_type": "post",
+            "plan_type": "direct_publish",
+            "content": {"title": "T", "description": "D"},
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert_response_success(resp)
+        plan_id = extract_data(resp.json())["id"]
+
+        db_cursor.execute(
+            "SELECT content FROM gm_aipub_tasks WHERE plan_id = %s",
+            (plan_id,),
+        )
+        rows = db_cursor.fetchall()
+        assert rows
+        for row in rows:
+            assert "schedule" not in row["content"], \
+                "no plan.schedule → no task.content.schedule"
+
+    def test_schedule_coexists_with_behavior_on_same_task_content(
+        self, auth_client, db_cursor
+    ):
+        """Both Task 7a's behavior merge and Task 8's schedule merge
+        must coexist on the same task.content — neither clobbers the
+        other. Pins down the merge contract: plan-level typed
+        sub-messages accumulate under their own keys."""
+        account_id = self._resolve_test_account(db_cursor)
+        if not account_id:
+            pytest.skip("No social account available")
+
+        resp = auth_client.post("/api/v1/publish_plans", json={
+            "social_account_id": account_id,
+            "platform_id": PLATFORM_FACEBOOK,
+            "content_type": "post",
+            "plan_type": "direct_publish",
+            "content": {"title": "T"},
+            "behavior": {"visibility": "public", "is_nsfw": True},
+            "schedule": self._schedule(save_as_draft=True),
+        })
+        assert_response_success(resp)
+        plan_id = extract_data(resp.json())["id"]
+
+        db_cursor.execute(
+            "SELECT content FROM gm_aipub_tasks WHERE plan_id = %s",
+            (plan_id,),
+        )
+        c = db_cursor.fetchall()[0]["content"]
+        assert c["behavior"]["visibility"] == "public"
+        assert c["behavior"]["is_nsfw"] is True
+        assert c["schedule"]["save_as_draft"] is True
+        assert c["title"] == "T"
+
+    # -------------------------------------------------------------------
+    # Validation
+    # -------------------------------------------------------------------
+
+    def test_invalid_scheduled_at_rejected(self, auth_client, db_cursor):
+        """scheduled_at must be ISO-8601 UTC. Random garbage must 400."""
+        account_id = self._resolve_test_account(db_cursor)
+        if not account_id:
+            pytest.skip("No social account available")
+
+        payload = {
+            "social_account_id": account_id,
+            "platform_id": PLATFORM_FACEBOOK,
+            "content_type": "post",
+            "plan_type": "direct_publish",
+            "content": {"title": "T"},
+            "schedule": {"scheduled_at": "not-a-timestamp"},
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert resp.status_code == 400, (
+            f"expected 400 for invalid scheduled_at, got {resp.status_code}: {resp.text}"
+        )
+
+    def test_save_as_draft_must_be_bool(self, auth_client, db_cursor):
+        account_id = self._resolve_test_account(db_cursor)
+        if not account_id:
+            pytest.skip("No social account available")
+
+        payload = {
+            "social_account_id": account_id,
+            "platform_id": PLATFORM_FACEBOOK,
+            "content_type": "post",
+            "plan_type": "direct_publish",
+            "content": {"title": "T"},
+            "schedule": {
+                "scheduled_at": "2027-06-01T12:30:00Z",
+                "save_as_draft": "yes-please",
+            },
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert resp.status_code == 400, (
+            f"expected 400 for non-bool save_as_draft, got {resp.status_code}: {resp.text}"
+        )
+
+    def test_missing_scheduled_at_rejected(self, auth_client, db_cursor):
+        """scheduled_at is the whole point of a schedule — empty or
+        missing should 400 rather than silently store a useless
+        schedule dict."""
+        account_id = self._resolve_test_account(db_cursor)
+        if not account_id:
+            pytest.skip("No social account available")
+
+        payload = {
+            "social_account_id": account_id,
+            "platform_id": PLATFORM_FACEBOOK,
+            "content_type": "post",
+            "plan_type": "direct_publish",
+            "content": {"title": "T"},
+            "schedule": {"save_as_draft": True},  # no scheduled_at
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert resp.status_code == 400, (
+            f"expected 400 for missing scheduled_at, got {resp.status_code}: {resp.text}"
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
