@@ -32,6 +32,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Cargo path-dep `glance_mind_protocol = { path =
+      # "../../../glance_mind_protocol/generated/rust" }` (declared in
+      # crates/api/Cargo.toml after PR #3) resolves, relative to that
+      # manifest, to `<github.workspace>/../glance_mind_protocol/...`.
+      # CI must materialise that sibling repo before any cargo step
+      # runs, otherwise `cargo metadata` fails with:
+      #   failed to read `<workspace>/../glance_mind_protocol/generated/rust/Cargo.toml`
+      #
+      # actions/checkout cannot write outside `$GITHUB_WORKSPACE`, so
+      # we clone it into the workspace at `_checkouts/` and then
+      # symlink to the expected sibling path. `ln -snf` is idempotent
+      # so re-runs on a warm self-hosted runner are safe.
+      - name: Checkout glance_mind_protocol (Cargo path-dep sibling)
+        uses: actions/checkout@v4
+        with:
+          repository: GlanceMind/glance_mind_protocol
+          ref: main
+          path: _checkouts/glance_mind_protocol
+          # Self-hosted runner may need a token for private repos.
+          # Falls back to the default GITHUB_TOKEN when secrets are
+          # absent — that works only if the protocol repo is public
+          # OR the runner has an SSH key configured for the org.
+          token: ${{ secrets.MONOREPO_PROTOCOL_TOKEN || github.token }}
+
+      - name: Symlink glance_mind_protocol to sibling path
+        run: |
+          set -euxo pipefail
+          ln -snf "$GITHUB_WORKSPACE/_checkouts/glance_mind_protocol" \
+                  "$GITHUB_WORKSPACE/../glance_mind_protocol"
+          test -f "$GITHUB_WORKSPACE/../glance_mind_protocol/generated/rust/Cargo.toml" \
+            || { echo "::error::sibling glance_mind_protocol checkout failed"; exit 1; }
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
