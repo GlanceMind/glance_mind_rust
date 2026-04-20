@@ -555,6 +555,7 @@ diesel::table! {
         frozen_at -> Nullable<Timestamptz>,
         chat_ai_model_id -> Nullable<Int4>,
         video_ai_model_id -> Nullable<Int4>,
+        behavior -> Nullable<Jsonb>,
     }
 }
 

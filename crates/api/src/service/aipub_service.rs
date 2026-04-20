@@ -8,7 +8,9 @@ use crate::error::api_error::ApiError;
 use crate::error::business_error::BusinessError;
 use crate::error::db_error::DbError;
 use crate::repository::aipub_repository::AipubRepository;
-use crate::service::{image_generation_validation, reddit_validation, seedance_validation};
+use crate::service::{
+    behavior_validation, image_generation_validation, reddit_validation, seedance_validation,
+};
 use chrono::Utc;
 use diesel::result::Error as DieselError;
 use glance_mind_db::entity::aipub::{
@@ -67,6 +69,10 @@ impl AipubService {
         if let Some(ai_input) = dto.ai_input.as_ref() {
             image_generation_validation::validate(ai_input)?;
         }
+
+        // Phase 4 R3 Task 7a — validate plan-level PublishBehavior shape
+        // before persisting. No-op when behavior is absent.
+        behavior_validation::validate(dto.behavior.as_ref())?;
 
         // Validate target based on plan_type
         match PlanType::parse(plan_type.as_str()) {
@@ -221,6 +227,7 @@ impl AipubService {
             chat_ai_model_id: dto.chat_ai_model_id,
             video_ai_model_id: dto.video_ai_model_id,
             image_ai_model_id: dto.image_ai_model_id,
+            behavior: dto.behavior.clone(),
         };
 
         let plan = self
@@ -711,6 +718,9 @@ impl AipubService {
             )));
         }
 
+        // Phase 4 R3 Task 7a — validate behavior shape before persisting.
+        behavior_validation::validate(dto.behavior.as_ref())?;
+
         let update = UpdateAipubPlan {
             name: dto.name,
             ai_input: dto.ai_input,
@@ -718,6 +728,9 @@ impl AipubService {
             video_ai_model_id: dto.video_ai_model_id.map(Some),
             image_ai_model_id: dto.image_ai_model_id.map(Some),
             updated_at: Some(Utc::now()),
+            // dto.behavior == None  → leave the column unchanged.
+            // dto.behavior == Some  → replace wholesale (no JSON merge).
+            behavior: dto.behavior.map(Some),
             ..Default::default()
         };
 
@@ -1394,7 +1407,15 @@ impl AipubService {
     // Helper Methods
     // =========================================================================
 
-    /// Expand plan to publish tasks (for each account in group or single account)
+    /// Expand plan to publish tasks (for each account in group or single account).
+    ///
+    /// Phase 4 R3 Task 7a — when `plan.behavior` is set, merges it into
+    /// each task's `content.behavior` so workers consume it natively via
+    /// `UnifiedPublishContent.from_dict` without an extra API hop. When
+    /// `plan.behavior` is NULL the merge is a no-op and the task content
+    /// stays exactly as the caller supplied it (no spurious empty
+    /// behavior key — the worker would treat that as "override platform
+    /// defaults to UNSPECIFIED visibility", which is wrong).
     async fn expand_plan_to_tasks(
         &self,
         plan_id: i32,
@@ -1417,12 +1438,14 @@ impl AipubService {
             return Ok(0);
         };
 
+        let merged_content = merge_behavior_into_content(content, plan.behavior.as_ref());
+
         let new_tasks: Vec<NewAipubTask> = account_ids
             .iter()
             .map(|&account_id| NewAipubTask {
                 plan_id,
                 social_account_id: account_id,
-                content: content.clone(),
+                content: merged_content.clone(),
                 status: PublishTaskStatus::Ready.as_str().to_string(),
                 ai_task_id: None, // Direct content - no AI task
             })
@@ -1474,5 +1497,72 @@ impl AipubService {
         }
 
         Ok(())
+    }
+}
+
+/// Phase 4 R3 Task 7a — merge a plan-level PublishBehavior JSON blob
+/// into a task's content under the `behavior` key.
+///
+/// * When `behavior` is `None`, returns `content` untouched. This is
+///   the critical "no spurious empty behavior" invariant — emitting
+///   `content.behavior = {}` would tell the worker to override
+///   platform defaults with UNSPECIFIED visibility.
+/// * When `content` is not a JSON object, behavior cannot be merged —
+///   returns `content` untouched and lets the worker reject the
+///   malformed payload (by design we don't try to be clever and
+///   wrap a non-object in `{behavior: …, value: content}`).
+fn merge_behavior_into_content(
+    mut content: serde_json::Value,
+    behavior: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let Some(behavior) = behavior else {
+        return content;
+    };
+    if let Some(obj) = content.as_object_mut() {
+        obj.insert("behavior".to_string(), behavior.clone());
+    }
+    content
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn merge_behavior_into_content_skips_when_behavior_is_none() {
+        let content = json!({"title": "T"});
+        let merged = merge_behavior_into_content(content.clone(), None);
+        assert_eq!(merged, content);
+        assert!(merged.get("behavior").is_none());
+    }
+
+    #[test]
+    fn merge_behavior_into_content_inserts_behavior_key() {
+        let content = json!({"title": "T", "description": "D"});
+        let behavior = json!({"visibility": "public", "is_nsfw": true});
+        let merged = merge_behavior_into_content(content, Some(&behavior));
+        assert_eq!(merged["title"], "T");
+        assert_eq!(merged["description"], "D");
+        assert_eq!(merged["behavior"]["visibility"], "public");
+        assert_eq!(merged["behavior"]["is_nsfw"], true);
+    }
+
+    #[test]
+    fn merge_behavior_into_content_overwrites_existing_behavior_key() {
+        // Defensive: if upstream content already carries a behavior key
+        // (e.g. AI-generated content), the plan-level behavior wins.
+        let content = json!({"title": "T", "behavior": {"visibility": "private"}});
+        let behavior = json!({"visibility": "public"});
+        let merged = merge_behavior_into_content(content, Some(&behavior));
+        assert_eq!(merged["behavior"]["visibility"], "public");
+    }
+
+    #[test]
+    fn merge_behavior_into_content_leaves_non_object_content_alone() {
+        let content = json!("just a string");
+        let behavior = json!({"visibility": "public"});
+        let merged = merge_behavior_into_content(content.clone(), Some(&behavior));
+        assert_eq!(merged, content);
     }
 }

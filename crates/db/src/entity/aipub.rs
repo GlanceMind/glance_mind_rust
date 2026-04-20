@@ -43,6 +43,11 @@ pub struct AipubPlan {
     pub consumed_cost: BigDecimal,
     /// Freeze timestamp for reconciliation timeout detection
     pub frozen_at: Option<DateTime<Utc>>,
+    /// Phase 4 R3 Task 7a — plan-level PublishBehavior proto JSON.
+    /// NULL = use platform defaults. Merged into task.content.behavior
+    /// at task derivation time so workers consume it natively via
+    /// UnifiedPublishContent.from_dict.
+    pub behavior: Option<JsonValue>,
 }
 
 #[derive(Debug, Clone, Insertable)]
@@ -64,6 +69,8 @@ pub struct NewAipubPlan {
     /// Plan type: batch_text, single_video, or account_grooming
     pub plan_type: String,
     pub image_ai_model_id: Option<i32>,
+    /// Phase 4 R3 Task 7a — plan-level PublishBehavior proto JSON.
+    pub behavior: Option<JsonValue>,
 }
 
 #[derive(Debug, Clone, Default, AsChangeset)]
@@ -77,6 +84,9 @@ pub struct UpdateAipubPlan {
     pub video_ai_model_id: Option<Option<i32>>,
     pub image_ai_model_id: Option<Option<i32>>,
     pub updated_at: Option<DateTime<Utc>>,
+    /// Phase 4 R3 Task 7a — Option<Option<JsonValue>> so callers can
+    /// distinguish "leave unchanged" (None) from "clear behavior" (Some(None)).
+    pub behavior: Option<Option<JsonValue>>,
 }
 
 /// Plan Status enum

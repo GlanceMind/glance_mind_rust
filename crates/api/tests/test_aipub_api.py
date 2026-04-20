@@ -999,5 +999,638 @@ class TestSeedanceCostEstimation:
         assert "seedance_cost" not in data or data["seedance_cost"] is None
 
 
+# =============================================================================
+# Phase 4 Round 3 Task 7a — PublishBehavior persistence + task derivation
+# =============================================================================
+
+
+class TestPlanPublishBehavior:
+    """API must accept, persist and propagate PublishBehavior on plans.
+
+    PublishBehavior (proto: glance_mind_protocol/proto/aipub.proto §960)
+    is plan-level configuration (visibility, allow_comments, is_nsfw,
+    platform-specific toggles). It is stored on gm_aipub_plans.behavior
+    JSONB and copied into every derived task.content.behavior so workers
+    receive it without an extra API round-trip.
+    """
+
+    def _resolve_test_account(self, db_cursor) -> Optional[int]:
+        db_cursor.execute("SELECT id FROM gm_social_accounts LIMIT 1")
+        row = db_cursor.fetchone()
+        return row["id"] if row else None
+
+    def _full_behavior(self) -> Dict[str, Any]:
+        return {
+            "visibility": "public",
+            "allow_comments": True,
+            "allow_sharing": True,
+            "allow_download": False,
+            "is_nsfw": False,
+            "is_spoiler": False,
+            "ai_generated_disclosure": True,
+            "allow_duet": True,
+            "allow_stitch": False,
+            "disclose_branded_content": False,
+            "allow_remix": True,
+            "share_to_facebook": True,
+            "extras": {"custom_key": "custom_value"},
+        }
+
+    # -------------------------------------------------------------------
+    # Persistence — DB column behaviour
+    # -------------------------------------------------------------------
+
+    def test_create_plan_with_behavior_persists_to_db(self, auth_client, db_cursor):
+        """behavior dict on CreatePlanDto must land in gm_aipub_plans.behavior."""
+        account_id = self._resolve_test_account(db_cursor)
+        if not account_id:
+            pytest.skip("No social account available")
+
+        payload = {
+            "social_account_id": account_id,
+            "platform_id": PLATFORM_FACEBOOK,
+            "content_type": "post",
+            "plan_type": "direct_publish",
+            "content": {"title": "T", "description": "D"},
+            "behavior": self._full_behavior(),
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert_response_success(resp)
+        plan = extract_data(resp.json())
+
+        db_cursor.execute(
+            "SELECT behavior FROM gm_aipub_plans WHERE id = %s",
+            (plan["id"],),
+        )
+        row = db_cursor.fetchone()
+        assert row is not None, "plan not found in DB"
+        assert row["behavior"] is not None, "behavior column should be populated"
+        # JSONB returns as dict via psycopg2 RealDictCursor.
+        b = row["behavior"]
+        assert b["visibility"] == "public"
+        assert b["allow_comments"] is True
+        assert b["is_nsfw"] is False
+        assert b["allow_duet"] is True
+        assert b["share_to_facebook"] is True
+        assert b["extras"] == {"custom_key": "custom_value"}
+
+    def test_create_plan_without_behavior_leaves_field_null(
+        self, auth_client, db_cursor
+    ):
+        """Backward-compat: plans created without behavior keep behavior NULL.
+        Existing UI / scripts that don't know about behavior must not break."""
+        account_id = self._resolve_test_account(db_cursor)
+        if not account_id:
+            pytest.skip("No social account available")
+
+        payload = {
+            "social_account_id": account_id,
+            "platform_id": PLATFORM_FACEBOOK,
+            "content_type": "post",
+            "plan_type": "direct_publish",
+            "content": {"title": "T", "description": "D"},
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert_response_success(resp)
+        plan = extract_data(resp.json())
+
+        db_cursor.execute(
+            "SELECT behavior FROM gm_aipub_plans WHERE id = %s",
+            (plan["id"],),
+        )
+        row = db_cursor.fetchone()
+        assert row is not None
+        assert row["behavior"] is None, "behavior must default to NULL when omitted"
+
+    # -------------------------------------------------------------------
+    # Round-trip via API responses
+    # -------------------------------------------------------------------
+
+    def test_get_plan_returns_behavior_field(self, auth_client, db_cursor):
+        """GET /publish_plans/:id must echo back the behavior field."""
+        account_id = self._resolve_test_account(db_cursor)
+        if not account_id:
+            pytest.skip("No social account available")
+
+        payload = {
+            "social_account_id": account_id,
+            "platform_id": PLATFORM_FACEBOOK,
+            "content_type": "post",
+            "plan_type": "direct_publish",
+            "content": {"title": "T"},
+            "behavior": {
+                "visibility": "private",
+                "allow_comments": False,
+                "is_nsfw": True,
+            },
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert_response_success(resp)
+        plan_id = extract_data(resp.json())["id"]
+
+        resp = auth_client.get(f"/api/v1/publish_plans/{plan_id}")
+        assert_response_success(resp)
+        data = extract_data(resp.json())
+        assert "behavior" in data, \
+            "PlanResponseDto must expose 'behavior' so UI can edit/display it"
+        assert data["behavior"]["visibility"] == "private"
+        assert data["behavior"]["allow_comments"] is False
+        assert data["behavior"]["is_nsfw"] is True
+
+    def test_update_plan_can_change_behavior(self, auth_client, db_cursor):
+        """UpdatePlanDto must accept behavior so users can re-tune flags
+        after creation (e.g. toggle is_nsfw before scheduling)."""
+        account_id = self._resolve_test_account(db_cursor)
+        if not account_id:
+            pytest.skip("No social account available")
+
+        create_resp = auth_client.post(
+            "/api/v1/publish_plans",
+            json={
+                "social_account_id": account_id,
+                "platform_id": PLATFORM_FACEBOOK,
+                "content_type": "post",
+                "plan_type": "direct_publish",
+                "content": {"title": "T"},
+                "behavior": {"visibility": "private", "is_nsfw": False},
+            },
+        )
+        assert_response_success(create_resp)
+        plan_id = extract_data(create_resp.json())["id"]
+
+        update_resp = auth_client.put(
+            f"/api/v1/publish_plans/{plan_id}",
+            json={"behavior": {"visibility": "public", "is_nsfw": True}},
+        )
+        assert_response_success(update_resp)
+
+        db_cursor.execute(
+            "SELECT behavior FROM gm_aipub_plans WHERE id = %s",
+            (plan_id,),
+        )
+        b = db_cursor.fetchone()["behavior"]
+        assert b["visibility"] == "public"
+        assert b["is_nsfw"] is True
+
+    # -------------------------------------------------------------------
+    # Task derivation — behavior MUST land on task.content.behavior
+    # -------------------------------------------------------------------
+
+    def test_direct_publish_plan_propagates_behavior_to_task_content(
+        self, auth_client, db_cursor
+    ):
+        """When a direct-content plan auto-expands to publish tasks, every
+        derived task.content must carry the plan's behavior so the worker
+        sees it without a second API hit."""
+        account_id = self._resolve_test_account(db_cursor)
+        if not account_id:
+            pytest.skip("No social account available")
+
+        behavior = {
+            "visibility": "unlisted",
+            "allow_comments": True,
+            "is_nsfw": True,
+            "allow_duet": False,
+        }
+        payload = {
+            "social_account_id": account_id,
+            "platform_id": PLATFORM_FACEBOOK,
+            "content_type": "post",
+            "plan_type": "direct_publish",
+            "content": {"title": "T", "description": "D"},
+            "behavior": behavior,
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert_response_success(resp)
+        plan_id = extract_data(resp.json())["id"]
+
+        # Direct content auto-derives publish tasks immediately.
+        db_cursor.execute(
+            "SELECT content FROM gm_aipub_tasks WHERE plan_id = %s",
+            (plan_id,),
+        )
+        rows = db_cursor.fetchall()
+        assert rows, "direct-content plan must derive at least one publish task"
+        for row in rows:
+            content = row["content"]
+            assert "behavior" in content, \
+                "task.content must carry the merged behavior block"
+            assert content["behavior"]["visibility"] == "unlisted"
+            assert content["behavior"]["allow_comments"] is True
+            assert content["behavior"]["is_nsfw"] is True
+            assert content["behavior"]["allow_duet"] is False
+            # Original content fields must remain alongside behavior.
+            assert content["title"] == "T"
+            assert content["description"] == "D"
+
+    def test_direct_publish_without_behavior_does_not_inject_empty_behavior(
+        self, auth_client, db_cursor
+    ):
+        """When plan.behavior is NULL, task.content must NOT contain a
+        spurious behavior key — leaving it absent lets the worker fall
+        back to platform defaults rather than apply an empty PublishBehavior
+        (which would override e.g. visibility to UNSPECIFIED)."""
+        account_id = self._resolve_test_account(db_cursor)
+        if not account_id:
+            pytest.skip("No social account available")
+
+        payload = {
+            "social_account_id": account_id,
+            "platform_id": PLATFORM_FACEBOOK,
+            "content_type": "post",
+            "plan_type": "direct_publish",
+            "content": {"title": "T", "description": "D"},
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert_response_success(resp)
+        plan_id = extract_data(resp.json())["id"]
+
+        db_cursor.execute(
+            "SELECT content FROM gm_aipub_tasks WHERE plan_id = %s",
+            (plan_id,),
+        )
+        rows = db_cursor.fetchall()
+        assert rows
+        for row in rows:
+            assert "behavior" not in row["content"], \
+                "no plan.behavior → no task.content.behavior"
+
+    # -------------------------------------------------------------------
+    # Validation
+    # -------------------------------------------------------------------
+
+    def test_invalid_behavior_visibility_rejected(self, auth_client, db_cursor):
+        """visibility must be one of the proto Visibility enum names
+        (UNSPECIFIED / PUBLIC / UNLISTED / PRIVATE / FOLLOWERS_ONLY).
+        Garbage strings must 400, not silently land in the DB."""
+        account_id = self._resolve_test_account(db_cursor)
+        if not account_id:
+            pytest.skip("No social account available")
+
+        payload = {
+            "social_account_id": account_id,
+            "platform_id": PLATFORM_FACEBOOK,
+            "content_type": "post",
+            "content": {"title": "T"},
+            "behavior": {"visibility": "definitely-not-a-real-value"},
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert resp.status_code == 400, (
+            f"expected 400 for invalid visibility, got {resp.status_code}: {resp.text}"
+        )
+
+    def test_invalid_behavior_field_type_rejected(self, auth_client, db_cursor):
+        """is_nsfw is `optional bool` in proto — passing a string must 400."""
+        account_id = self._resolve_test_account(db_cursor)
+        if not account_id:
+            pytest.skip("No social account available")
+
+        payload = {
+            "social_account_id": account_id,
+            "platform_id": PLATFORM_FACEBOOK,
+            "content_type": "post",
+            "content": {"title": "T"},
+            "behavior": {"is_nsfw": "yes-please"},
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert resp.status_code == 400, (
+            f"expected 400 for non-bool is_nsfw, got {resp.status_code}: {resp.text}"
+        )
+
+
+# =============================================================================
+# Phase 4 R3 Task 7a — full plan_type coverage for behavior persistence
+# =============================================================================
+
+
+PLATFORM_REDDIT = 1  # also defined in gm-e2e conftest
+
+
+class TestPlanPublishBehaviorAcrossPlanTypes:
+    """Same persistence + DB column contract as TestPlanPublishBehavior, but
+    asserted across **every** plan_type that produces task content.
+
+    Why: Task 7a's create+expand path runs through different validation
+    branches per plan_type (Reddit needs reddit_config, batch_text needs
+    group_id, single_video needs video_ai_model_id, …). The behavior
+    column itself is plan_type-agnostic, but a reviewer should not have
+    to take that on faith. These tests prove the create endpoint accepts
+    + persists behavior on every legal plan_type.
+
+    Task derivation through `expand_plan_to_tasks` (the actual content +
+    behavior merge) for AI-driven plan_types (batch_text, single_video,
+    reddit_*) is verified end-to-end in
+    `gm-e2e/tests/test_20_publish_behavior_propagation.py` because it
+    needs the scheduler + agent-rs + mock LLM stack; those services are
+    not available in the API-only test fixture here.
+    """
+
+    def _behavior(self) -> Dict[str, Any]:
+        return {
+            "visibility": "unlisted",
+            "allow_comments": True,
+            "is_nsfw": False,
+            "ai_generated_disclosure": True,
+            "extras": {"plan_type_marker": "task7a-coverage"},
+        }
+
+    def _multi_account_group_id(self, db_cursor, platform_id: int) -> Optional[int]:
+        """Find a group on `platform_id` that already has ≥1 bound account.
+        batch_text / reddit_* plans require a group with members; we don't
+        want to create accounts in a test as that races other suites.
+        Account→group binding is direct (gm_social_accounts.group_id),
+        not via a separate join table."""
+        db_cursor.execute(
+            """
+            SELECT g.id
+              FROM gm_social_groups g
+              JOIN gm_social_accounts a ON a.group_id = g.id
+             WHERE g.platform_id = %s
+             GROUP BY g.id
+             HAVING COUNT(a.id) >= 1
+             ORDER BY g.id
+             LIMIT 1
+            """,
+            (platform_id,),
+        )
+        row = db_cursor.fetchone()
+        return row["id"] if row else None
+
+    def _account_id(self, db_cursor, platform_id: int) -> Optional[int]:
+        db_cursor.execute(
+            "SELECT id FROM gm_social_accounts WHERE platform_id = %s LIMIT 1",
+            (platform_id,),
+        )
+        row = db_cursor.fetchone()
+        return row["id"] if row else None
+
+    def _video_model_id(self, db_cursor) -> Optional[int]:
+        """Pick any seeded video AI model (Vidu/Veo/Seedance — implementation
+        detail; we only care that the create endpoint accepts a valid FK)."""
+        db_cursor.execute(
+            "SELECT id FROM gm_ai_models WHERE model_type = 'video' "
+            "AND is_active = true ORDER BY id LIMIT 1"
+        )
+        row = db_cursor.fetchone()
+        return row["id"] if row else None
+
+    def _chat_model_id(self, db_cursor) -> Optional[int]:
+        db_cursor.execute(
+            "SELECT id FROM gm_ai_models WHERE model_type = 'chat' "
+            "AND is_active = true ORDER BY id LIMIT 1"
+        )
+        row = db_cursor.fetchone()
+        return row["id"] if row else None
+
+    # -------------------------------------------------------------------
+    # AI-driven plan_types — assert plan.behavior persists; task.content
+    # propagation is verified in gm-e2e (needs scheduler).
+    # -------------------------------------------------------------------
+
+    def test_batch_text_plan_persists_behavior(self, auth_client, db_cursor):
+        group_id = self._multi_account_group_id(db_cursor, PLATFORM_TIKTOK)
+        chat_model_id = self._chat_model_id(db_cursor)
+        if group_id is None or chat_model_id is None:
+            pytest.skip("Need a TikTok group with accounts + a chat model")
+
+        payload = {
+            "plan_type": "batch_text",
+            "platform_id": PLATFORM_TIKTOK,
+            "group_id": group_id,
+            "content_type": "post",
+            "chat_ai_model_id": chat_model_id,
+            "ai_input": {"content_prompt": "Travel post about Japan",
+                         "hashtags_count": 3},
+            "behavior": self._behavior(),
+            "name": "task7a-batch_text-behavior",
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert_response_success(resp)
+        plan_id = extract_data(resp.json())["id"]
+
+        db_cursor.execute(
+            "SELECT plan_type, behavior FROM gm_aipub_plans WHERE id = %s",
+            (plan_id,),
+        )
+        row = db_cursor.fetchone()
+        assert row["plan_type"] == "batch_text"
+        assert row["behavior"]["visibility"] == "unlisted"
+        assert row["behavior"]["allow_comments"] is True
+        assert row["behavior"]["extras"]["plan_type_marker"] == "task7a-coverage"
+
+    def test_single_video_plan_persists_behavior(self, auth_client, db_cursor):
+        account_id = self._account_id(db_cursor, PLATFORM_TIKTOK)
+        chat_model_id = self._chat_model_id(db_cursor)
+        video_model_id = self._video_model_id(db_cursor)
+        if not (account_id and chat_model_id and video_model_id):
+            pytest.skip("Need a TikTok account + chat + video AI models")
+
+        payload = {
+            "plan_type": "single_video",
+            "platform_id": PLATFORM_TIKTOK,
+            "social_account_id": account_id,
+            "content_type": "video",
+            "chat_ai_model_id": chat_model_id,
+            "video_ai_model_id": video_model_id,
+            "ai_input": {"content_prompt": "Cinematic teaser of Tokyo at night"},
+            "behavior": {
+                "visibility": "public",
+                "allow_duet": True,
+                "allow_stitch": False,
+                "disclose_branded_content": True,
+                "is_nsfw": False,
+            },
+            "name": "task7a-single_video-behavior",
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert_response_success(resp)
+        plan_id = extract_data(resp.json())["id"]
+
+        db_cursor.execute(
+            "SELECT plan_type, behavior FROM gm_aipub_plans WHERE id = %s",
+            (plan_id,),
+        )
+        row = db_cursor.fetchone()
+        assert row["plan_type"] == "single_video"
+        b = row["behavior"]
+        assert b["visibility"] == "public"
+        assert b["allow_duet"] is True
+        assert b["allow_stitch"] is False
+        assert b["disclose_branded_content"] is True
+
+    def test_reddit_text_plan_persists_behavior(self, auth_client, db_cursor):
+        group_id = self._multi_account_group_id(db_cursor, PLATFORM_REDDIT)
+        chat_model_id = self._chat_model_id(db_cursor)
+        if group_id is None or chat_model_id is None:
+            pytest.skip("Need a Reddit group + chat model")
+
+        payload = {
+            "plan_type": "reddit_text",
+            "platform_id": PLATFORM_REDDIT,
+            "group_id": group_id,
+            "content_type": "post",
+            "chat_ai_model_id": chat_model_id,
+            "ai_input": {
+                "content_prompt": "Discuss Rust vs Go ergonomics",
+                "reddit_config": {"subreddit": "programming",
+                                  "reddit_post_type": "TEXT"},
+            },
+            "behavior": {
+                "visibility": "public",
+                "is_nsfw": False,
+                "is_spoiler": True,
+                "extras": {"reddit_flair_pref": "Discussion"},
+            },
+            "name": "task7a-reddit_text-behavior",
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert_response_success(resp)
+        plan_id = extract_data(resp.json())["id"]
+
+        db_cursor.execute(
+            "SELECT plan_type, behavior FROM gm_aipub_plans WHERE id = %s",
+            (plan_id,),
+        )
+        row = db_cursor.fetchone()
+        assert row["plan_type"] == "reddit_text"
+        assert row["behavior"]["is_spoiler"] is True
+        assert row["behavior"]["extras"]["reddit_flair_pref"] == "Discussion"
+
+    def test_reddit_image_plan_persists_behavior(self, auth_client, db_cursor):
+        group_id = self._multi_account_group_id(db_cursor, PLATFORM_REDDIT)
+        chat_model_id = self._chat_model_id(db_cursor)
+        if group_id is None or chat_model_id is None:
+            pytest.skip("Need a Reddit group + chat model")
+
+        payload = {
+            "plan_type": "reddit_image",
+            "platform_id": PLATFORM_REDDIT,
+            "group_id": group_id,
+            # gm_aipub_plans.content_type is constrained to
+            # post|video|reel|story|profile — Reddit image posts share
+            # the "post" content_type and disambiguate via plan_type.
+            "content_type": "post",
+            "chat_ai_model_id": chat_model_id,
+            "ai_input": {
+                "content_prompt": "Caption for an aurora photo",
+                "reddit_config": {
+                    "subreddit": "EarthPorn",
+                    "reddit_post_type": "IMAGE",
+                    # uploaded_image_urls path so we don't depend on a
+                    # seeded image AI model (none exist in gm-e2e).
+                    "uploaded_image_urls": ["https://example.com/aurora.jpg"],
+                },
+            },
+            "behavior": {
+                "visibility": "public",
+                "is_nsfw": False,
+                "allow_comments": True,
+            },
+            "name": "task7a-reddit_image-behavior",
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert_response_success(resp)
+        plan_id = extract_data(resp.json())["id"]
+
+        db_cursor.execute(
+            "SELECT plan_type, behavior FROM gm_aipub_plans WHERE id = %s",
+            (plan_id,),
+        )
+        row = db_cursor.fetchone()
+        assert row["plan_type"] == "reddit_image"
+        assert row["behavior"]["allow_comments"] is True
+
+    def test_reddit_link_plan_persists_behavior(self, auth_client, db_cursor):
+        group_id = self._multi_account_group_id(db_cursor, PLATFORM_REDDIT)
+        chat_model_id = self._chat_model_id(db_cursor)
+        if group_id is None or chat_model_id is None:
+            pytest.skip("Need a Reddit group + chat model")
+
+        payload = {
+            "plan_type": "reddit_link",
+            "platform_id": PLATFORM_REDDIT,
+            "group_id": group_id,
+            # See reddit_image note above — content_type stays "post"
+            # for all reddit_* plan_types per the schema check constraint.
+            "content_type": "post",
+            "chat_ai_model_id": chat_model_id,
+            "ai_input": {
+                "content_prompt": "Explain why this article is interesting",
+                "reddit_config": {
+                    "subreddit": "programming",
+                    "reddit_post_type": "LINK",
+                    "link_url": "https://example.com/article",
+                },
+            },
+            "behavior": {
+                "visibility": "public",
+                "is_nsfw": True,  # opt the link in as NSFW for assertion
+            },
+            "name": "task7a-reddit_link-behavior",
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert_response_success(resp)
+        plan_id = extract_data(resp.json())["id"]
+
+        db_cursor.execute(
+            "SELECT plan_type, behavior FROM gm_aipub_plans WHERE id = %s",
+            (plan_id,),
+        )
+        row = db_cursor.fetchone()
+        assert row["plan_type"] == "reddit_link"
+        assert row["behavior"]["is_nsfw"] is True
+
+    # -------------------------------------------------------------------
+    # account_grooming — semantic mismatch (profile update, not publish).
+    # Behavior must NOT block the create path even if a client sends it.
+    # -------------------------------------------------------------------
+
+    def test_account_grooming_plan_accepts_but_ignores_behavior(
+        self, auth_client, db_cursor
+    ):
+        """Backward-compat negative: PublishBehavior is meaningful only for
+        publish flows. account_grooming generates name+avatar (profile
+        update), not a publish. The API must still accept the field for
+        forward-compat (clients may emit a uniform plan create payload),
+        persist it on the column, but the grooming task derivation path
+        does not consume it. We assert only that:
+          1. The create call does not 400.
+          2. The plan column carries the behavior we sent.
+
+        The grooming task content path is exercised by gm-e2e
+        test_03_aipub_account_grooming.py (separately verified to still
+        pass after Task 7a — see PR #7 verification report).
+        """
+        group_id = self._multi_account_group_id(db_cursor, PLATFORM_TIKTOK)
+        chat_model_id = self._chat_model_id(db_cursor)
+        if group_id is None or chat_model_id is None:
+            pytest.skip("Need a TikTok group + chat model")
+
+        payload = {
+            "plan_type": "account_grooming",
+            "platform_id": PLATFORM_TIKTOK,
+            "group_id": group_id,
+            "content_type": "profile",
+            "chat_ai_model_id": chat_model_id,
+            "ai_input": {"content_prompt": "Generate a witty bio"},
+            "behavior": self._behavior(),
+            "name": "task7a-grooming-ignored-behavior",
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert_response_success(resp)
+        plan_id = extract_data(resp.json())["id"]
+
+        db_cursor.execute(
+            "SELECT plan_type, behavior FROM gm_aipub_plans WHERE id = %s",
+            (plan_id,),
+        )
+        row = db_cursor.fetchone()
+        assert row["plan_type"] == "account_grooming"
+        # Column carries it (we don't drop fields the client sent us);
+        # the grooming runtime path simply doesn't read it.
+        assert row["behavior"] is not None
+        assert row["behavior"]["extras"]["plan_type_marker"] == "task7a-coverage"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])

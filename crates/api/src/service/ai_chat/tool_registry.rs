@@ -2257,6 +2257,7 @@ impl ToolRegistry {
                         .and_then(|v| v.as_i64())
                         .map(|v| v as i32),
                     ai_input: None,
+                    behavior: None,
                 };
                 let result = state
                     .aipub_service
