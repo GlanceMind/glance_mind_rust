@@ -48,6 +48,10 @@ pub struct AipubPlan {
     /// at task derivation time so workers consume it natively via
     /// UnifiedPublishContent.from_dict.
     pub behavior: Option<JsonValue>,
+    /// Phase 4 R3 Task 8 — plan-level PublishSchedule proto JSON.
+    /// NULL = publish immediately. Merged into task.content.schedule
+    /// at task derivation time (same pattern as `behavior`).
+    pub schedule: Option<JsonValue>,
 }
 
 #[derive(Debug, Clone, Insertable)]
@@ -71,6 +75,8 @@ pub struct NewAipubPlan {
     pub image_ai_model_id: Option<i32>,
     /// Phase 4 R3 Task 7a — plan-level PublishBehavior proto JSON.
     pub behavior: Option<JsonValue>,
+    /// Phase 4 R3 Task 8 — plan-level PublishSchedule proto JSON.
+    pub schedule: Option<JsonValue>,
 }
 
 #[derive(Debug, Clone, Default, AsChangeset)]
@@ -87,6 +93,9 @@ pub struct UpdateAipubPlan {
     /// Phase 4 R3 Task 7a — Option<Option<JsonValue>> so callers can
     /// distinguish "leave unchanged" (None) from "clear behavior" (Some(None)).
     pub behavior: Option<Option<JsonValue>>,
+    /// Phase 4 R3 Task 8 — same Option<Option<>> trick so UpdatePlanDto
+    /// can distinguish "leave schedule untouched" from "clear schedule".
+    pub schedule: Option<Option<JsonValue>>,
 }
 
 /// Plan Status enum

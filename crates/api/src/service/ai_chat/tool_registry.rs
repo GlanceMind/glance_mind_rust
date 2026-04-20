@@ -2258,6 +2258,7 @@ impl ToolRegistry {
                         .map(|v| v as i32),
                     ai_input: None,
                     behavior: None,
+                    schedule: None,
                 };
                 let result = state
                     .aipub_service

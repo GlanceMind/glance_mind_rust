@@ -556,6 +556,7 @@ diesel::table! {
         chat_ai_model_id -> Nullable<Int4>,
         video_ai_model_id -> Nullable<Int4>,
         behavior -> Nullable<Jsonb>,
+        schedule -> Nullable<Jsonb>,
     }
 }
 

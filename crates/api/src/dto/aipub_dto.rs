@@ -37,6 +37,10 @@ pub struct CreatePlanDto {
     /// Validated by `behavior_validation::validate_behavior` before
     /// being persisted. Merged into task.content.behavior at derivation.
     pub behavior: Option<JsonValue>,
+    /// Phase 4 R3 Task 8 — plan-level PublishSchedule (proto §996).
+    /// Validated by `schedule_validation::validate` before being
+    /// persisted. Merged into task.content.schedule at derivation.
+    pub schedule: Option<JsonValue>,
 }
 
 /// Plan response DTO
@@ -66,6 +70,8 @@ pub struct PlanResponseDto {
     pub content: Option<JsonValue>,
     /// Phase 4 R3 Task 7a — plan-level PublishBehavior (proto §960).
     pub behavior: Option<JsonValue>,
+    /// Phase 4 R3 Task 8 — plan-level PublishSchedule (proto §996).
+    pub schedule: Option<JsonValue>,
     pub status: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: Option<DateTime<Utc>>,
@@ -123,6 +129,9 @@ pub struct UpdatePlanDto {
     /// wholesale (no JSON merge — clients should resend the full
     /// behavior dict).
     pub behavior: Option<JsonValue>,
+    /// Phase 4 R3 Task 8 — plan-level PublishSchedule (proto §996).
+    /// Same wholesale-replace semantics as `behavior`.
+    pub schedule: Option<JsonValue>,
 }
 
 /// Retry plan request
@@ -167,6 +176,7 @@ impl From<glance_mind_db::entity::aipub::AipubPlan> for PlanResponseDto {
             ai_input: plan.ai_input,
             content: plan.content,
             behavior: plan.behavior,
+            schedule: plan.schedule,
             status: plan.status,
             created_at: plan.created_at,
             updated_at: plan.updated_at,

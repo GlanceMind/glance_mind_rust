@@ -9,7 +9,8 @@ use crate::error::business_error::BusinessError;
 use crate::error::db_error::DbError;
 use crate::repository::aipub_repository::AipubRepository;
 use crate::service::{
-    behavior_validation, image_generation_validation, reddit_validation, seedance_validation,
+    behavior_validation, image_generation_validation, reddit_validation, schedule_validation,
+    seedance_validation,
 };
 use chrono::Utc;
 use diesel::result::Error as DieselError;
@@ -73,6 +74,9 @@ impl AipubService {
         // Phase 4 R3 Task 7a — validate plan-level PublishBehavior shape
         // before persisting. No-op when behavior is absent.
         behavior_validation::validate(dto.behavior.as_ref())?;
+
+        // Phase 4 R3 Task 8 — validate plan-level PublishSchedule shape.
+        schedule_validation::validate(dto.schedule.as_ref())?;
 
         // Validate target based on plan_type
         match PlanType::parse(plan_type.as_str()) {
@@ -228,6 +232,7 @@ impl AipubService {
             video_ai_model_id: dto.video_ai_model_id,
             image_ai_model_id: dto.image_ai_model_id,
             behavior: dto.behavior.clone(),
+            schedule: dto.schedule.clone(),
         };
 
         let plan = self
@@ -720,6 +725,8 @@ impl AipubService {
 
         // Phase 4 R3 Task 7a — validate behavior shape before persisting.
         behavior_validation::validate(dto.behavior.as_ref())?;
+        // Phase 4 R3 Task 8 — validate schedule shape before persisting.
+        schedule_validation::validate(dto.schedule.as_ref())?;
 
         let update = UpdateAipubPlan {
             name: dto.name,
@@ -731,6 +738,8 @@ impl AipubService {
             // dto.behavior == None  → leave the column unchanged.
             // dto.behavior == Some  → replace wholesale (no JSON merge).
             behavior: dto.behavior.map(Some),
+            // Same Option<Option<>> semantics for schedule.
+            schedule: dto.schedule.map(Some),
             ..Default::default()
         };
 
@@ -1422,13 +1431,15 @@ impl AipubService {
 
     /// Expand plan to publish tasks (for each account in group or single account).
     ///
-    /// Phase 4 R3 Task 7a — when `plan.behavior` is set, merges it into
-    /// each task's `content.behavior` so workers consume it natively via
-    /// `UnifiedPublishContent.from_dict` without an extra API hop. When
-    /// `plan.behavior` is NULL the merge is a no-op and the task content
-    /// stays exactly as the caller supplied it (no spurious empty
-    /// behavior key — the worker would treat that as "override platform
-    /// defaults to UNSPECIFIED visibility", which is wrong).
+    /// Phase 4 R3 Tasks 7a + 8 — when `plan.behavior` / `plan.schedule`
+    /// are set, merges them into each task's
+    /// `content.{behavior,schedule}` so workers consume them natively
+    /// via `UnifiedPublishContent.from_dict` without an extra API hop.
+    /// When a column is NULL the corresponding merge is a no-op and
+    /// the task content stays exactly as the caller supplied it (no
+    /// spurious empty typed sub-key — the worker would treat that as
+    /// e.g. "override platform defaults to UNSPECIFIED visibility" or
+    /// "publish at empty-string time", both wrong).
     async fn expand_plan_to_tasks(
         &self,
         plan_id: i32,
@@ -1451,7 +1462,8 @@ impl AipubService {
             return Ok(0);
         };
 
-        let merged_content = merge_behavior_into_content(content, plan.behavior.as_ref());
+        let mut merged_content = merge_behavior_into_content(content, plan.behavior.as_ref());
+        merge_plan_field_into_content(&mut merged_content, "schedule", plan.schedule.as_ref());
 
         let new_tasks: Vec<NewAipubTask> = account_ids
             .iter()
@@ -1537,6 +1549,25 @@ fn merge_behavior_into_content(
     content
 }
 
+/// Phase 4 R3 Task 8 — general plan-level typed-field → task.content
+/// merger. Same invariants as `merge_behavior_into_content`:
+/// NULL plan field stays as absence on content (no empty injection),
+/// non-object content is left untouched. Used for `schedule` today;
+/// any future plan-level typed sub-message (e.g. follow-up
+/// post-publish templates) can reuse this without copy-paste.
+fn merge_plan_field_into_content(
+    content: &mut serde_json::Value,
+    key: &str,
+    value: Option<&serde_json::Value>,
+) {
+    let Some(value) = value else {
+        return;
+    };
+    if let Some(obj) = content.as_object_mut() {
+        obj.insert(key.to_string(), value.clone());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1577,5 +1608,57 @@ mod tests {
         let behavior = json!({"visibility": "public"});
         let merged = merge_behavior_into_content(content.clone(), Some(&behavior));
         assert_eq!(merged, content);
+    }
+
+    #[test]
+    fn merge_plan_field_skips_when_value_is_none() {
+        let mut content = json!({"title": "T"});
+        merge_plan_field_into_content(&mut content, "schedule", None);
+        assert_eq!(content, json!({"title": "T"}));
+    }
+
+    #[test]
+    fn merge_plan_field_inserts_typed_key() {
+        let mut content = json!({"title": "T"});
+        let schedule = json!({"scheduled_at": "2027-01-01T00:00:00Z",
+                              "save_as_draft": true});
+        merge_plan_field_into_content(&mut content, "schedule", Some(&schedule));
+        assert_eq!(content["title"], "T");
+        assert_eq!(content["schedule"]["scheduled_at"], "2027-01-01T00:00:00Z");
+        assert_eq!(content["schedule"]["save_as_draft"], true);
+    }
+
+    #[test]
+    fn merge_plan_field_overwrites_existing_typed_key() {
+        // Same defensive overwrite as behavior merge — plan-level
+        // typed config always wins over whatever upstream content
+        // may have carried (e.g. old AI output with stale schedule).
+        let mut content = json!({"schedule": {"scheduled_at": "2020-01-01T00:00:00Z"}});
+        let schedule = json!({"scheduled_at": "2030-12-25T00:00:00Z"});
+        merge_plan_field_into_content(&mut content, "schedule", Some(&schedule));
+        assert_eq!(content["schedule"]["scheduled_at"], "2030-12-25T00:00:00Z");
+    }
+
+    #[test]
+    fn merge_plan_field_leaves_non_object_content_alone() {
+        let mut content = json!("not an object");
+        let schedule = json!({"scheduled_at": "2027-01-01T00:00:00Z"});
+        merge_plan_field_into_content(&mut content, "schedule", Some(&schedule));
+        assert_eq!(content, json!("not an object"));
+    }
+
+    #[test]
+    fn merge_plan_field_coexists_with_behavior_merge() {
+        // Task 7a's behavior merge and Task 8's schedule merge land
+        // on the same content dict under their own keys — neither
+        // clobbers the other. Mirrors the E2E coexistence spec.
+        let content = json!({"title": "T"});
+        let behavior = json!({"visibility": "public"});
+        let schedule = json!({"scheduled_at": "2027-01-01T00:00:00Z"});
+        let mut merged = merge_behavior_into_content(content, Some(&behavior));
+        merge_plan_field_into_content(&mut merged, "schedule", Some(&schedule));
+        assert_eq!(merged["title"], "T");
+        assert_eq!(merged["behavior"]["visibility"], "public");
+        assert_eq!(merged["schedule"]["scheduled_at"], "2027-01-01T00:00:00Z");
     }
 }
