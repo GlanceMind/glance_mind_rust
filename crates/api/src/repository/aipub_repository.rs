@@ -359,6 +359,33 @@ impl AipubRepository {
             .get()
             .map_err(|_| DieselError::BrokenTransactionManager)?;
 
+        // Phase 4 R3 Task 8 follow-up — hide future-scheduled tasks.
+        //
+        // The filter below excludes tasks where
+        // `content.schedule.scheduled_at` is a valid RFC 3339 instant
+        // in the future, so the worker doesn't poll-and-defer them on
+        // every cycle. Fail-open policy on shape errors:
+        //
+        //   * no schedule key            → returned (common case)
+        //   * schedule but no scheduled_at → returned (malformed → fail loud)
+        //   * scheduled_at empty string   → returned (same)
+        //   * scheduled_at doesn't look like RFC 3339 → returned (same)
+        //   * valid instant AND <= now()  → returned (due)
+        //   * valid instant AND  > now()  → EXCLUDED
+        //
+        // We avoid Postgres's bare `::timestamptz` cast on untrusted
+        // string data because that errors out the whole query on even
+        // a single malformed row. The regex pre-check `~ '^\d{4}-'`
+        // is a cheap "looks like ISO-8601 year prefix" guard; when it
+        // fails, the CASE short-circuits to TRUE (return the row) and
+        // the worker's own `is_schedule_due()` makes the final call.
+        let schedule_filter = diesel::dsl::sql::<diesel::sql_types::Bool>(
+            "(gm_aipub_tasks.content->'schedule'->>'scheduled_at' IS NULL \
+             OR gm_aipub_tasks.content->'schedule'->>'scheduled_at' = '' \
+             OR gm_aipub_tasks.content->'schedule'->>'scheduled_at' !~ '^\\d{4}-' \
+             OR (gm_aipub_tasks.content->'schedule'->>'scheduled_at')::timestamptz <= now())",
+        );
+
         let mut query = gm_aipub_tasks::table
             .inner_join(gm_aipub_plans::table.on(gm_aipub_tasks::plan_id.eq(gm_aipub_plans::id)))
             .inner_join(
@@ -368,6 +395,7 @@ impl AipubRepository {
             .inner_join(gm_platforms::table.on(gm_aipub_plans::platform_id.eq(gm_platforms::id)))
             .filter(gm_aipub_tasks::status.eq(PublishTaskStatus::Ready.as_str()))
             .filter(gm_social_accounts::device_id.eq(device_id_param))
+            .filter(schedule_filter)
             .into_boxed();
 
         if let Some(platform) = platform_filter {

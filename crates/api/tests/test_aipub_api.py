@@ -2357,5 +2357,211 @@ class TestPlanPublishSchedule:
         )
 
 
+# =============================================================================
+# Phase 4 R3 Task 8 follow-up — API hides future-scheduled tasks from the
+# executor's poll endpoint (GET /public/aipub/publish_tasks).
+# =============================================================================
+
+
+class TestPublicPublishTasksSchedulingFilter:
+    """`find_ready_publish_tasks_by_device` must exclude tasks whose
+    `content.schedule.scheduled_at` is still in the future, so the
+    worker doesn't poll-and-defer them on every cycle (the worker-side
+    dispatch gate in `AIPubTaskProcessor` already catches them as a
+    belt-and-suspenders, but avoiding the round-trip is cheaper).
+
+    Guaranteed contract:
+      * No schedule on task.content            → returned (unchanged)
+      * schedule.scheduled_at in the past       → returned
+      * schedule.scheduled_at in the future     → **excluded**
+      * schedule.scheduled_at absent/null/empty → returned (fail-open,
+        matches is_schedule_due's fail-loud contract on the worker side)
+    """
+
+    def _resolve_account_with_device(self, db_cursor):
+        """Pick an account that has a device_id set so the poll endpoint
+        matches it. Skip if no such account exists."""
+        db_cursor.execute(
+            "SELECT id, device_id, platform_id FROM gm_social_accounts "
+            "WHERE device_id IS NOT NULL AND device_id <> '' LIMIT 1"
+        )
+        return db_cursor.fetchone()
+
+    def _seed_ready_task(
+        self,
+        db_cursor,
+        account_id: int,
+        platform_id: int,
+        *,
+        schedule: Optional[Dict[str, Any]] = None,
+        marker: str = "",
+    ) -> int:
+        """Bypass the public API and insert a ready task with specific
+        content shape. Uses raw SQL because the public create-plan flow
+        always expands tasks synchronously through the
+        merge_{behavior,schedule} path — we want precise control over
+        what lands on gm_aipub_tasks.content here."""
+        import json
+        db_cursor.execute(
+            """
+            INSERT INTO gm_aipub_plans
+                (user_id, platform_id, content_type, plan_type, status,
+                 social_account_id)
+            SELECT (SELECT id FROM gm_users LIMIT 1), %s, 'post',
+                   'direct_publish', 'ready', %s
+            RETURNING id
+            """,
+            (platform_id, account_id),
+        )
+        plan_id = db_cursor.fetchone()["id"]
+
+        content: Dict[str, Any] = {
+            "title": "T",
+            "description": "D",
+            "_marker": marker,
+        }
+        if schedule is not None:
+            content["schedule"] = schedule
+
+        db_cursor.execute(
+            """
+            INSERT INTO gm_aipub_tasks
+                (plan_id, social_account_id, content, status, retry_count)
+            VALUES (%s, %s, %s::jsonb, 'ready', 0)
+            RETURNING id
+            """,
+            (plan_id, account_id, json.dumps(content)),
+        )
+        task_id = db_cursor.fetchone()["id"]
+        db_cursor.connection.commit()
+        return task_id
+
+    def test_future_scheduled_task_is_hidden_from_poll(
+        self, auth_client, db_cursor
+    ):
+        """A task with scheduled_at well in the future must NOT appear
+        in GET /public/aipub/publish_tasks. This is the whole point of
+        server-side filtering — avoid worker thrash."""
+        account = self._resolve_account_with_device(db_cursor)
+        if not account:
+            pytest.skip("No social account with device_id available")
+
+        future_schedule = {
+            "scheduled_at": "2099-12-31T23:59:59Z",
+            "save_as_draft": False,
+        }
+        future_task_id = self._seed_ready_task(
+            db_cursor, account["id"], account["platform_id"],
+            schedule=future_schedule,
+            marker="task8-future-hidden",
+        )
+
+        resp = auth_client.get(
+            f"/api/v1/public/aipub/publish_tasks?device_id={account['device_id']}&limit=1000"
+        )
+        assert_response_success(resp)
+        tasks = extract_data(resp.json())
+        # Response may be a bare list or wrapped — normalise.
+        if isinstance(tasks, dict):
+            tasks = tasks.get("list") or tasks.get("data") or []
+        task_ids = {t.get("task_id") for t in tasks}
+
+        assert future_task_id not in task_ids, (
+            f"future-scheduled task {future_task_id} must not appear in "
+            f"ready tasks poll; got ids={task_ids}"
+        )
+
+    def test_past_scheduled_task_is_returned(self, auth_client, db_cursor):
+        account = self._resolve_account_with_device(db_cursor)
+        if not account:
+            pytest.skip("No social account with device_id available")
+
+        past_schedule = {
+            "scheduled_at": "2020-01-01T00:00:00Z",
+            "save_as_draft": False,
+        }
+        past_task_id = self._seed_ready_task(
+            db_cursor, account["id"], account["platform_id"],
+            schedule=past_schedule,
+            marker="task8-past-visible",
+        )
+
+        resp = auth_client.get(
+            f"/api/v1/public/aipub/publish_tasks?device_id={account['device_id']}&limit=1000"
+        )
+        assert_response_success(resp)
+        tasks = extract_data(resp.json())
+        if isinstance(tasks, dict):
+            tasks = tasks.get("list") or tasks.get("data") or []
+        task_ids = {t.get("task_id") for t in tasks}
+
+        assert past_task_id in task_ids, (
+            f"past-scheduled task {past_task_id} must be returned — "
+            f"scheduled time already elapsed. Got ids={task_ids}"
+        )
+
+    def test_unscheduled_task_is_returned(self, auth_client, db_cursor):
+        """Backward compatibility: tasks without any schedule key on
+        content must continue to be returned by the poll endpoint —
+        this is 100% of pre-Task-8 data and the common case for new
+        plans too (schedule is opt-in)."""
+        account = self._resolve_account_with_device(db_cursor)
+        if not account:
+            pytest.skip("No social account with device_id available")
+
+        bare_task_id = self._seed_ready_task(
+            db_cursor, account["id"], account["platform_id"],
+            schedule=None,  # no schedule key at all
+            marker="task8-unscheduled-visible",
+        )
+
+        resp = auth_client.get(
+            f"/api/v1/public/aipub/publish_tasks?device_id={account['device_id']}&limit=1000"
+        )
+        assert_response_success(resp)
+        tasks = extract_data(resp.json())
+        if isinstance(tasks, dict):
+            tasks = tasks.get("list") or tasks.get("data") or []
+        task_ids = {t.get("task_id") for t in tasks}
+
+        assert bare_task_id in task_ids, (
+            f"unscheduled task {bare_task_id} must be returned "
+            f"(backward compat). Got ids={task_ids}"
+        )
+
+    def test_malformed_scheduled_at_is_returned_fail_open(
+        self, auth_client, db_cursor
+    ):
+        """If a malformed scheduled_at somehow reaches the DB (e.g. a
+        migration from legacy data, or a schema predating the Rust
+        validator), the filter MUST fail open — return the task
+        rather than silently hide it forever. Mirrors
+        `is_schedule_due`'s fail-loud contract on the worker side."""
+        account = self._resolve_account_with_device(db_cursor)
+        if not account:
+            pytest.skip("No social account with device_id available")
+
+        malformed_task_id = self._seed_ready_task(
+            db_cursor, account["id"], account["platform_id"],
+            schedule={"scheduled_at": "not-a-timestamp",
+                      "save_as_draft": False},
+            marker="task8-malformed-visible",
+        )
+
+        resp = auth_client.get(
+            f"/api/v1/public/aipub/publish_tasks?device_id={account['device_id']}&limit=1000"
+        )
+        assert_response_success(resp)
+        tasks = extract_data(resp.json())
+        if isinstance(tasks, dict):
+            tasks = tasks.get("list") or tasks.get("data") or []
+        task_ids = {t.get("task_id") for t in tasks}
+
+        assert malformed_task_id in task_ids, (
+            "malformed scheduled_at must NOT cause the query to error "
+            "or silently drop the task — fail-open contract"
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
