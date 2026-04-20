@@ -1298,5 +1298,339 @@ class TestPlanPublishBehavior:
         )
 
 
+# =============================================================================
+# Phase 4 R3 Task 7a — full plan_type coverage for behavior persistence
+# =============================================================================
+
+
+PLATFORM_REDDIT = 1  # also defined in gm-e2e conftest
+
+
+class TestPlanPublishBehaviorAcrossPlanTypes:
+    """Same persistence + DB column contract as TestPlanPublishBehavior, but
+    asserted across **every** plan_type that produces task content.
+
+    Why: Task 7a's create+expand path runs through different validation
+    branches per plan_type (Reddit needs reddit_config, batch_text needs
+    group_id, single_video needs video_ai_model_id, …). The behavior
+    column itself is plan_type-agnostic, but a reviewer should not have
+    to take that on faith. These tests prove the create endpoint accepts
+    + persists behavior on every legal plan_type.
+
+    Task derivation through `expand_plan_to_tasks` (the actual content +
+    behavior merge) for AI-driven plan_types (batch_text, single_video,
+    reddit_*) is verified end-to-end in
+    `gm-e2e/tests/test_20_publish_behavior_propagation.py` because it
+    needs the scheduler + agent-rs + mock LLM stack; those services are
+    not available in the API-only test fixture here.
+    """
+
+    def _behavior(self) -> Dict[str, Any]:
+        return {
+            "visibility": "unlisted",
+            "allow_comments": True,
+            "is_nsfw": False,
+            "ai_generated_disclosure": True,
+            "extras": {"plan_type_marker": "task7a-coverage"},
+        }
+
+    def _multi_account_group_id(self, db_cursor, platform_id: int) -> Optional[int]:
+        """Find a group on `platform_id` that already has ≥1 bound account.
+        batch_text / reddit_* plans require a group with members; we don't
+        want to create accounts in a test as that races other suites.
+        Account→group binding is direct (gm_social_accounts.group_id),
+        not via a separate join table."""
+        db_cursor.execute(
+            """
+            SELECT g.id
+              FROM gm_social_groups g
+              JOIN gm_social_accounts a ON a.group_id = g.id
+             WHERE g.platform_id = %s
+             GROUP BY g.id
+             HAVING COUNT(a.id) >= 1
+             ORDER BY g.id
+             LIMIT 1
+            """,
+            (platform_id,),
+        )
+        row = db_cursor.fetchone()
+        return row["id"] if row else None
+
+    def _account_id(self, db_cursor, platform_id: int) -> Optional[int]:
+        db_cursor.execute(
+            "SELECT id FROM gm_social_accounts WHERE platform_id = %s LIMIT 1",
+            (platform_id,),
+        )
+        row = db_cursor.fetchone()
+        return row["id"] if row else None
+
+    def _video_model_id(self, db_cursor) -> Optional[int]:
+        """Pick any seeded video AI model (Vidu/Veo/Seedance — implementation
+        detail; we only care that the create endpoint accepts a valid FK)."""
+        db_cursor.execute(
+            "SELECT id FROM gm_ai_models WHERE model_type = 'video' "
+            "AND is_active = true ORDER BY id LIMIT 1"
+        )
+        row = db_cursor.fetchone()
+        return row["id"] if row else None
+
+    def _chat_model_id(self, db_cursor) -> Optional[int]:
+        db_cursor.execute(
+            "SELECT id FROM gm_ai_models WHERE model_type = 'chat' "
+            "AND is_active = true ORDER BY id LIMIT 1"
+        )
+        row = db_cursor.fetchone()
+        return row["id"] if row else None
+
+    # -------------------------------------------------------------------
+    # AI-driven plan_types — assert plan.behavior persists; task.content
+    # propagation is verified in gm-e2e (needs scheduler).
+    # -------------------------------------------------------------------
+
+    def test_batch_text_plan_persists_behavior(self, auth_client, db_cursor):
+        group_id = self._multi_account_group_id(db_cursor, PLATFORM_TIKTOK)
+        chat_model_id = self._chat_model_id(db_cursor)
+        if group_id is None or chat_model_id is None:
+            pytest.skip("Need a TikTok group with accounts + a chat model")
+
+        payload = {
+            "plan_type": "batch_text",
+            "platform_id": PLATFORM_TIKTOK,
+            "group_id": group_id,
+            "content_type": "post",
+            "chat_ai_model_id": chat_model_id,
+            "ai_input": {"content_prompt": "Travel post about Japan",
+                         "hashtags_count": 3},
+            "behavior": self._behavior(),
+            "name": "task7a-batch_text-behavior",
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert_response_success(resp)
+        plan_id = extract_data(resp.json())["id"]
+
+        db_cursor.execute(
+            "SELECT plan_type, behavior FROM gm_aipub_plans WHERE id = %s",
+            (plan_id,),
+        )
+        row = db_cursor.fetchone()
+        assert row["plan_type"] == "batch_text"
+        assert row["behavior"]["visibility"] == "unlisted"
+        assert row["behavior"]["allow_comments"] is True
+        assert row["behavior"]["extras"]["plan_type_marker"] == "task7a-coverage"
+
+    def test_single_video_plan_persists_behavior(self, auth_client, db_cursor):
+        account_id = self._account_id(db_cursor, PLATFORM_TIKTOK)
+        chat_model_id = self._chat_model_id(db_cursor)
+        video_model_id = self._video_model_id(db_cursor)
+        if not (account_id and chat_model_id and video_model_id):
+            pytest.skip("Need a TikTok account + chat + video AI models")
+
+        payload = {
+            "plan_type": "single_video",
+            "platform_id": PLATFORM_TIKTOK,
+            "social_account_id": account_id,
+            "content_type": "video",
+            "chat_ai_model_id": chat_model_id,
+            "video_ai_model_id": video_model_id,
+            "ai_input": {"content_prompt": "Cinematic teaser of Tokyo at night"},
+            "behavior": {
+                "visibility": "public",
+                "allow_duet": True,
+                "allow_stitch": False,
+                "disclose_branded_content": True,
+                "is_nsfw": False,
+            },
+            "name": "task7a-single_video-behavior",
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert_response_success(resp)
+        plan_id = extract_data(resp.json())["id"]
+
+        db_cursor.execute(
+            "SELECT plan_type, behavior FROM gm_aipub_plans WHERE id = %s",
+            (plan_id,),
+        )
+        row = db_cursor.fetchone()
+        assert row["plan_type"] == "single_video"
+        b = row["behavior"]
+        assert b["visibility"] == "public"
+        assert b["allow_duet"] is True
+        assert b["allow_stitch"] is False
+        assert b["disclose_branded_content"] is True
+
+    def test_reddit_text_plan_persists_behavior(self, auth_client, db_cursor):
+        group_id = self._multi_account_group_id(db_cursor, PLATFORM_REDDIT)
+        chat_model_id = self._chat_model_id(db_cursor)
+        if group_id is None or chat_model_id is None:
+            pytest.skip("Need a Reddit group + chat model")
+
+        payload = {
+            "plan_type": "reddit_text",
+            "platform_id": PLATFORM_REDDIT,
+            "group_id": group_id,
+            "content_type": "post",
+            "chat_ai_model_id": chat_model_id,
+            "ai_input": {
+                "content_prompt": "Discuss Rust vs Go ergonomics",
+                "reddit_config": {"subreddit": "programming",
+                                  "reddit_post_type": "TEXT"},
+            },
+            "behavior": {
+                "visibility": "public",
+                "is_nsfw": False,
+                "is_spoiler": True,
+                "extras": {"reddit_flair_pref": "Discussion"},
+            },
+            "name": "task7a-reddit_text-behavior",
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert_response_success(resp)
+        plan_id = extract_data(resp.json())["id"]
+
+        db_cursor.execute(
+            "SELECT plan_type, behavior FROM gm_aipub_plans WHERE id = %s",
+            (plan_id,),
+        )
+        row = db_cursor.fetchone()
+        assert row["plan_type"] == "reddit_text"
+        assert row["behavior"]["is_spoiler"] is True
+        assert row["behavior"]["extras"]["reddit_flair_pref"] == "Discussion"
+
+    def test_reddit_image_plan_persists_behavior(self, auth_client, db_cursor):
+        group_id = self._multi_account_group_id(db_cursor, PLATFORM_REDDIT)
+        chat_model_id = self._chat_model_id(db_cursor)
+        if group_id is None or chat_model_id is None:
+            pytest.skip("Need a Reddit group + chat model")
+
+        payload = {
+            "plan_type": "reddit_image",
+            "platform_id": PLATFORM_REDDIT,
+            "group_id": group_id,
+            # gm_aipub_plans.content_type is constrained to
+            # post|video|reel|story|profile — Reddit image posts share
+            # the "post" content_type and disambiguate via plan_type.
+            "content_type": "post",
+            "chat_ai_model_id": chat_model_id,
+            "ai_input": {
+                "content_prompt": "Caption for an aurora photo",
+                "reddit_config": {
+                    "subreddit": "EarthPorn",
+                    "reddit_post_type": "IMAGE",
+                    # uploaded_image_urls path so we don't depend on a
+                    # seeded image AI model (none exist in gm-e2e).
+                    "uploaded_image_urls": ["https://example.com/aurora.jpg"],
+                },
+            },
+            "behavior": {
+                "visibility": "public",
+                "is_nsfw": False,
+                "allow_comments": True,
+            },
+            "name": "task7a-reddit_image-behavior",
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert_response_success(resp)
+        plan_id = extract_data(resp.json())["id"]
+
+        db_cursor.execute(
+            "SELECT plan_type, behavior FROM gm_aipub_plans WHERE id = %s",
+            (plan_id,),
+        )
+        row = db_cursor.fetchone()
+        assert row["plan_type"] == "reddit_image"
+        assert row["behavior"]["allow_comments"] is True
+
+    def test_reddit_link_plan_persists_behavior(self, auth_client, db_cursor):
+        group_id = self._multi_account_group_id(db_cursor, PLATFORM_REDDIT)
+        chat_model_id = self._chat_model_id(db_cursor)
+        if group_id is None or chat_model_id is None:
+            pytest.skip("Need a Reddit group + chat model")
+
+        payload = {
+            "plan_type": "reddit_link",
+            "platform_id": PLATFORM_REDDIT,
+            "group_id": group_id,
+            # See reddit_image note above — content_type stays "post"
+            # for all reddit_* plan_types per the schema check constraint.
+            "content_type": "post",
+            "chat_ai_model_id": chat_model_id,
+            "ai_input": {
+                "content_prompt": "Explain why this article is interesting",
+                "reddit_config": {
+                    "subreddit": "programming",
+                    "reddit_post_type": "LINK",
+                    "link_url": "https://example.com/article",
+                },
+            },
+            "behavior": {
+                "visibility": "public",
+                "is_nsfw": True,  # opt the link in as NSFW for assertion
+            },
+            "name": "task7a-reddit_link-behavior",
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert_response_success(resp)
+        plan_id = extract_data(resp.json())["id"]
+
+        db_cursor.execute(
+            "SELECT plan_type, behavior FROM gm_aipub_plans WHERE id = %s",
+            (plan_id,),
+        )
+        row = db_cursor.fetchone()
+        assert row["plan_type"] == "reddit_link"
+        assert row["behavior"]["is_nsfw"] is True
+
+    # -------------------------------------------------------------------
+    # account_grooming — semantic mismatch (profile update, not publish).
+    # Behavior must NOT block the create path even if a client sends it.
+    # -------------------------------------------------------------------
+
+    def test_account_grooming_plan_accepts_but_ignores_behavior(
+        self, auth_client, db_cursor
+    ):
+        """Backward-compat negative: PublishBehavior is meaningful only for
+        publish flows. account_grooming generates name+avatar (profile
+        update), not a publish. The API must still accept the field for
+        forward-compat (clients may emit a uniform plan create payload),
+        persist it on the column, but the grooming task derivation path
+        does not consume it. We assert only that:
+          1. The create call does not 400.
+          2. The plan column carries the behavior we sent.
+
+        The grooming task content path is exercised by gm-e2e
+        test_03_aipub_account_grooming.py (separately verified to still
+        pass after Task 7a — see PR #7 verification report).
+        """
+        group_id = self._multi_account_group_id(db_cursor, PLATFORM_TIKTOK)
+        chat_model_id = self._chat_model_id(db_cursor)
+        if group_id is None or chat_model_id is None:
+            pytest.skip("Need a TikTok group + chat model")
+
+        payload = {
+            "plan_type": "account_grooming",
+            "platform_id": PLATFORM_TIKTOK,
+            "group_id": group_id,
+            "content_type": "profile",
+            "chat_ai_model_id": chat_model_id,
+            "ai_input": {"content_prompt": "Generate a witty bio"},
+            "behavior": self._behavior(),
+            "name": "task7a-grooming-ignored-behavior",
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert_response_success(resp)
+        plan_id = extract_data(resp.json())["id"]
+
+        db_cursor.execute(
+            "SELECT plan_type, behavior FROM gm_aipub_plans WHERE id = %s",
+            (plan_id,),
+        )
+        row = db_cursor.fetchone()
+        assert row["plan_type"] == "account_grooming"
+        # Column carries it (we don't drop fields the client sent us);
+        # the grooming runtime path simply doesn't read it.
+        assert row["behavior"] is not None
+        assert row["behavior"]["extras"]["plan_type_marker"] == "task7a-coverage"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
