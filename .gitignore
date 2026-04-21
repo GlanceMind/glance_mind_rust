@@ -36,3 +36,6 @@ venv/
 
 # worktrees (superpowers skill)
 .worktrees/
+
+# CI-vendored glance_mind_protocol sibling (see .github/workflows/deploy-api.yml)
+.protocol-sibling/
