@@ -2563,5 +2563,723 @@ class TestPublicPublishTasksSchedulingFilter:
         )
 
 
+PLATFORM_TWITTER = 5  # gm_platforms.id for Twitter/X
+
+
+class TestCreatePlanPlatformMatrix:
+    """Verify every (platform_id × content_type × plan_type) combination that
+    the frontend AIPubPlanCreate.tsx wizard can produce is accepted by the
+    create endpoint AND persisted with matching DB field values.
+
+    The matrix mirrors `docs/superpowers/plans/2026-04-17-aipub-platform-matrix-coverage.md`
+    in glance_mind_front; any drift between frontend wizard output and this
+    matrix indicates a contract break between front and API.
+
+    Why API-level: the frontend matrix spec
+    (e2e/tests/ai-publish/28-plan-create-platform-matrix.spec.ts) drives the
+    UI and proves the wizard submits the right payload. *This* suite proves
+    the API accepts that payload shape and writes gm_aipub_plans correctly
+    for each combination. Together they close the front→API→DB chain.
+    """
+
+    def _pick_group(self, db_cursor, platform_id: int) -> Optional[int]:
+        """Pick a group on `platform_id` with at least one bound account.
+        Required for batch_text / reddit_* plans per repository invariants."""
+        db_cursor.execute(
+            """
+            SELECT g.id FROM gm_social_groups g
+              JOIN gm_social_accounts a ON a.group_id = g.id
+             WHERE g.platform_id = %s
+             GROUP BY g.id HAVING COUNT(a.id) >= 1
+             ORDER BY g.id LIMIT 1
+            """,
+            (platform_id,),
+        )
+        row = db_cursor.fetchone()
+        return row["id"] if row else None
+
+    def _pick_account(self, db_cursor, platform_id: int) -> Optional[int]:
+        db_cursor.execute(
+            "SELECT id FROM gm_social_accounts WHERE platform_id = %s ORDER BY id LIMIT 1",
+            (platform_id,),
+        )
+        row = db_cursor.fetchone()
+        return row["id"] if row else None
+
+    def _pick_video_model(self, db_cursor) -> Optional[int]:
+        db_cursor.execute(
+            "SELECT id FROM gm_ai_models WHERE model_type = 'video' AND is_active = true ORDER BY id LIMIT 1"
+        )
+        row = db_cursor.fetchone()
+        return row["id"] if row else None
+
+    def _pick_chat_model(self, db_cursor) -> Optional[int]:
+        db_cursor.execute(
+            "SELECT id FROM gm_ai_models WHERE model_type = 'chat' AND is_active = true ORDER BY id LIMIT 1"
+        )
+        row = db_cursor.fetchone()
+        return row["id"] if row else None
+
+    # --------------------------------------------------------------
+    # Matrix: 12 combinations (platform × content × plan_type × target)
+    # Columns: key, platform_id, content_type, plan_type,
+    #          target_type ('group' | 'account'),
+    #          ai_task_types, extra_ai_input
+    # --------------------------------------------------------------
+    MATRIX = [
+        ("tiktok-video",     PLATFORM_TIKTOK,    "video", "single_video", "account",
+         ["video_gen", "content_gen"], {}),
+        ("facebook-post",    PLATFORM_FACEBOOK,  "post",  "batch_text",   "group",
+         ["content_gen", "image_gen"], {}),
+        ("facebook-video",   PLATFORM_FACEBOOK,  "video", "single_video", "account",
+         ["video_gen", "content_gen"], {}),
+        ("facebook-reel",    PLATFORM_FACEBOOK,  "reel",  "single_video", "account",
+         ["video_gen", "content_gen"], {}),
+        ("facebook-story",   PLATFORM_FACEBOOK,  "story", "batch_text",   "group",
+         ["video_gen", "image_gen"], {}),
+        ("instagram-post",   PLATFORM_INSTAGRAM, "post",  "batch_text",   "group",
+         ["content_gen", "image_gen"], {}),
+        ("instagram-reel",   PLATFORM_INSTAGRAM, "reel",  "single_video", "account",
+         ["video_gen", "content_gen"], {}),
+        ("instagram-story",  PLATFORM_INSTAGRAM, "story", "batch_text",   "group",
+         ["video_gen", "image_gen"], {}),
+        ("twitter-post",     PLATFORM_TWITTER,   "post",  "batch_text",   "group",
+         ["content_gen", "image_gen"], {}),
+        ("reddit-text",      PLATFORM_REDDIT,    "post",  "reddit_text",  "group",
+         ["content_gen"],
+         {"reddit_config": {"subreddit": "matrix_text",
+                            "reddit_post_type": "TEXT",
+                            "use_markdown": False,
+                            "is_nsfw": False, "is_spoiler": False}}),
+        ("reddit-image",     PLATFORM_REDDIT,    "post",  "reddit_image", "group",
+         ["content_gen", "image_gen"],
+         {"reddit_config": {"subreddit": "matrix_image",
+                            "reddit_post_type": "IMAGE",
+                            "is_nsfw": False, "is_spoiler": False}}),
+        ("reddit-link",      PLATFORM_REDDIT,    "post",  "reddit_link",  "group",
+         ["content_gen"],
+         {"reddit_config": {"subreddit": "matrix_link",
+                            "reddit_post_type": "LINK",
+                            "link_url": "https://example.com/matrix-link",
+                            "is_nsfw": False, "is_spoiler": False}}),
+    ]
+
+    @pytest.mark.parametrize(
+        "key,platform_id,content_type,plan_type,target_type,ai_task_types,extra_ai_input",
+        MATRIX,
+        ids=[row[0] for row in MATRIX],
+    )
+    def test_matrix_create_and_persist(
+        self,
+        auth_client,
+        db_cursor,
+        key,
+        platform_id,
+        content_type,
+        plan_type,
+        target_type,
+        ai_task_types,
+        extra_ai_input,
+    ):
+        """POST a plan matching the frontend wizard payload shape; verify the
+        API responds 2xx and `gm_aipub_plans` row has every expected field."""
+
+        chat_model_id = self._pick_chat_model(db_cursor)
+        video_model_id = (
+            self._pick_video_model(db_cursor)
+            if "video_gen" in ai_task_types
+            else None
+        )
+        if chat_model_id is None:
+            pytest.skip("No active chat model seeded")
+        if "video_gen" in ai_task_types and video_model_id is None:
+            pytest.skip("No active video model seeded")
+
+        # Pick target (group or account) on the right platform.
+        target_group_id = None
+        target_account_id = None
+        if target_type == "group":
+            target_group_id = self._pick_group(db_cursor, platform_id)
+            if target_group_id is None:
+                pytest.skip(f"No group with accounts on platform_id={platform_id}; "
+                            f"need gm-e2e seed 07_seed_front_business.sql")
+        else:
+            target_account_id = self._pick_account(db_cursor, platform_id)
+            if target_account_id is None:
+                pytest.skip(f"No account on platform_id={platform_id}")
+
+        # Build payload mirroring AIPubPlanCreate.tsx submit logic.
+        ai_input: Dict[str, Any] = {
+            "content_prompt": f"matrix test content prompt for {key}",
+            **extra_ai_input,
+        }
+        if "video_gen" in ai_task_types:
+            ai_input["video_prompt"] = f"matrix test video prompt for {key}"
+
+        payload: Dict[str, Any] = {
+            "name": f"matrix-{key}",
+            "platform_id": platform_id,
+            "content_type": content_type,
+            "plan_type": plan_type,
+            "group_id": target_group_id,
+            "social_account_id": target_account_id,
+            "chat_ai_model_id": chat_model_id,
+            "video_ai_model_id": video_model_id,
+            "ai_task_types": ai_task_types,
+            "ai_input": ai_input,
+        }
+
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert resp.status_code in [200, 201], (
+            f"[{key}] POST /publish_plans returned {resp.status_code}: {resp.text}"
+        )
+        data = extract_data(resp.json())
+        plan_id = data.get("id")
+        assert isinstance(plan_id, int) and plan_id > 0, (
+            f"[{key}] expected integer plan id, got {data}"
+        )
+
+        # Verify every field persisted on gm_aipub_plans.
+        db_cursor.execute(
+            """
+            SELECT id, user_id, platform_id, content_type, plan_type,
+                   group_id, social_account_id, chat_ai_model_id,
+                   video_ai_model_id, ai_task_types, ai_input, name,
+                   status, created_at, updated_at
+              FROM gm_aipub_plans
+             WHERE id = %s
+            """,
+            (plan_id,),
+        )
+        row = db_cursor.fetchone()
+        assert row is not None, f"[{key}] plan_id={plan_id} missing from DB"
+
+        assert row["platform_id"] == platform_id, f"[{key}] platform_id mismatch"
+        assert row["content_type"] == content_type, f"[{key}] content_type mismatch"
+        assert row["plan_type"] == plan_type, f"[{key}] plan_type mismatch"
+
+        if target_type == "group":
+            assert row["group_id"] == target_group_id, f"[{key}] group_id mismatch"
+            assert row["social_account_id"] is None, f"[{key}] social_account_id should be NULL"
+        else:
+            assert row["social_account_id"] == target_account_id, f"[{key}] account id mismatch"
+            assert row["group_id"] is None, f"[{key}] group_id should be NULL"
+
+        assert row["chat_ai_model_id"] == chat_model_id, f"[{key}] chat_ai_model_id mismatch"
+        if video_model_id is not None:
+            assert row["video_ai_model_id"] == video_model_id, f"[{key}] video_ai_model_id mismatch"
+
+        # ai_task_types persisted as array (Postgres text[] or jsonb)
+        persisted_types = row["ai_task_types"]
+        if isinstance(persisted_types, str):
+            import json as _json
+            try:
+                persisted_types = _json.loads(persisted_types)
+            except Exception:
+                persisted_types = [x.strip() for x in persisted_types.strip("{}").split(",") if x.strip()]
+        assert sorted(persisted_types) == sorted(ai_task_types), (
+            f"[{key}] ai_task_types mismatch: expected {ai_task_types} got {persisted_types}"
+        )
+
+        # ai_input round-trip
+        persisted_ai_input = row["ai_input"]
+        assert persisted_ai_input is not None, f"[{key}] ai_input is NULL"
+        assert persisted_ai_input["content_prompt"] == ai_input["content_prompt"]
+        if "video_prompt" in ai_input:
+            assert persisted_ai_input["video_prompt"] == ai_input["video_prompt"]
+        if "reddit_config" in ai_input:
+            rc = persisted_ai_input["reddit_config"]
+            expected_rc = ai_input["reddit_config"]
+            assert rc["subreddit"] == expected_rc["subreddit"]
+            assert rc["reddit_post_type"] == expected_rc["reddit_post_type"]
+            if "link_url" in expected_rc:
+                assert rc["link_url"] == expected_rc["link_url"]
+
+        # Metadata sanity
+        assert row["name"] == f"matrix-{key}"
+        assert row["status"] in ("pending", "ai_processing"), f"[{key}] status={row['status']}"
+        assert row["user_id"] is not None
+        assert row["created_at"] is not None
+        assert row["updated_at"] is not None
+        assert row["created_at"] <= row["updated_at"]
+
+        # Cleanup so subsequent matrix runs don't accumulate.
+        db_cursor.execute("DELETE FROM gm_aipub_ai_tasks WHERE plan_id = %s", (plan_id,))
+        db_cursor.execute("DELETE FROM gm_aipub_plans WHERE id = %s", (plan_id,))
+
+
+# ---------------------------------------------------------------------------
+# MM-2.5 — BatchText multi-image pre-billing.
+#
+# The scheduler generates images for BatchText plans when
+# ai_task_types contains "image_gen" AND ai_input.image_generations[]
+# is set (e.g. FB/IG multi-image carousels through the BatchText
+# pipeline). The pre-bill (frozen_cost) MUST account for those images,
+# otherwise users can run the pipeline without sufficient balance and
+# the actual image generation later either fails or is uncharged.
+#
+# Billing rule (matches RedditImage):
+#   frozen_cost = N_accounts * chat_cost
+#               + N_accounts * sum(image_generations[].count) * image_cost
+# ---------------------------------------------------------------------------
+
+
+class TestBatchTextMultiImageBilling:
+    """MM-2.5 — verify image_generations[] drives frozen_cost for BatchText.
+
+    Covers three tiers:
+
+      A. Plain BatchText (no image_generations) stays chat-only billing.
+      B. BatchText + image_generations[{count: 3}] pre-bills N*3 images.
+      C. Multiple image_generations entries sum correctly.
+    """
+
+    def _multi_account_group_id(self, db_cursor, platform_id: int) -> Optional[int]:
+        db_cursor.execute(
+            """
+            SELECT g.id, COUNT(a.id) AS n
+              FROM gm_social_groups g
+              JOIN gm_social_accounts a ON a.group_id = g.id
+             WHERE g.platform_id = %s
+             GROUP BY g.id
+             HAVING COUNT(a.id) >= 1
+             ORDER BY g.id
+             LIMIT 1
+            """,
+            (platform_id,),
+        )
+        return db_cursor.fetchone()
+
+    def _chat_model_id(self, db_cursor) -> Optional[int]:
+        db_cursor.execute(
+            "SELECT id FROM gm_ai_models WHERE model_type = 'chat' "
+            "AND is_active = true ORDER BY id LIMIT 1"
+        )
+        row = db_cursor.fetchone()
+        return row["id"] if row else None
+
+    def _image_model_id(self, db_cursor) -> Optional[int]:
+        db_cursor.execute(
+            "SELECT id FROM gm_ai_models WHERE model_type = 'image' "
+            "AND is_active = true ORDER BY id LIMIT 1"
+        )
+        row = db_cursor.fetchone()
+        return row["id"] if row else None
+
+    def _action_base_price(self, db_cursor, action_type: str) -> float:
+        """Mirrors fn_freeze_budget: prefer platform_id IS NULL, fall back to
+        MIN(cost_points) of matching rows, defaulting to 1.0 for chat and 0
+        for image/video per up.sql."""
+        db_cursor.execute(
+            "SELECT COALESCE(cost_points, 0)::float AS c FROM gm_pricing_rules "
+            "WHERE action_type = %s AND platform_id IS NULL LIMIT 1",
+            (action_type,),
+        )
+        row = db_cursor.fetchone()
+        base = float(row["c"]) if row else 0.0
+        if base == 0.0 and action_type == "AI_ANALYZE":
+            db_cursor.execute(
+                "SELECT COALESCE(MIN(cost_points), 1.0)::float AS c "
+                "FROM gm_pricing_rules WHERE action_type = 'AI_ANALYZE'"
+            )
+            base = float(db_cursor.fetchone()["c"])
+        return base
+
+    def _chat_cost(self, db_cursor, model_id: int) -> float:
+        db_cursor.execute(
+            "SELECT cost_multiplier FROM gm_ai_models WHERE id = %s",
+            (model_id,),
+        )
+        mult = float(db_cursor.fetchone()["cost_multiplier"])
+        return self._action_base_price(db_cursor, "AI_ANALYZE") * mult
+
+    def _image_cost(self, db_cursor, model_id: int) -> float:
+        db_cursor.execute(
+            "SELECT cost_multiplier FROM gm_ai_models WHERE id = %s",
+            (model_id,),
+        )
+        mult = float(db_cursor.fetchone()["cost_multiplier"])
+        return self._action_base_price(db_cursor, "IMAGE") * mult
+
+    def _resolve_user_id(self, db_cursor) -> Optional[int]:
+        import os as _os
+        email = _os.getenv("E2E_TEST_EMAIL", "e2e@glancemind.test")
+        db_cursor.execute("SELECT id FROM gm_users WHERE email = %s", (email,))
+        row = db_cursor.fetchone()
+        return row["id"] if row else None
+
+    def _ensure_balance(self, db_cursor, amount: float = 10000.0):
+        user_id = self._resolve_user_id(db_cursor)
+        if user_id is None:
+            return
+        db_cursor.execute(
+            "UPDATE gm_user_wallets SET balance_points = GREATEST(balance_points, %s) "
+            "WHERE user_id = %s",
+            (amount, user_id),
+        )
+        # Must commit so the API's separate transaction sees the topped-up
+        # balance before we POST /publish_plans (which triggers
+        # fn_freeze_budget).
+        db_cursor.connection.commit()
+
+    def _create_plan(self, auth_client, group_id, chat_model_id,
+                     image_model_id=None, image_generations=None,
+                     ai_task_types=None):
+        ai_input: Dict[str, Any] = {
+            "content_prompt": "Multi-image BatchText pre-billing test",
+        }
+        if image_generations is not None:
+            ai_input["image_generations"] = image_generations
+
+        payload: Dict[str, Any] = {
+            "plan_type": "batch_text",
+            "platform_id": PLATFORM_FACEBOOK,
+            "group_id": group_id,
+            "content_type": "post",
+            "chat_ai_model_id": chat_model_id,
+            "ai_input": ai_input,
+            "name": "mm-2.5-batchtext-multi-image",
+        }
+        if image_model_id is not None:
+            payload["image_ai_model_id"] = image_model_id
+        if ai_task_types is not None:
+            payload["ai_task_types"] = ai_task_types
+        return auth_client.post("/api/v1/publish_plans", json=payload)
+
+    def test_batchtext_without_image_generations_is_chat_only_billing(
+        self, auth_client, db_cursor
+    ):
+        grp = self._multi_account_group_id(db_cursor, PLATFORM_FACEBOOK)
+        chat_id = self._chat_model_id(db_cursor)
+        if grp is None or chat_id is None:
+            pytest.skip("Need a Facebook group with accounts + chat model")
+        self._ensure_balance(db_cursor, 10000.0)
+
+        n = int(grp["n"])
+        chat_unit = self._chat_cost(db_cursor, chat_id)
+        expected_min = n * chat_unit
+
+        resp = self._create_plan(
+            auth_client, grp["id"], chat_id,
+            ai_task_types=["content_gen"],
+        )
+        assert_response_success(resp)
+        plan = extract_data(resp.json())
+        plan_id = plan["id"]
+
+        db_cursor.execute(
+            "SELECT billing_status, frozen_cost FROM gm_aipub_plans WHERE id = %s",
+            (plan_id,),
+        )
+        row = db_cursor.fetchone()
+        assert row["billing_status"] == "frozen"
+        frozen = float(row["frozen_cost"])
+        # Tolerance for cost_multiplier precision (tests don't depend on
+        # exact multiplier values — just that image_count does NOT
+        # contribute when image_generations[] is absent).
+        assert abs(frozen - expected_min) < 1e-6, (
+            f"chat-only BatchText expected {expected_min}, got {frozen}"
+        )
+
+        db_cursor.execute("DELETE FROM gm_aipub_ai_tasks WHERE plan_id = %s", (plan_id,))
+        db_cursor.execute("DELETE FROM gm_aipub_plans WHERE id = %s", (plan_id,))
+
+    def test_batchtext_with_image_generations_prebills_images(
+        self, auth_client, db_cursor
+    ):
+        """Regression test for MM-2.5: image_generations[{count: 3}] must
+        contribute N*3 images to frozen_cost."""
+        grp = self._multi_account_group_id(db_cursor, PLATFORM_FACEBOOK)
+        chat_id = self._chat_model_id(db_cursor)
+        img_id = self._image_model_id(db_cursor)
+        if grp is None or chat_id is None or img_id is None:
+            pytest.skip("Need a Facebook group + chat model + image model")
+        self._ensure_balance(db_cursor, 10000.0)
+
+        n = int(grp["n"])
+        per_account_images = 3
+        chat_unit = self._chat_cost(db_cursor, chat_id)
+        image_unit = self._image_cost(db_cursor, img_id)
+        expected = n * chat_unit + n * per_account_images * image_unit
+        chat_only = n * chat_unit
+
+        resp = self._create_plan(
+            auth_client, grp["id"], chat_id,
+            image_model_id=img_id,
+            image_generations=[{
+                "prompts": ["three carousel images for this post"],
+                "count": per_account_images,
+                "model": "flux-kontext-pro",
+                "aspect_ratio": "1:1",
+            }],
+            ai_task_types=["content_gen", "image_gen"],
+        )
+        assert_response_success(resp)
+        plan = extract_data(resp.json())
+        plan_id = plan["id"]
+
+        db_cursor.execute(
+            "SELECT billing_status, frozen_cost FROM gm_aipub_plans WHERE id = %s",
+            (plan_id,),
+        )
+        row = db_cursor.fetchone()
+        assert row["billing_status"] == "frozen"
+        frozen = float(row["frozen_cost"])
+        assert abs(frozen - expected) < 1e-4, (
+            f"BatchText multi-image expected {expected} "
+            f"(chat {n}*{chat_unit} + image {n}*{per_account_images}*{image_unit}), "
+            f"got {frozen}"
+        )
+        # Also prove the fix: without it, frozen would equal chat-only.
+        assert frozen > chat_only + 1e-6, (
+            "frozen_cost must exceed chat-only cost when images are generated; "
+            "this asserts MM-2.5 billing loophole is closed."
+        )
+
+        db_cursor.execute("DELETE FROM gm_aipub_ai_tasks WHERE plan_id = %s", (plan_id,))
+        db_cursor.execute("DELETE FROM gm_aipub_plans WHERE id = %s", (plan_id,))
+
+    def test_batchtext_multiple_image_generations_entries_sum(
+        self, auth_client, db_cursor
+    ):
+        """Two image_generations entries (count=2, count=3) should sum to
+        5 images per account, matching the RedditImage pattern exactly."""
+        grp = self._multi_account_group_id(db_cursor, PLATFORM_FACEBOOK)
+        chat_id = self._chat_model_id(db_cursor)
+        img_id = self._image_model_id(db_cursor)
+        if grp is None or chat_id is None or img_id is None:
+            pytest.skip("Need a Facebook group + chat model + image model")
+        self._ensure_balance(db_cursor, 10000.0)
+
+        n = int(grp["n"])
+        per_account_images = 2 + 3
+        chat_unit = self._chat_cost(db_cursor, chat_id)
+        image_unit = self._image_cost(db_cursor, img_id)
+        expected = n * chat_unit + n * per_account_images * image_unit
+
+        resp = self._create_plan(
+            auth_client, grp["id"], chat_id,
+            image_model_id=img_id,
+            image_generations=[
+                {"prompts": ["first batch"], "count": 2, "model": "flux-kontext-pro", "aspect_ratio": "1:1"},
+                {"prompts": ["second batch"], "count": 3, "model": "flux-kontext-pro", "aspect_ratio": "1:1"},
+            ],
+            ai_task_types=["content_gen", "image_gen"],
+        )
+        assert_response_success(resp)
+        plan_id = extract_data(resp.json())["id"]
+
+        db_cursor.execute(
+            "SELECT frozen_cost FROM gm_aipub_plans WHERE id = %s",
+            (plan_id,),
+        )
+        frozen = float(db_cursor.fetchone()["frozen_cost"])
+        assert abs(frozen - expected) < 1e-4, (
+            f"Multi-spec image_generations expected {expected}, got {frozen}"
+        )
+
+        db_cursor.execute("DELETE FROM gm_aipub_ai_tasks WHERE plan_id = %s", (plan_id,))
+        db_cursor.execute("DELETE FROM gm_aipub_plans WHERE id = %s", (plan_id,))
+
+
+# ---------------------------------------------------------------------------
+# MM-2 — RedditImage multi-image billing matrix
+# ---------------------------------------------------------------------------
+#
+# Plan spec §MM-2: parametrize ``image_count ∈ {1, 3}`` over RedditImage
+# plans and assert
+#   * HTTP 201 + UnifiedResponse success,
+#   * DB ``gm_aipub_plans.ai_input->>'image_generations'[0]->>'count'`` ==
+#     image_count,
+#   * ``frozen_cost`` = ``1 * chat_unit + image_count * n_accounts * image_unit``
+#     (RedditImage freezes ``1`` chat regardless of account count, and
+#     ``image_count * n_accounts`` images — see aipub_service.rs:452).
+#
+# This matrix pins the RedditImage V2 billing path end-to-end so the
+# MM-2.5 BatchText fix doesn't accidentally regress RedditImage.
+# ---------------------------------------------------------------------------
+
+
+class TestRedditImageMultiImageBilling:
+    """MM-2 — matrix test over image_count for RedditImage plans.
+
+    Mirrors the helper structure of TestBatchTextMultiImageBilling so
+    a future refactor can hoist both into a shared base.
+    """
+
+    def _multi_account_group_id(self, db_cursor, platform_id: int) -> Optional[int]:
+        db_cursor.execute(
+            """
+            SELECT g.id, COUNT(a.id) AS n
+              FROM gm_social_groups g
+              JOIN gm_social_accounts a ON a.group_id = g.id
+             WHERE g.platform_id = %s
+             GROUP BY g.id
+             HAVING COUNT(a.id) >= 1
+             ORDER BY g.id
+             LIMIT 1
+            """,
+            (platform_id,),
+        )
+        return db_cursor.fetchone()
+
+    def _chat_model_id(self, db_cursor) -> Optional[int]:
+        db_cursor.execute(
+            "SELECT id FROM gm_ai_models WHERE model_type = 'chat' "
+            "AND is_active = true ORDER BY id LIMIT 1"
+        )
+        row = db_cursor.fetchone()
+        return row["id"] if row else None
+
+    def _image_model_id(self, db_cursor) -> Optional[int]:
+        db_cursor.execute(
+            "SELECT id FROM gm_ai_models WHERE model_type = 'image' "
+            "AND is_active = true ORDER BY id LIMIT 1"
+        )
+        row = db_cursor.fetchone()
+        return row["id"] if row else None
+
+    def _action_base_price(self, db_cursor, action_type: str) -> float:
+        db_cursor.execute(
+            "SELECT COALESCE(cost_points, 0)::float AS c FROM gm_pricing_rules "
+            "WHERE action_type = %s AND platform_id IS NULL LIMIT 1",
+            (action_type,),
+        )
+        row = db_cursor.fetchone()
+        base = float(row["c"]) if row else 0.0
+        if base == 0.0 and action_type == "AI_ANALYZE":
+            db_cursor.execute(
+                "SELECT COALESCE(MIN(cost_points), 1.0)::float AS c "
+                "FROM gm_pricing_rules WHERE action_type = 'AI_ANALYZE'"
+            )
+            base = float(db_cursor.fetchone()["c"])
+        return base
+
+    def _chat_cost(self, db_cursor, model_id: int) -> float:
+        db_cursor.execute(
+            "SELECT cost_multiplier FROM gm_ai_models WHERE id = %s",
+            (model_id,),
+        )
+        mult = float(db_cursor.fetchone()["cost_multiplier"])
+        return self._action_base_price(db_cursor, "AI_ANALYZE") * mult
+
+    def _image_cost(self, db_cursor, model_id: int) -> float:
+        db_cursor.execute(
+            "SELECT cost_multiplier FROM gm_ai_models WHERE id = %s",
+            (model_id,),
+        )
+        mult = float(db_cursor.fetchone()["cost_multiplier"])
+        return self._action_base_price(db_cursor, "IMAGE") * mult
+
+    def _resolve_user_id(self, db_cursor) -> Optional[int]:
+        import os as _os
+        email = _os.getenv("E2E_TEST_EMAIL", "e2e@glancemind.test")
+        db_cursor.execute("SELECT id FROM gm_users WHERE email = %s", (email,))
+        row = db_cursor.fetchone()
+        return row["id"] if row else None
+
+    def _ensure_balance(self, db_cursor, amount: float = 10000.0):
+        user_id = self._resolve_user_id(db_cursor)
+        if user_id is None:
+            return
+        db_cursor.execute(
+            "UPDATE gm_user_wallets SET balance_points = GREATEST(balance_points, %s) "
+            "WHERE user_id = %s",
+            (amount, user_id),
+        )
+        db_cursor.connection.commit()
+
+    def _create_plan(self, auth_client, group_id, chat_model_id,
+                     image_model_id, image_generations):
+        ai_input: Dict[str, Any] = {
+            "content_prompt": "MM-2 reddit_image multi-image matrix",
+            "reddit_config": {
+                "subreddit": "EarthPorn",
+                "reddit_post_type": "IMAGE",
+                # Required by reddit_validation.rs: image_prompt OR
+                # uploaded_image_urls must be present for reddit_image.
+                # We set image_prompt so the V2 image_generations[] path
+                # is exercised (image_gen ai_task type is dispatched).
+                "image_prompt": "aurora over fjord",
+            },
+            "image_generations": image_generations,
+        }
+        payload: Dict[str, Any] = {
+            "plan_type": "reddit_image",
+            "platform_id": PLATFORM_REDDIT,
+            "group_id": group_id,
+            "content_type": "post",
+            "chat_ai_model_id": chat_model_id,
+            "image_ai_model_id": image_model_id,
+            "ai_input": ai_input,
+            "ai_task_types": ["content_gen", "image_gen"],
+            "name": "mm-2-reddit-image-matrix",
+        }
+        return auth_client.post("/api/v1/publish_plans", json=payload)
+
+    @pytest.mark.parametrize("image_count", [1, 3])
+    def test_reddit_image_matrix_image_count_and_billing(
+        self, auth_client, db_cursor, image_count
+    ):
+        """For image_count ∈ {1, 3}: verify DB persistence + frozen_cost.
+
+        Asserts RedditImage V2 billing rule:
+            frozen = 1 * chat_unit + image_count * n_accounts * image_unit
+        (see service/aipub_service.rs::prepare_budget_freeze RedditImage
+        branch — chat is fixed at 1, images scale with accounts.)
+        """
+        grp = self._multi_account_group_id(db_cursor, PLATFORM_REDDIT)
+        chat_id = self._chat_model_id(db_cursor)
+        img_id = self._image_model_id(db_cursor)
+        if grp is None or chat_id is None or img_id is None:
+            pytest.skip("Need a Reddit group + chat model + image model")
+        self._ensure_balance(db_cursor, 10000.0)
+
+        n = int(grp["n"])
+        chat_unit = self._chat_cost(db_cursor, chat_id)
+        image_unit = self._image_cost(db_cursor, img_id)
+        expected = 1 * chat_unit + image_count * n * image_unit
+
+        resp = self._create_plan(
+            auth_client, grp["id"], chat_id, img_id,
+            image_generations=[{
+                "prompts": [f"aurora photo variant {i}" for i in range(image_count)],
+                "count": image_count,
+                "model": "flux-kontext-pro",
+                "aspect_ratio": "1:1",
+            }],
+        )
+        assert_response_success(resp)
+        plan = extract_data(resp.json())
+        plan_id = plan["id"]
+
+        # Main-table assertions: billing_status, frozen_cost, and
+        # image_generations[] must round-trip through the DB intact.
+        db_cursor.execute(
+            """SELECT billing_status, frozen_cost, plan_type,
+                      ai_input->'image_generations' AS igs
+                 FROM gm_aipub_plans WHERE id = %s""",
+            (plan_id,),
+        )
+        row = db_cursor.fetchone()
+        assert row["plan_type"] == "reddit_image"
+        assert row["billing_status"] == "frozen"
+        assert row["igs"] is not None, "image_generations[] must persist"
+        assert len(row["igs"]) == 1
+        assert int(row["igs"][0]["count"]) == image_count, (
+            f"DB image_generations[0].count expected {image_count}, "
+            f"got {row['igs'][0]['count']}"
+        )
+        frozen = float(row["frozen_cost"])
+        assert abs(frozen - expected) < 1e-4, (
+            f"RedditImage image_count={image_count} expected frozen={expected} "
+            f"(chat 1*{chat_unit} + image {image_count}*{n}*{image_unit}), "
+            f"got {frozen}"
+        )
+
+        db_cursor.execute("DELETE FROM gm_aipub_ai_tasks WHERE plan_id = %s", (plan_id,))
+        db_cursor.execute("DELETE FROM gm_aipub_plans WHERE id = %s", (plan_id,))
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
