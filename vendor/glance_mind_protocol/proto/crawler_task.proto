@@ -1,0 +1,54 @@
+syntax = "proto3";
+package glance_mind;
+
+option java_package = "io.glancemind.protocol";
+option java_multiple_files = true;
+
+import "common.proto";
+
+// Task message sent from Scheduler to Agent via Redis Queue
+message CrawlerTask {
+  CrawlerTaskMeta meta = 1;
+  CrawlerTaskSpec spec = 2;
+  TaskConfig config = 3;
+}
+
+// Task metadata
+message CrawlerTaskMeta {
+  // Unique task ID from database
+  int64 task_id = 1 [json_name = "task_id"];
+  // Source identifier (e.g., "campaign-123")
+  string source = 2;
+  // Unix timestamp when task was created
+  double timestamp = 3;
+  // Campaign ID when task originates from a campaign (scheduler dispatch)
+  int32 campaign_id = 4 [json_name = "campaign_id"];
+}
+
+// Task specification
+message CrawlerTaskSpec {
+  Platform platform = 1;
+  DataType data_type = 2 [json_name = "data_type"];
+}
+
+// Task configuration
+message TaskConfig {
+  // Search keywords
+  repeated string keywords = 1;
+  // Maximum number of items to process
+  int32 max_count = 2 [json_name = "max_count"];
+  // Pagination offset
+  int32 search_offset = 3 [json_name = "search_offset"];
+  // Items per page
+  int32 search_limit = 4 [json_name = "search_limit"];
+  // Optional filters
+  optional TaskFilters filters = 5;
+  // Additional platform-specific search options (JSON string)
+  optional string search_options = 6 [json_name = "search_options"];
+}
+
+// Task filters
+message TaskFilters {
+  optional TimeRange time_range = 1 [json_name = "time_range"];
+  optional string region = 2;
+}

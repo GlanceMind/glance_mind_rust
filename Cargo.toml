@@ -4,6 +4,12 @@ members = [
     "crates/db",
     "crates/api",
 ]
+# Vendored glance_mind_protocol crate (synced via `make sync` in the
+# glance_mind_protocol repo). Kept out of the workspace so it uses its
+# own dependency versions from vendor/glance_mind_protocol/generated/rust/Cargo.toml.
+exclude = [
+    "vendor/glance_mind_protocol",
+]
 
 [workspace.package]
 version = "0.1.0"

@@ -43,7 +43,7 @@ regex = "1"
 
 # GlanceMind Protocol — single source of truth for cross-service types.
 # Replaces the previously-vendored crates/api/src/protocol_gen/mod.rs.
-glance_mind_protocol = { path = "../../../glance_mind_protocol/generated/rust" }
+glance_mind_protocol = { path = "../../vendor/glance_mind_protocol/generated/rust" }
 
 # Async
 async-trait.workspace = true

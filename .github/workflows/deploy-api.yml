@@ -91,9 +91,7 @@ jobs:
       no_cache: ${{ github.event.inputs.no_cache == 'true' }}
       health_check_url: "http://localhost:8000/health"
       container_name_filter: aihub_backend
-      protocol_sibling: true
     secrets:
-      MONOREPO_PROTOCOL_TOKEN: ${{ secrets.MONOREPO_PROTOCOL_TOKEN }}
       ENV_FILE: |
         PORT=${{ vars.PORT }}
         JWT_SECRET=${{ secrets.JWT_SECRET }}

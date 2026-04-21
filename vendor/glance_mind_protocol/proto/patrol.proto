@@ -1,0 +1,106 @@
+syntax = "proto3";
+package glance_mind;
+
+option java_package = "io.glancemind.protocol";
+option java_multiple_files = true;
+
+import "common.proto";
+
+// ============================================================
+// Patrol Group Control Types
+// NATS JetStream message formats for account statistics patrol
+//
+// Streams:
+//   PATROL (subject: patrol.>)
+// Subjects:
+//   patrol.profile.{user_id} — profile page collection report
+//   patrol.notif.{user_id}   — notification page collection report
+// KV Buckets:
+//   patrol_latest  (key: {user_id})   — latest patrol snapshot
+//   patrol_config  (key: {device_id}) — patrol configuration
+// ============================================================
+
+// Type of patrol collection
+enum PatrolCollectionType {
+  PATROL_COLLECTION_TYPE_UNSPECIFIED = 0;
+  PATROL_COLLECTION_TYPE_PROFILE = 1;       // profile page: followers, following, posts
+  PATROL_COLLECTION_TYPE_NOTIFICATION = 2;  // notification page: likes, comments, new followers
+}
+
+// ============================================================
+// AccountStats — platform-agnostic collection result
+// ============================================================
+
+message AccountStats {
+  // Profile page fields (low-frequency)
+  int32 followers_count = 1;
+  int32 following_count = 2;
+  int32 posts_count = 3;
+  int32 total_likes = 4;     // TikTok shows Likes instead of Posts in header
+
+  // Notification page fields (high-frequency)
+  int32 new_followers = 10;
+  int32 received_likes = 11;
+  int32 received_comments = 12;
+  int32 received_dms = 13;
+  int32 received_shares = 14;
+  int32 received_mentions = 15;
+  int32 received_friend_requests = 16;  // Facebook / Instagram DM scenarios
+
+  // Metadata
+  string collected_at = 20;             // ISO 8601
+  PatrolCollectionType collection_type = 21;
+  bool partial = 22;                    // true = some metrics failed
+  repeated string warnings = 23;
+  string error = 24;
+  int32 unread_total = 25;              // aggregated unread notification badge
+}
+
+// ============================================================
+// AccountPatrolStats — single account snapshot, published to NATS
+// ============================================================
+
+message AccountPatrolStats {
+  int32 social_account_id = 1;
+  string device_id = 2;
+  int32 user_id = 3;
+  int32 platform_id = 4;
+  string platform_name = 5;
+  string username = 6;
+  string profile_name = 7;
+  AccountStats stats = 8;
+  string collected_at = 9;              // ISO 8601
+  string error = 10;
+}
+
+// ============================================================
+// PatrolReport — one collection cycle report
+// Subject: patrol.profile.{user_id} or patrol.notif.{user_id}
+// ============================================================
+
+message PatrolReport {
+  string report_id = 1;                 // UUID
+  PatrolCollectionType report_type = 2;
+  string device_id = 3;
+  int32 user_id = 4;
+  repeated AccountPatrolStats accounts = 5;
+  string started_at = 6;               // ISO 8601
+  string completed_at = 7;             // ISO 8601
+  int32 total_accounts = 8;
+  int32 success_count = 9;
+  int32 error_count = 10;
+}
+
+// ============================================================
+// PatrolConfig — stored in NATS KV patrol_config
+// Key: {device_id}
+// ============================================================
+
+message PatrolConfig {
+  string device_id = 1;
+  bool enabled = 2;
+  int32 profile_interval_seconds = 3;       // default: 600
+  int32 notification_interval_seconds = 4;  // default: 180
+  repeated string platforms = 5;
+  string updated_at = 6;               // ISO 8601
+}

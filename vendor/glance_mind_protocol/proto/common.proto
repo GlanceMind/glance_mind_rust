@@ -1,0 +1,52 @@
+syntax = "proto3";
+package glance_mind;
+
+option java_package = "io.glancemind.protocol";
+option java_multiple_files = true;
+
+// Supported social media platforms
+// IMPORTANT: These IDs are the SINGLE SOURCE OF TRUTH and MUST match:
+//   - Database table: gm_platforms.id
+//   - DB init script: glance_mind_rust/crates/db/docker/init-test-data.sql
+// When adding a new platform:
+//   1. Add enum value here with next available ID
+//   2. Run `make sync` in glance_mind_protocol
+//   3. Update DB init scripts to match
+//   4. Run validation tests to ensure consistency
+enum Platform {
+  PLATFORM_UNSPECIFIED = 0;
+  PLATFORM_REDDIT = 1;      // DB: gm_platforms.id = 1
+  PLATFORM_TIKTOK = 2;      // DB: gm_platforms.id = 2
+  PLATFORM_FACEBOOK = 3;    // DB: gm_platforms.id = 3
+  PLATFORM_INSTAGRAM = 4;   // DB: gm_platforms.id = 4
+  PLATFORM_TWITTER = 5;     // DB: gm_platforms.id = 5
+  PLATFORM_YOUTUBE = 6;     // DB: gm_platforms.id = 6
+}
+
+// Type of data to crawl
+enum DataType {
+  DATA_TYPE_UNSPECIFIED = 0;
+  DATA_TYPE_VIDEO_CONTENT = 1;
+  DATA_TYPE_VIDEO_METADATA = 2;
+  DATA_TYPE_VIDEO_COMMENTS = 3;
+  DATA_TYPE_KEYWORD_SEARCH = 4;
+}
+
+// Time range filter for search
+enum TimeRange {
+  TIME_RANGE_UNSPECIFIED = 0;
+  TIME_RANGE_ALL_TIME = 1;
+  TIME_RANGE_LAST_24H = 2;
+  TIME_RANGE_LAST_7D = 3;
+  TIME_RANGE_LAST_30D = 4;
+  TIME_RANGE_LAST_180D = 5;
+}
+
+// Comment processing status
+enum CommentStatus {
+  COMMENT_STATUS_UNSPECIFIED = 0;
+  COMMENT_STATUS_PENDING = 1;
+  COMMENT_STATUS_PROCESSING = 2;
+  COMMENT_STATUS_COMPLETED = 3;
+  COMMENT_STATUS_FAILED = 4;
+}
