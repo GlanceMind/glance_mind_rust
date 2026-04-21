@@ -1,0 +1,1430 @@
+syntax = "proto3";
+package glance_mind;
+
+option java_package = "io.glancemind.protocol";
+option java_multiple_files = true;
+
+// ============================================================
+// AI Publish Protocol
+// API <-> Scheduler <-> Executor for AI Publish feature
+//
+// Version History:
+// - v1 (2026-01-26): Initial protocol with AiPubInput, AiPubTaskContent,
+//                    AiTaskInput, AiTaskResult
+// ============================================================
+
+// Current protocol version
+// Increment when making breaking changes
+enum AiPubProtocolVersion {
+  AIPUB_VERSION_UNSPECIFIED = 0;
+  AIPUB_VERSION_1 = 1; // Initial version
+  // v2 (DRAFT, 2026-04-19): Unified content schema — see "Unified Content
+  // Schema" section at the bottom of this file. v2 is opt-in: messages
+  // tagged with version=2 use UnifiedAiPubInput / UnifiedPublishContent;
+  // version=1 messages keep their existing flat shape unchanged.
+  AIPUB_VERSION_2 = 2;
+}
+
+// ============================================================
+// AIPub Enum Specifications (SINGLE SOURCE OF TRUTH)
+//
+// All string values below are used in:
+//   - PostgreSQL DB columns and CHECK constraints
+//   - Rust entity enums (serde snake_case)
+//   - Python protocol_gen classes
+//   - JSON API communication
+//
+// IMPORTANT: These enums MUST cover all historical DB values
+// to ensure backward compatibility with existing data.
+// ============================================================
+
+// PlanType - gm_aipub_plans.plan_type
+// Determines the processing strategy for a publish plan.
+// DB CHECK: ('batch_text', 'single_video', 'account_grooming',
+//            'reddit_text', 'reddit_image', 'reddit_link')
+enum PlanType {
+  PLAN_TYPE_UNSPECIFIED = 0;
+  PLAN_TYPE_BATCH_TEXT = 1;        // "batch_text" - text posts for group
+  PLAN_TYPE_SINGLE_VIDEO = 2;      // "single_video" - video for one account
+  PLAN_TYPE_ACCOUNT_GROOMING = 3;  // "account_grooming" - profile name+avatar
+  PLAN_TYPE_REDDIT_TEXT = 4;       // "reddit_text" - Reddit text post
+  PLAN_TYPE_REDDIT_IMAGE = 5;      // "reddit_image" - Reddit image post
+  PLAN_TYPE_REDDIT_LINK = 6;       // "reddit_link" - Reddit link post
+}
+
+// ContentType - gm_aipub_plans.content_type
+// Type of content to publish.
+// DB CHECK: ('post', 'video', 'reel', 'story', 'profile')
+enum ContentType {
+  CONTENT_TYPE_UNSPECIFIED = 0;
+  CONTENT_TYPE_POST = 1;     // "post"
+  CONTENT_TYPE_VIDEO = 2;    // "video"
+  CONTENT_TYPE_REEL = 3;     // "reel"
+  CONTENT_TYPE_STORY = 4;    // "story"
+  CONTENT_TYPE_PROFILE = 5;  // "profile" - for account grooming
+}
+
+// PlanStatus - gm_aipub_plans.status
+// Plan lifecycle states (Plan level, NOT task level).
+// DB CHECK: ('pending', 'ai_processing', 'ready', 'completed', 'failed')
+enum PlanStatus {
+  PLAN_STATUS_UNSPECIFIED = 0;
+  PLAN_STATUS_PENDING = 1;        // "pending" - waiting for AI processing
+  PLAN_STATUS_AI_PROCESSING = 2;  // "ai_processing" - AI is generating content
+  PLAN_STATUS_READY = 3;          // "ready" - content ready, can publish
+  PLAN_STATUS_COMPLETED = 4;      // "completed" - all tasks published
+  PLAN_STATUS_FAILED = 5;         // "failed" - plan failed
+}
+
+// PublishTaskStatus - gm_aipub_tasks.status
+// Publish task lifecycle (Task level, used by Executor).
+// IMPORTANT: Includes historical video-pipeline states for backward compat.
+// DB CHECK: ('pending','video_pending','video_processing',
+//            'media_pending','media_processing',
+//            'ready','processing','completed','failed')
+enum PublishTaskStatus {
+  PUBLISH_TASK_STATUS_UNSPECIFIED = 0;
+  PUBLISH_TASK_STATUS_PENDING = 1;           // "pending"
+  PUBLISH_TASK_STATUS_VIDEO_PENDING = 2;     // "video_pending" (historical)
+  PUBLISH_TASK_STATUS_VIDEO_PROCESSING = 3;  // "video_processing" (historical)
+  PUBLISH_TASK_STATUS_READY = 4;             // "ready" - ready for executor
+  PUBLISH_TASK_STATUS_PROCESSING = 5;        // "processing" - executor working
+  PUBLISH_TASK_STATUS_COMPLETED = 6;         // "completed" - published
+  PUBLISH_TASK_STATUS_FAILED = 7;            // "failed"
+  PUBLISH_TASK_STATUS_MEDIA_PENDING = 8;     // "media_pending" - waiting for media generation (generic)
+  PUBLISH_TASK_STATUS_MEDIA_PROCESSING = 9;  // "media_processing" - media being generated (generic)
+}
+
+// AiTaskType - gm_aipub_ai_tasks.task_type
+// Type of AI generation task.
+// DB CHECK: ('video_gen','content_gen','image_gen','combined',
+//            'account_grooming')
+// Note: 'image_gen' covers all image providers (Flux Kontext Pro/Max,
+// SeeDream 4.0/4.5, gpt-4o-image). The concrete provider is selected
+// at runtime by ImageGenerationSpec.model + provider_hint.
+enum AiTaskType {
+  AI_TASK_TYPE_UNSPECIFIED = 0;
+  AI_TASK_TYPE_CONTENT_GEN = 1;        // "content_gen"
+  AI_TASK_TYPE_VIDEO_GEN = 2;          // "video_gen"
+  AI_TASK_TYPE_IMAGE_GEN = 3;          // "image_gen"
+  AI_TASK_TYPE_COMBINED = 4;           // "combined" (content + video)
+  AI_TASK_TYPE_ACCOUNT_GROOMING = 5;   // "account_grooming" (name + avatar)
+  AI_TASK_TYPE_SEEDANCE_VIDEO = 6;    // "seedance_video" (Seedance 2.0 video gen)
+}
+
+// AiTaskStatus - gm_aipub_ai_tasks.status
+// AI task processing states.
+// DB CHECK: ('pending', 'processing', 'completed', 'failed')
+enum AiTaskStatus {
+  AI_TASK_STATUS_UNSPECIFIED = 0;
+  AI_TASK_STATUS_PENDING = 1;     // "pending"
+  AI_TASK_STATUS_PROCESSING = 2;  // "processing"
+  AI_TASK_STATUS_COMPLETED = 3;   // "completed"
+  AI_TASK_STATUS_FAILED = 4;      // "failed"
+}
+
+// Image configuration for FL video models
+// FL models support start and end frame images for smooth transitions
+message AiPubImageConfig {
+  // URL of the start frame image
+  optional string start_frame_url = 1 [ json_name = "start_frame_url" ];
+  // URL of the end frame image (for FL models that support transitions)
+  optional string end_frame_url = 2 [ json_name = "end_frame_url" ];
+}
+
+// Reference video configuration for video prompt enhancement
+// Allows users to provide a reference video that will be analyzed
+// to extract visual style and narrative structure for better prompts
+message ReferenceVideoConfig {
+  // URL of the reference video to analyze
+  string video_url = 1 [ json_name = "video_url" ];
+  // AI model for video analysis: "gemini-2.5-pro" (detailed) or
+  // "gemini-2.5-flash" (fast)
+  string model_name = 2 [ json_name = "model_name" ];
+  // Target video duration in seconds (default: 15)
+  // The generated video will be scaled to this duration
+  optional int32 target_duration = 3 [ json_name = "target_duration" ];
+}
+
+// Video generation configuration
+// Controls video duration, orientation, and provider-specific settings
+message VideoGenerationConfig {
+  // Video duration in seconds (provider-dependent: Sora 10/15, Jimeng 5/10, Vidu 4/8)
+  int32 duration = 1;
+  // Video orientation: "portrait" (720x1280), "landscape" (1280x720)
+  string orientation = 2;
+  // Video size: "720x1280" (portrait), "1280x720" (landscape)
+  string size = 3;
+  // Aspect ratio: "16:9", "9:16", "1:1" (used by Jimeng and Vidu)
+  optional string aspect_ratio = 4 [ json_name = "aspect_ratio" ];
+  // Resolution: "360p", "720p", "1080p" (used by Vidu)
+  optional string resolution = 5;
+}
+
+// Generation mode for video tasks
+// Determines which API endpoint and parameters to use
+enum VideoGenerationMode {
+  VIDEO_GEN_MODE_UNSPECIFIED = 0;
+  VIDEO_GEN_MODE_TEXT_TO_VIDEO = 1;         // "text_to_video"
+  VIDEO_GEN_MODE_IMAGE_TO_VIDEO = 2;        // "image_to_video"
+  VIDEO_GEN_MODE_REFERENCE_TO_VIDEO = 3;    // "reference_to_video" (Vidu: 1-7 images)
+  VIDEO_GEN_MODE_START_END_TO_VIDEO = 4;    // "start_end_to_video" (Vidu/FL models)
+  VIDEO_GEN_MODE_MULTI_FRAME = 5;           // "multi_frame" (Vidu)
+  VIDEO_GEN_MODE_AD_FILM = 6;              // "ad_film" (Vidu one-click)
+  VIDEO_GEN_MODE_TRENDING_REPLICATE = 7;    // "trending_replicate" (Vidu one-click)
+  VIDEO_GEN_MODE_ONECLICK = 8;             // "oneclick" (Vidu one-click)
+}
+
+// Vidu-specific video generation configuration
+message ViduVideoConfig {
+  // Visual style: "general" (default), "anime"
+  string style = 1;
+  // Movement amplitude: "auto" (default), "small", "medium", "large"
+  string movement_amplitude = 2 [ json_name = "movement_amplitude" ];
+  // Background music (only for 4-second videos)
+  bool bgm = 3;
+  // Model version: "viduq1", "vidu1.5", "vidu2.0"
+  string model_version = 4 [ json_name = "model_version" ];
+  // Template name (for template2video mode)
+  optional string template_name = 5 [ json_name = "template_name" ];
+}
+
+// Seedance 2.0 video generation configuration
+// Used with Volcengine Ark SDK (doubao-seedance-2-0-260128 / doubao-seedance-2-0-fast-260128)
+// Supports: text2video, image2video, start_end_frame, multimodal, edit, extend
+message SeedanceVideoConfig {
+  // Generation mode
+  // text2video: prompt only
+  // image2video: prompt + 1 image (first_frame)
+  // start_end_frame: prompt + 2 images (first_frame + last_frame)
+  // multimodal: prompt + any combination of images/videos/audios
+  // edit: prompt + source video + optional reference images
+  // extend: prompt + 1-3 videos to concatenate
+  string mode = 1 [ json_name = "mode" ];
+
+  // Video duration 4-15 seconds
+  int32 duration = 2;
+
+  // Output quality: "480p", "720p" (Volcengine official)
+  string quality = 3;
+
+  // Aspect ratio: "16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"
+  string aspect_ratio = 4 [ json_name = "aspect_ratio" ];
+
+  // Generate synchronized audio (voice + SFX + BGM)
+  bool generate_audio = 5 [ json_name = "generate_audio" ];
+
+  // Return last frame image for continuous generation
+  bool return_last_frame = 6 [ json_name = "return_last_frame" ];
+
+  // Add watermark
+  bool watermark = 7;
+
+  // Enable web search enhancement (text-only input)
+  bool enable_web_search = 8 [ json_name = "enable_web_search" ];
+
+  // Reference image URLs (max 9). Supports https:// and asset:// (virtual avatar)
+  repeated string image_urls = 10 [ json_name = "image_urls" ];
+
+  // Reference video URLs (max 3)
+  repeated string video_urls = 11 [ json_name = "video_urls" ];
+
+  // Reference audio URLs (max 3)
+  repeated string audio_urls = 12 [ json_name = "audio_urls" ];
+
+  // Image role mapping: key = index "1"-"9", value = "first_frame"/"last_frame"/"reference_image"
+  map<string, string> image_roles = 13 [ json_name = "image_roles" ];
+
+  // Video role mapping: key = index "1"-"3", value = "reference_video"
+  map<string, string> video_roles = 14 [ json_name = "video_roles" ];
+
+  // Audio role mapping: key = index "1"-"3", value = "reference_audio"
+  map<string, string> audio_roles = 15 [ json_name = "audio_roles" ];
+}
+
+// ============================================================
+// AI Task Input/Result Protocol
+// Structure for gm_aipub_ai_tasks.input and result fields
+// Used by: Scheduler (creates/reads)
+// ============================================================
+
+// AI Task Input - stored in gm_aipub_ai_tasks.input
+// Supports multiple task types: content_gen, video_gen, combined, seedance_video
+message AiTaskInput {
+  // Protocol version for forward compatibility
+  int32 version = 1 [ json_name = "version" ];
+
+  // === Content Generation Input ===
+  // Used when task_type = "content_gen" or "combined"
+
+  // Video generation base prompt (from AiPubInput.video_prompt)
+  optional string video_prompt = 10 [ json_name = "video_prompt" ];
+
+  // Content generation prompt (from AiPubInput.content_prompt)
+  optional string content_prompt = 11 [ json_name = "content_prompt" ];
+
+  // === Video Generation Input ===
+  // Used when task_type = "video_gen"
+
+  // AI model name (e.g., "veo-3.1", "sora-1.0")
+  optional string model = 20;
+
+  // Final assembled prompt for video generation
+  optional string prompt = 21;
+
+  // Associated aipub_task ID (for video_gen tasks)
+  optional int32 aipub_task_id = 22 [ json_name = "aipub_task_id" ];
+
+  // Start frame image URL (for image-to-video)
+  optional string start_image_url = 23 [ json_name = "start_image_url" ];
+
+  // End frame image URL (for FL models)
+  optional string end_image_url = 24 [ json_name = "end_image_url" ];
+
+  // Reference image URLs (for Vidu reference2video, 1-7 images)
+  repeated string reference_image_urls = 25 [ json_name = "reference_image_urls" ];
+
+  // Video generation mode (text_to_video, image_to_video, reference_to_video, etc.)
+  optional string generation_mode = 26 [ json_name = "generation_mode" ];
+
+  // Provider-side uploaded asset URIs (e.g., vidu:// URIs after 3-step upload)
+  // Stored for retry reuse to avoid re-uploading
+  repeated string provider_asset_uris = 27 [ json_name = "provider_asset_uris" ];
+
+  // === Seedance 2.0 Video Generation Input ===
+  // Used when task_type = "seedance_video"
+
+  // Full Seedance configuration (copied from AiPubInput.seedance_config)
+  optional SeedanceVideoConfig seedance_config = 30 [ json_name = "seedance_config" ];
+}
+
+// AI Task Result - stored in gm_aipub_ai_tasks.result
+message AiTaskResult {
+  // Protocol version for forward compatibility
+  int32 version = 1 [ json_name = "version" ];
+
+  // === Content Generation Result ===
+
+  // Number of content variations generated
+  optional int32 content_count = 10 [ json_name = "content_count" ];
+
+  // Number of video tasks pending
+  optional int32 video_pending_count = 11 [ json_name = "video_pending_count" ];
+
+  // Generated content variations (for batch_text plans)
+  repeated ContentVariation content_variations = 12
+      [ json_name = "content_variations" ];
+
+  // === Video Generation Result ===
+
+  // Generated video URL
+  optional string video_url = 20 [ json_name = "video_url" ];
+
+  // Video duration in seconds
+  optional float video_duration = 21 [ json_name = "video_duration" ];
+
+  // Cover/thumbnail URL (returned by some providers like Vidu)
+  optional string cover_url = 22 [ json_name = "cover_url" ];
+
+  // === Common Fields ===
+
+  // Timestamp when task completed (ISO 8601 format)
+  optional string generated_at = 30 [ json_name = "generated_at" ];
+
+  // Error message if task failed
+  optional string error = 31;
+}
+
+// Content variation - single generated content item
+// Used in AiTaskResult.content_variations for batch content generation
+message ContentVariation {
+  // Post title (for TikTok, YouTube, etc.)
+  string title = 1;
+
+  // Main text content (description/caption)
+  string text_content = 2 [ json_name = "text_content" ];
+
+  // Hashtags for the post
+  repeated string hashtags = 3;
+
+  // Location tag (for TikTok/Instagram geo-tagging, e.g., "New York", "Tokyo")
+  optional string location = 4;
+
+  // Video scene description - unique visual elements for this variation
+  // Used to differentiate videos when same base video_prompt is shared
+  optional string video_scene = 5 [ json_name = "video_scene" ];
+}
+
+// ============================================================
+// AiPub Task Content
+// Content structure for gm_aipub_tasks.content field
+// Used by: Scheduler (creates), API (reads), Executor (reads)
+// ============================================================
+message AiPubTaskContent {
+  // === Publishing Content ===
+
+  // Main text content for the post (description/caption)
+  string text_content = 1 [ json_name = "text_content" ];
+
+  // Post title (for TikTok, YouTube, etc.)
+  string title = 2;
+
+  // Hashtags for the post
+  repeated string hashtags = 3;
+
+  // Location tag (for TikTok/Instagram geo-tagging)
+  optional string location = 4;
+
+  // Video scene description - unique visual elements for this variation
+  // Used to differentiate videos when same base video_prompt is shared
+  optional string video_scene = 5 [ json_name = "video_scene" ];
+
+  // === Video Generation ===
+
+  // Final video generation prompt (base_prompt + video_scene + title)
+  // Sent to video AI for generation
+  optional string video_prompt = 10 [ json_name = "video_prompt" ];
+
+  // Start frame image URL (for image-to-video generation)
+  optional string start_frame_url = 11 [ json_name = "start_frame_url" ];
+
+  // End frame image URL (for FL models with transitions)
+  optional string end_frame_url = 12 [ json_name = "end_frame_url" ];
+
+  // Generated video URL (filled after video generation completes)
+  optional string video_url = 13 [ json_name = "video_url" ];
+
+  // Reference image URLs (for Vidu reference2video, 1-7 images)
+  repeated string reference_image_urls = 14 [ json_name = "reference_image_urls" ];
+
+  // === Task State Flags ===
+
+  // Whether this task requires video generation
+  bool video_generation_needed = 20 [ json_name = "video_generation_needed" ];
+
+  // Whether video has been submitted to generation service
+  bool video_submitted = 21 [ json_name = "video_submitted" ];
+
+  // Associated AI task ID (references gm_aipub_ai_tasks.id)
+  optional int32 ai_task_id = 22 [ json_name = "ai_task_id" ];
+}
+
+// ============================================================
+// Platform-Specific Input Configurations
+// Each platform has its own config message for platform-specific fields.
+// These are used inside AiPubInput.platform_config oneof.
+// ============================================================
+
+// Reddit post configuration
+// Used for reddit_text, reddit_image, reddit_link plan types
+message RedditPostConfig {
+  // Target subreddit (e.g., "travel", "programming") - required
+  string subreddit = 1;
+
+  // Reddit post type: "TEXT", "IMAGE", "LINK"
+  string reddit_post_type = 2 [ json_name = "reddit_post_type" ];
+
+  // Post flair text (optional, subreddit-specific)
+  optional string flair_text = 3 [ json_name = "flair_text" ];
+
+  // NSFW flag
+  bool is_nsfw = 4 [ json_name = "is_nsfw" ];
+
+  // Spoiler flag
+  bool is_spoiler = 5 [ json_name = "is_spoiler" ];
+
+  // Link URL for LINK type posts
+  optional string link_url = 6 [ json_name = "link_url" ];
+
+  // AI image generation prompt (for IMAGE type with AI-generated images)
+  optional string image_prompt = 7 [ json_name = "image_prompt" ];
+
+  // User-uploaded image URLs (for IMAGE type with manual uploads)
+  repeated string uploaded_image_urls = 8 [ json_name = "uploaded_image_urls" ];
+
+  // Use Markdown mode for body text
+  bool use_markdown = 9 [ json_name = "use_markdown" ];
+
+  // Brand affiliate / sponsored content flag
+  bool is_brand_affiliate = 10 [ json_name = "is_brand_affiliate" ];
+}
+
+// AI Publish input configuration.
+// Used by API to create plans and by Scheduler to generate AI tasks.
+//
+// ## Prompt Fields (common across all platforms)
+// - video_prompt: Used for video generation (scene description, transitions)
+// - content_prompt: Used for text content generation (titles, captions)
+// - image_prompt: Used for image generation
+// - prompt: Legacy field, kept for backward compatibility
+//
+// ## Platform Config (oneof)
+// Each plan belongs to exactly one platform. Platform-specific settings
+// (e.g., subreddit for Reddit, hashtag style for TikTok) go in the
+// platform_config oneof.
+message AiPubInput {
+  // Video generation prompt - describes the visual content, scenes,
+  // transitions, and style. Used by video AI models (e.g., Sora, Veo)
+  string video_prompt = 1 [ json_name = "video_prompt" ];
+
+  // Content/text generation prompt - for titles, captions, descriptions, and
+  // hashtags. Used by chat AI models (e.g., GPT, DeepSeek)
+  string content_prompt = 2 [ json_name = "content_prompt" ];
+
+  // Legacy prompt field - kept for backward compatibility
+  // If video_prompt or content_prompt is empty, this value is used as fallback
+  string prompt = 3;
+
+  // Default images for FL video models (used for all accounts if no per-account
+  // images)
+  optional AiPubImageConfig default_images = 4 [ json_name = "default_images" ];
+
+  // Per-account images for FL video models (key: account_id as string)
+  // Overrides default_images for specific accounts
+  map<string, AiPubImageConfig> account_images = 5
+      [ json_name = "account_images" ];
+
+  // Reference video configuration for prompt enhancement
+  // When provided, the system will analyze the reference video to extract
+  // visual style and narrative structure, then enhance the video_prompt
+  optional ReferenceVideoConfig reference_video = 6
+      [ json_name = "reference_video" ];
+
+  // Video generation configuration
+  // Controls video duration, orientation, resolution, aspect ratio
+  optional VideoGenerationConfig video_config = 7
+      [ json_name = "video_config" ];
+
+  // Platform-specific configuration (union: one plan = one platform)
+  oneof platform_config {
+    RedditPostConfig reddit_config = 8 [ json_name = "reddit_config" ];
+    // Future platforms:
+    // TikTokPostConfig tiktok_config = 9;
+    // InstagramPostConfig instagram_config = 10;
+  }
+
+  // Reference image URLs for Vidu reference2video (1-7 images)
+  repeated string reference_images = 11 [ json_name = "reference_images" ];
+
+  // Vidu-specific video generation configuration
+  optional ViduVideoConfig vidu_config = 12 [ json_name = "vidu_config" ];
+
+  // Video generation mode (explicit mode selection for providers like Vidu)
+  optional string generation_mode = 13 [ json_name = "generation_mode" ];
+
+  // Seedance 2.0 specific configuration
+  optional SeedanceVideoConfig seedance_config = 14 [ json_name = "seedance_config" ];
+}
+
+// ============================================================
+// Upload Task Protocol (API -> Executor)
+// Endpoint: GET /api/v1/public/tasks/by-device
+// Used by: API (sends), Executor (receives and executes)
+// ============================================================
+
+// Upload task - for video upload to social platforms
+message UploadTaskMessage {
+  // Database task ID
+  int32 id = 1;
+
+  // Task type identifier
+  string task_type = 2 [ json_name = "task_type" ];
+
+  // Task metadata containing upload details
+  UploadTaskMeta meta = 3;
+}
+
+// Upload task metadata (stored as JSON in gm_upload_tasks.metadata)
+message UploadTaskMeta {
+  // Target platform: "TIKTOK", "INSTAGRAM", "FACEBOOK", etc.
+  string platform = 1;
+
+  // Video URL or local path to upload
+  string video_url = 2 [ json_name = "video_url" ];
+
+  // Video description/caption
+  string description = 3;
+
+  // Chrome profile name for browser automation
+  string profile_name = 4 [ json_name = "profile_name" ];
+
+  // Location tag for geo-tagging (optional)
+  optional string location = 5;
+}
+
+// ============================================================
+// AIPub Executor Publish Task Protocol (API -> Executor)
+// Endpoint: GET /api/v1/public/aipub/publish_tasks
+// Used by: API (sends), Executor (receives and executes)
+//
+// Routes by plan_type:
+//   batch_text / single_video -> publish_content (video/text)
+//   account_grooming -> grooming_content (profile name+avatar)
+//   reddit_text / reddit_image / reddit_link -> reddit_content
+// ============================================================
+
+// Reddit publish content - ready for Executor to post to Reddit
+message RedditPublishContent {
+  // Target subreddit
+  string subreddit = 1;
+
+  // Reddit post type: "TEXT", "IMAGE", "LINK"
+  string reddit_post_type = 2 [ json_name = "reddit_post_type" ];
+
+  // Post title (max 300 chars)
+  string title = 3;
+
+  // Post body text (required for TEXT, optional for IMAGE/LINK)
+  optional string body = 4;
+
+  // Link URL (for LINK type)
+  optional string link_url = 5 [ json_name = "link_url" ];
+
+  // Image URLs (for IMAGE type - AI generated or user uploaded)
+  repeated string image_urls = 6 [ json_name = "image_urls" ];
+
+  // Post flair text
+  optional string flair_text = 7 [ json_name = "flair_text" ];
+
+  // NSFW flag
+  bool is_nsfw = 8 [ json_name = "is_nsfw" ];
+
+  // Spoiler flag
+  bool is_spoiler = 9 [ json_name = "is_spoiler" ];
+
+  // Use Markdown mode for body
+  bool use_markdown = 10 [ json_name = "use_markdown" ];
+
+  // Brand affiliate / sponsored content flag
+  bool is_brand_affiliate = 11 [ json_name = "is_brand_affiliate" ];
+}
+
+// Executor publish task
+message ExecutorPublishTask {
+  int32 task_id = 1 [ json_name = "task_id" ];
+  int32 plan_id = 2 [ json_name = "plan_id" ];
+  int32 social_account_id = 3 [ json_name = "social_account_id" ];
+  string platform = 4;
+  int32 platform_id = 5 [ json_name = "platform_id" ];
+
+  // See ContentType enum: "post", "video", "reel", "story", "profile"
+  string content_type = 6 [ json_name = "content_type" ];
+
+  // See PlanType enum - Executor uses this to determine processing strategy
+  string plan_type = 7 [ json_name = "plan_type" ];
+
+  // Chrome profile name (e.g., "account_1")
+  string profile_name = 8 [ json_name = "profile_name" ];
+
+  // Task creation timestamp (ISO 8601)
+  string created_at = 9 [ json_name = "created_at" ];
+
+  // === Task Content (union: one task = one content type) ===
+  // Executor routes by plan_type to determine which field to read.
+  oneof task_content {
+    // For batch_text / single_video
+    AiPubTaskContent publish_content = 10 [ json_name = "publish_content" ];
+    // For account_grooming
+    AccountGroomingTaskContent grooming_content = 11 [ json_name = "grooming_content" ];
+    // For reddit_text / reddit_image / reddit_link
+    RedditPublishContent reddit_content = 12 [ json_name = "reddit_content" ];
+    // Future platforms add variants here
+  }
+}
+
+// Account grooming task content
+message AccountGroomingTaskContent {
+  string generated_name = 1 [ json_name = "generated_name" ];
+  optional string avatar_url = 2 [ json_name = "avatar_url" ];
+  optional string avatar_prompt = 3 [ json_name = "avatar_prompt" ];
+  optional string generated_bio = 4 [ json_name = "generated_bio" ];  // Bio text (max ~80 chars)
+}
+
+// Executor task status update (Executor -> API)
+message ExecutorTaskStatusUpdate {
+  int32 task_id = 1 [ json_name = "task_id" ];
+  string status = 2;
+  optional string result_url = 3 [ json_name = "result_url" ];
+  optional string error_message = 4 [ json_name = "error_message" ];
+}
+
+// ============================================================
+// =============  v2 — Unified Content Schema  ================
+// ============================================================
+//
+// STATUS: DRAFT (2026-04-19). Additive-only — does NOT modify any
+// existing v1 message. v2 consumers MUST set
+//   AiPubProtocolVersion = AIPUB_VERSION_2
+// in the embedded `version` field; v1 consumers ignore everything
+// in this section.
+//
+// MOTIVATION
+// ----------
+// v1's AiPubInput / AiPubTaskContent grew via flat field accretion
+// (video_url, default_images.start_frame_url, reference_image_urls,
+// seedance_config.image_urls, …) and per-platform `oneof platform_config`.
+// Result: every new content shape (Reddit link, IG carousel, future
+// multi-video story) bolts on more flat fields or extends the oneof.
+// JSONB columns then drift from the typed structs (see
+// reddit_aipub_integration_test.rs, which explicitly merges
+// reddit_config / image_urls into JSON outside the protocol struct).
+//
+// v2 unifies the content payload around three uniform collections:
+//   1) media[]   — videos + images + audio, discriminated by `kind`,
+//                  ordered by `order`, semantically tagged by `role`.
+//   2) texts[]   — title / body / caption / hashtag / subreddit / flair,
+//                  each with `role` + `source` (ai vs user).
+//   3) links[]   — Reddit link posts, future external embeds.
+// Plus a `platform_extras` map<string,string> escape hatch so per-
+// platform booleans (is_nsfw, use_markdown, …) can ship without yet
+// promoting them to first-class fields. Promoted fields graduate out
+// of the map in subsequent minor versions.
+//
+// COMPATIBILITY
+// -------------
+// * Wire-level: all v2 messages live in their own message types with
+//   fresh field numbers; no v1 message is touched.
+// * `ExecutorPublishTask.task_content` integration is intentionally
+//   NOT part of this draft. The intended next step is to add a fourth
+//   variant `UnifiedPublishContent unified_content = 13` to that oneof;
+//   that diff is documented in proto/AIPUB_V2_DRAFT.md and gated on
+//   the worker side actually implementing the unified publisher.
+//
+// ============================================================
+
+// What kind of media asset this is.
+// Single discriminator instead of separate videos[]/images[]/audio[]
+// buckets so that future kinds (GIF, livestream, AR scene) extend
+// cleanly without breaking the schema.
+enum MediaKind {
+  MEDIA_KIND_UNSPECIFIED = 0;
+  MEDIA_KIND_VIDEO = 1;
+  MEDIA_KIND_IMAGE = 2;
+  MEDIA_KIND_AUDIO = 3;
+  MEDIA_KIND_GIF = 4;
+  MEDIA_KIND_SUBTITLE = 5; // SRT/VTT track bound to a parent video via
+                           // MediaItem.parent_media_index +
+                           // MediaItem.language
+}
+
+// Where this media asset originated.
+// Critical for executor decisions: AI_GENERATED items may still be
+// pending at task-content emission time and need polling/binding via
+// `ai_task_id`; USER_UPLOADED items are immediately addressable.
+enum MediaSource {
+  MEDIA_SOURCE_UNSPECIFIED = 0;
+  MEDIA_SOURCE_AI_GENERATED = 1; // produced by an AiTask, see ai_task_id
+  MEDIA_SOURCE_USER_UPLOADED = 2;
+  MEDIA_SOURCE_REFERENCE = 3;    // not published; used as input to AI
+}
+
+// Lifecycle of a single MediaItem.
+// Lets a content payload carry placeholders for media still being
+// generated, instead of forcing the whole task to wait.
+enum MediaStatus {
+  MEDIA_STATUS_UNSPECIFIED = 0;
+  MEDIA_STATUS_PENDING = 1; // not yet generated / uploaded
+  MEDIA_STATUS_READY = 2;   // url is valid and addressable
+  MEDIA_STATUS_FAILED = 3;
+}
+
+// Semantic role of a MediaItem within its task.
+// Replaces v1's role-by-field-name pattern (start_frame_url,
+// end_frame_url, cover_url, default_images, …).
+enum MediaRole {
+  MEDIA_ROLE_UNSPECIFIED = 0;
+  MEDIA_ROLE_PRIMARY = 1;       // the main asset being published
+  MEDIA_ROLE_COVER = 2;         // thumbnail/cover for video/reel
+  MEDIA_ROLE_START_FRAME = 3;   // first frame for image-to-video models
+  MEDIA_ROLE_END_FRAME = 4;     // last frame for FL/transition models
+  MEDIA_ROLE_CAROUSEL_ITEM = 5; // ordered slide in a multi-image post
+  MEDIA_ROLE_REFERENCE = 6;     // input-only, not published
+  MEDIA_ROLE_BACKGROUND = 7;    // background music/audio for a video
+  MEDIA_ROLE_SOURCE = 8;        // source video for edit/extend modes
+}
+
+// One media asset (video, image, audio, …).
+// Replaces v1's start_frame_url / end_frame_url / video_url /
+// reference_image_urls / seedance_config.{image,video,audio}_urls.
+message MediaItem {
+  MediaKind kind = 1;
+  MediaSource source = 2;
+  MediaStatus status = 3;
+  MediaRole role = 4;
+
+  // Sort order within its (kind, role) group. Required for carousels.
+  // For singletons (PRIMARY video, COVER), set to 0.
+  uint32 order = 5;
+
+  // Asset URL. Empty when status == PENDING.
+  // Supports https://, asset:// (virtual avatar), provider:// (e.g.
+  // vidu:// uploaded asset), s3:// (internal), etc.
+  string url = 6;
+
+  // Back-reference to the AiTask producing this item.
+  // Set when source == AI_GENERATED. Lets executor poll AI status and
+  // bind the eventual url here without rewriting the surrounding payload.
+  optional int32 ai_task_id = 7 [ json_name = "ai_task_id" ];
+
+  // Optional metadata. All fields nullable to allow lazy fill-in.
+  optional string mime = 10;
+  optional uint32 width_px = 11 [ json_name = "width_px" ];
+  optional uint32 height_px = 12 [ json_name = "height_px" ];
+  optional uint32 duration_ms = 13 [ json_name = "duration_ms" ];
+  optional uint64 bytes = 14;
+
+  // Provider-side asset URI (e.g. vidu:// after 3-step upload). Mirrors
+  // v1's AiTaskInput.provider_asset_uris for retry reuse.
+  optional string provider_asset_uri = 15
+      [ json_name = "provider_asset_uri" ];
+
+  // BCP-47 language tag (e.g. "en", "zh-Hans", "ja"). Required for
+  // SUBTITLE tracks; optional hint for AUDIO (voice-over language).
+  optional string language = 20;
+
+  // Index into the parent UnifiedPublishContent.media[] array that
+  // this asset is bound to. Required when:
+  //   - kind == SUBTITLE (which video this caption track describes)
+  //   - role == COVER and the cover is for a specific carousel item
+  // Set to UINT32_MAX (or omit) for top-level assets.
+  optional uint32 parent_media_index = 21
+      [ json_name = "parent_media_index" ];
+}
+
+// Semantic role of a TextBlock.
+// Lets executor select correct platform field (TikTok caption vs
+// Reddit title vs Instagram description) without string parsing.
+enum TextRole {
+  TEXT_ROLE_UNSPECIFIED = 0;
+  TEXT_ROLE_TITLE = 1;
+  TEXT_ROLE_BODY = 2;       // long-form (Reddit text post body)
+  TEXT_ROLE_CAPTION = 3;    // primary description on TikTok/IG/FB
+  TEXT_ROLE_HASHTAG = 4;    // one tag per TextBlock; order matters
+  TEXT_ROLE_SUBREDDIT = 5;  // Reddit-specific routing tag
+  TEXT_ROLE_FLAIR = 6;      // Reddit flair_text
+  TEXT_ROLE_LOCATION = 7;   // geo tag for TikTok/IG
+  TEXT_ROLE_VIDEO_SCENE = 8;// per-variation scene differentiator
+}
+
+// Origin of a TextBlock — for analytics + audit + retry semantics.
+enum TextSource {
+  TEXT_SOURCE_UNSPECIFIED = 0;
+  TEXT_SOURCE_AI_GENERATED = 1;
+  TEXT_SOURCE_USER_PROVIDED = 2;
+}
+
+// One text element (title, caption, single hashtag, …).
+message TextBlock {
+  TextRole role = 1;
+  string value = 2;
+  TextSource source = 3;
+  // Sort order within the same role (e.g. hashtags 0..N).
+  uint32 order = 4;
+  // If source == AI_GENERATED: which content_variations[i] this came
+  // from. Helps reconstruct full variation across multiple TextBlocks
+  // and trace cost.
+  optional int32 variation_index = 5 [ json_name = "variation_index" ];
+}
+
+// Semantic role of a LinkItem.
+enum LinkRole {
+  LINK_ROLE_UNSPECIFIED = 0;
+  LINK_ROLE_EXTERNAL = 1;     // generic external URL
+  LINK_ROLE_REDDIT_TARGET = 2;// the URL of a Reddit LINK post
+  LINK_ROLE_PRODUCT = 3;      // product/landing page
+  LINK_ROLE_PROFILE = 4;      // social profile link
+}
+
+message LinkItem {
+  LinkRole role = 1;
+  string url = 2;
+  optional string label = 3;
+  uint32 order = 4;
+}
+
+// =============================================================
+// Output-side typed sub-messages
+// =============================================================
+//
+// The following enums/messages factor out things that v1 squashed into
+// platform_extras (NSFW, allow_comments, scheduled_at, …) into typed
+// fields, and add new structured shapes (mentions, tags, post-publish
+// actions) that v1 had no model for at all.
+//
+// Reserved for *output* (UnifiedPublishContent / UnifiedPublishResult).
+// Generation-side specs DO NOT reuse these — they describe what to
+// generate, not what to publish.
+
+// Audience scope at the platform level. Maps to TikTok privacy_level,
+// IG audience_restrictions, Reddit subreddit visibility, etc.
+enum Visibility {
+  VISIBILITY_UNSPECIFIED = 0;
+  VISIBILITY_PUBLIC = 1;        // default everywhere
+  VISIBILITY_UNLISTED = 2;      // hidden from feeds, accessible by URL
+  VISIBILITY_FRIENDS = 3;       // mutual-followers / friends only
+  VISIBILITY_PRIVATE = 4;       // only the publisher (drafts/test posts)
+}
+
+// Type of EntityTag. USER mentions are NOT here — they live in their
+// own UserMention message because they are by far the most common case
+// and benefit from byte-offset positioning + per-platform validation.
+enum EntityTagKind {
+  ENTITY_TAG_KIND_UNSPECIFIED = 0;
+  ENTITY_TAG_KIND_MUSIC = 1;    // TikTok music_id, IG audio_id
+  ENTITY_TAG_KIND_PRODUCT = 2;  // shopping tag, TikTok Shop product
+  ENTITY_TAG_KIND_LOCATION = 3; // geo place tag (IG, FB)
+  ENTITY_TAG_KIND_TOPIC = 4;    // platform-curated topic / "vibe" tag
+  ENTITY_TAG_KIND_BRAND_PARTNER = 5; // paid partnership / branded
+                                     // content disclosure
+}
+
+// What to do AFTER the primary post is published. Modeled as a list
+// of typed actions so executor can run them sequentially with
+// per-action retry + per-action result reporting.
+enum PostPublishActionKind {
+  POST_PUBLISH_ACTION_KIND_UNSPECIFIED = 0;
+  POST_PUBLISH_ACTION_KIND_AUTO_FIRST_COMMENT = 1; // pin a self-comment
+                                                   // (very common for IG
+                                                   // hashtag dump)
+  POST_PUBLISH_ACTION_KIND_PIN_TO_PROFILE = 2;     // pin to creator
+                                                   // profile top
+  POST_PUBLISH_ACTION_KIND_CROSSPOST = 3;          // Reddit crosspost to
+                                                   // a list of subs
+  POST_PUBLISH_ACTION_KIND_SHARE_TO_STORY = 4;     // IG: share Reel to
+                                                   // story
+  POST_PUBLISH_ACTION_KIND_NOTIFY_WEBHOOK = 5;     // POST result to a
+                                                   // user-supplied URL
+}
+
+// Structured tag entity (NOT a user mention — see UserMention).
+message EntityTag {
+  EntityTagKind kind = 1;
+
+  // Platform-side ID when known (e.g. TikTok music_id, FB page_id,
+  // Shopify product_id). Empty when only a display name is available.
+  optional string platform_id = 2 [ json_name = "platform_id" ];
+
+  // Display name (always present). For LOCATION = place name, for
+  // PRODUCT = product title, etc.
+  string display_name = 3 [ json_name = "display_name" ];
+
+  // Optional positioning inside a related TextBlock. Either:
+  //   - byte offset into texts[text_index].value (for inline tags), OR
+  //   - normalized 0..1 coords on a media item (for IG photo tags),
+  // depending on EntityTagKind. Both pairs are optional.
+  optional int32 text_index = 10 [ json_name = "text_index" ];
+  optional uint32 text_byte_offset = 11
+      [ json_name = "text_byte_offset" ];
+  optional uint32 text_byte_length = 12
+      [ json_name = "text_byte_length" ];
+
+  optional int32 media_index = 20 [ json_name = "media_index" ];
+  optional float media_x = 21 [ json_name = "media_x" ];   // 0..1
+  optional float media_y = 22 [ json_name = "media_y" ];   // 0..1
+
+  // For LOCATION: lat/lng when no platform_id is available.
+  optional double latitude = 30;
+  optional double longitude = 31;
+
+  // Open extension for kind-specific knobs (e.g. music start_time_ms).
+  // Avoid for anything stable — graduate to typed fields when it sticks.
+  map<string, string> extras = 50;
+}
+
+// User mention — split from EntityTag because mentions are the most
+// frequently used tagging primitive and have unique semantics
+// (need @-handle resolution, can ping the user, byte-positioned in
+// caption text, supports hidden mentions on some platforms).
+message UserMention {
+  // Platform handle WITHOUT the leading "@" (e.g. "elonmusk", not
+  // "@elonmusk"). The executor adds the platform-correct prefix.
+  string handle = 1;
+
+  // Resolved platform user_id when known (TikTok open_id, IG user_id,
+  // Reddit username with t2_ prefix, etc.). Optional — executor will
+  // resolve at publish time if absent.
+  optional string platform_user_id = 2 [ json_name = "platform_user_id" ];
+
+  // Optional positioning inside a TextBlock for inline @mentions.
+  // text_index points into UnifiedPublishContent.texts[].
+  optional int32 text_index = 10 [ json_name = "text_index" ];
+  optional uint32 byte_offset = 11 [ json_name = "byte_offset" ];
+  optional uint32 byte_length = 12 [ json_name = "byte_length" ];
+
+  // True for "hidden" mentions on platforms that support them
+  // (e.g. IG collaborator invite that doesn't appear in caption text
+  //  but DOES ping the user).
+  bool hidden = 20;
+}
+
+// Publishing-time behavior flags. Replaces the most common keys that
+// v1 stuffed into platform_extras (is_nsfw, is_spoiler, allow_comments,
+// allow_duet, …). map<string,string> remains as the escape hatch for
+// the long tail.
+message PublishBehavior {
+  Visibility visibility = 1;
+
+  // Generic interaction toggles — supported by most platforms.
+  optional bool allow_comments = 10 [ json_name = "allow_comments" ];
+  optional bool allow_sharing = 11 [ json_name = "allow_sharing" ];
+  optional bool allow_download = 12 [ json_name = "allow_download" ];
+
+  // Content advisories.
+  optional bool is_nsfw = 20 [ json_name = "is_nsfw" ];
+  optional bool is_spoiler = 21 [ json_name = "is_spoiler" ];
+  optional bool ai_generated_disclosure = 22
+      [ json_name = "ai_generated_disclosure" ];
+
+  // TikTok-specific toggles.
+  optional bool allow_duet = 30 [ json_name = "allow_duet" ];
+  optional bool allow_stitch = 31 [ json_name = "allow_stitch" ];
+  optional bool disclose_branded_content = 32
+      [ json_name = "disclose_branded_content" ];
+
+  // IG/FB-specific toggles.
+  optional bool allow_remix = 40 [ json_name = "allow_remix" ];
+  optional bool share_to_facebook = 41 [ json_name = "share_to_facebook" ];
+
+  // Long-tail platform-specific bools/strings not yet promoted.
+  // Same shape as UnifiedPublishContent.platform_extras — graduates
+  // here when it stabilizes.
+  map<string, string> extras = 99;
+}
+
+// Schedule hint with timezone awareness. Replaces v1's plain
+// ISO-8601 string which silently assumed UTC.
+message PublishSchedule {
+  // ISO-8601 instant in UTC (e.g. "2026-04-19T08:30:00Z"). Always
+  // canonical; the executor compares against UTC now().
+  string scheduled_at = 1 [ json_name = "scheduled_at" ];
+
+  // IANA timezone (e.g. "America/Los_Angeles"). Carried through for
+  // logging + UI display. Optional — defaults to "UTC".
+  optional string timezone = 2;
+
+  // If true, the post is created as a *draft* on the platform instead
+  // of being scheduled / published. Some platforms have explicit drafts
+  // (TikTok, Reddit), others emulate via private + future schedule.
+  bool save_as_draft = 10 [ json_name = "save_as_draft" ];
+}
+
+// Single post-publish action. Executor runs them in order.
+message PostPublishAction {
+  PostPublishActionKind kind = 1;
+
+  // For AUTO_FIRST_COMMENT: text of the comment.
+  optional string comment_text = 10 [ json_name = "comment_text" ];
+
+  // For CROSSPOST: target subreddits / page handles.
+  repeated string targets = 20;
+
+  // For NOTIFY_WEBHOOK: URL + optional bearer token.
+  optional string webhook_url = 30 [ json_name = "webhook_url" ];
+  optional string webhook_bearer = 31 [ json_name = "webhook_bearer" ];
+
+  // Open extension.
+  map<string, string> extras = 99;
+}
+
+// =============================================================
+// Top-level v2 messages
+// =============================================================
+
+// v2 replacement for AiPubTaskContent.
+// Stored in gm_aipub_tasks.content (alongside v1 shape during
+// transition; selector is `version` field).
+message UnifiedPublishContent {
+  // MUST be AIPUB_VERSION_2 for this message to apply.
+  int32 version = 1;
+
+  // Routing fields — duplicated from gm_aipub_tasks columns for
+  // self-contained executor decisions.
+  string platform = 2;                                 // see Platform enum names
+  int32 platform_id = 3 [ json_name = "platform_id" ];
+  string content_type = 4 [ json_name = "content_type" ]; // see ContentType
+  string plan_type = 5 [ json_name = "plan_type" ];       // see PlanType
+
+  // The three uniform collections.
+  repeated MediaItem media = 10;
+  repeated TextBlock texts = 11;
+  repeated LinkItem links = 12;
+
+  // Structured tagging — pulled out of texts[] / platform_extras so
+  // the executor can call platform-specific tag APIs uniformly.
+  repeated EntityTag tags = 13;
+  repeated UserMention mentions = 14;
+
+  // Per-platform leaf fields not yet promoted to first-class. Use
+  // sparingly — anything well-known should live in PublishBehavior or
+  // a typed message above. As fields graduate, they move into typed
+  // sub-messages and are dropped here.
+  // Values are JSON-encoded strings for cheap forward-compat.
+  map<string, string> platform_extras = 20
+      [ json_name = "platform_extras" ];
+
+  // Typed publish-time behavior flags. Optional — when absent the
+  // executor uses platform defaults.
+  optional PublishBehavior behavior = 30;
+
+  // Typed schedule with timezone awareness. Optional — when absent
+  // the executor publishes immediately.
+  optional PublishSchedule schedule = 40;
+
+  // Sequential actions to run after the primary post lands.
+  repeated PostPublishAction post_publish = 50
+      [ json_name = "post_publish" ];
+}
+
+// =============================================================
+// Result reporting — Executor → API
+// =============================================================
+//
+// v1 used ExecutorTaskStatusUpdate { task_id, status, result_url,
+// error_message } which was insufficient to capture multi-asset posts,
+// post-publish action outcomes, retry context, or initial metrics.
+// UnifiedPublishResult is the v2 replacement.
+
+enum PublishResultStatus {
+  PUBLISH_RESULT_STATUS_UNSPECIFIED = 0;
+  PUBLISH_RESULT_STATUS_PENDING = 1;        // accepted, queued
+  PUBLISH_RESULT_STATUS_PROCESSING = 2;     // executor in flight
+  PUBLISH_RESULT_STATUS_SUCCEEDED = 3;      // fully published
+  PUBLISH_RESULT_STATUS_PARTIAL_SUCCESS = 4;// primary OK, some
+                                            // post-publish action failed
+  PUBLISH_RESULT_STATUS_FAILED = 5;         // terminal failure
+  PUBLISH_RESULT_STATUS_RETRYING = 6;       // failed, will retry
+}
+
+// Per-media upload outcome — populated when status reaches SUCCEEDED.
+message MediaPublishResult {
+  // Index into the originating UnifiedPublishContent.media[] array.
+  uint32 media_index = 1 [ json_name = "media_index" ];
+
+  // FINAL status of THIS media item (READY when uploaded successfully,
+  // FAILED otherwise — never PENDING/PROCESSING here).
+  MediaStatus status = 2;
+
+  // Platform's identifier for the uploaded asset (e.g. TikTok video_id,
+  // IG container_id). Useful for follow-up calls (insights, edits).
+  optional string platform_asset_id = 3 [ json_name = "platform_asset_id" ];
+  optional string platform_asset_url = 4 [ json_name = "platform_asset_url" ];
+
+  optional string failed_reason = 5 [ json_name = "failed_reason" ];
+}
+
+// Per-action outcome.
+message PostPublishActionResult {
+  // Index into UnifiedPublishContent.post_publish[].
+  uint32 action_index = 1 [ json_name = "action_index" ];
+  PostPublishActionKind kind = 2;
+  bool succeeded = 3;
+  optional string failed_reason = 4 [ json_name = "failed_reason" ];
+
+  // E.g. comment_id for AUTO_FIRST_COMMENT, crosspost_id for CROSSPOST.
+  optional string platform_artifact_id = 5
+      [ json_name = "platform_artifact_id" ];
+}
+
+// Snapshot of platform-reported metrics. Often zero at publish time and
+// populated later by the patrol job. Consumers pick the keys they have.
+message PublishMetrics {
+  uint64 views = 1;
+  uint64 likes = 2;
+  uint64 comments = 3;
+  uint64 shares = 4;
+  uint64 saves = 5;
+  uint64 plays = 6;       // for video/audio: distinct from views
+
+  // ISO-8601 instant when these counters were sampled.
+  optional string snapshot_at = 10 [ json_name = "snapshot_at" ];
+}
+
+// Top-level result message from Executor → API for a v2 publish task.
+// Replaces v1's ExecutorTaskStatusUpdate.
+message UnifiedPublishResult {
+  // MUST be AIPUB_VERSION_2.
+  int32 version = 1;
+
+  // gm_aipub_tasks.id this result applies to.
+  int32 task_id = 2 [ json_name = "task_id" ];
+
+  PublishResultStatus status = 3;
+
+  // === Identification of the published post ===
+  optional string platform_post_id = 10 [ json_name = "platform_post_id" ];
+  optional string platform_post_url = 11
+      [ json_name = "platform_post_url" ];
+  optional string published_at = 12 [ json_name = "published_at" ];
+
+  // === Failure context ===
+  optional string failed_reason = 20 [ json_name = "failed_reason" ];
+  optional string failed_error_code = 21
+      [ json_name = "failed_error_code" ];
+  uint32 retry_count = 22 [ json_name = "retry_count" ];
+  optional string next_retry_at = 23 [ json_name = "next_retry_at" ];
+
+  // === Multi-asset / multi-action detail ===
+  repeated MediaPublishResult media_results = 30
+      [ json_name = "media_results" ];
+  repeated PostPublishActionResult post_publish_results = 31
+      [ json_name = "post_publish_results" ];
+
+  // === Initial metrics snapshot ===
+  optional PublishMetrics initial_metrics = 40
+      [ json_name = "initial_metrics" ];
+
+  // Truncated raw provider response, opaque to API. Useful for debug.
+  optional string raw_response_json = 50
+      [ json_name = "raw_response_json" ];
+}
+
+// =============================================================
+// Generation specs — one entry = one AI job to dispatch
+// =============================================================
+//
+// A single plan can describe **all three** output kinds together
+// (e.g. FB Post = caption text + carousel images + cover video),
+// so UnifiedAiPubInput holds three repeated lists of typed specs
+// rather than a flat prompt-per-kind. Scheduler creates one
+// AiTask per spec entry (× count). Generated assets land back
+// in UnifiedPublishContent.media[] / texts[] with role + source
+// + ai_task_id wired up.
+//
+// Engine configs (Vidu, Seedance, etc.) live ON the spec so each
+// generation is fully self-describing — no plan-level inheritance
+// to reason about.
+
+// =============================================================
+// SCALAR vs ARRAY convention for Spec fields:
+//   - DATA fields (prompts, reference assets, frame inputs) → repeated
+//     for forward-compatibility. v2.0 typically uses length 1; future
+//     extensions (multi-prompt blending, multi-keyframe video, system
+//     + user prompt pairs, per-variation prompts) can use length > 1
+//     without a schema bump.
+//   - CONFIG fields (model, count, mode, dimensions, role_hint,
+//     engine sub-messages) stay scalar — one spec carries one
+//     configuration. To run multiple configs, emit multiple specs.
+// =============================================================
+
+// Spec for one text-generation AI job.
+message TextGenerationSpec {
+  // Prompt(s) to feed the chat model.
+  // Length 1: standard single-prompt generation.
+  // Length > 1: provider-specific semantics — typical patterns are
+  //   [system_prompt, user_prompt] or per-variation prompts. Default
+  //   scheduler behaviour when length > 1 = concatenate with newlines
+  //   unless the spec.extras["prompts_mode"] overrides (e.g. "system_user").
+  repeated string prompts = 1;
+
+  // Number of variations to generate. Default 1.
+  uint32 count = 2;
+
+  // Which TextRoles this generation should populate. If empty,
+  // the model is free to choose (typical: TITLE + CAPTION + HASHTAG).
+  // Use the string form of TextRole enum names (e.g. "TITLE",
+  // "CAPTION", "HASHTAG", "BODY").
+  repeated string target_roles = 3 [ json_name = "target_roles" ];
+
+  // Specific text model id (optional). e.g. "gpt-4o", "deepseek-chat",
+  // "claude-3-5-sonnet". When omitted, scheduler picks the user's default.
+  optional string model = 4;
+
+  // Per-spec free-form knobs (temperature override, language hint,
+  // max_tokens, prompts_mode, …). Same escape-hatch pattern as
+  // platform_extras.
+  map<string, string> extras = 10;
+}
+
+// Spec for one image-generation AI job.
+message ImageGenerationSpec {
+  // Prompt(s) to feed the image model.
+  // Length 1: single-prompt image generation.
+  // Length > 1: when count is also > 1, prompts and outputs are paired
+  //   round-robin (prompts[i % len(prompts)] → output i); otherwise
+  //   provider-specific blending applies.
+  repeated string prompts = 1;
+
+  // Number of images to generate (1..N). Default 1. For carousels,
+  // this directly drives MediaRole.CAROUSEL_ITEM ordering.
+  uint32 count = 2;
+
+  // Specific image model id (optional). e.g. "dall-e-3",
+  // "stable-diffusion-3", "flux-dev".
+  optional string model = 3;
+
+  // Output dimensions. 0 means "use model default".
+  uint32 width_px = 4 [ json_name = "width_px" ];
+  uint32 height_px = 5 [ json_name = "height_px" ];
+
+  // What role the produced images should fill in the publish payload.
+  // PRIMARY (single image post / Reddit IMAGE), CAROUSEL_ITEM
+  // (multi-image post), COVER (thumbnail for video), START_FRAME /
+  // END_FRAME (frames feeding a video generation).
+  MediaRole role_hint = 6 [ json_name = "role_hint" ];
+
+  // Reference images guiding the generation (style transfer, character
+  // consistency, image-to-image). URLs should be addressable by the
+  // image-gen provider.
+  repeated string reference_image_urls = 7
+      [ json_name = "reference_image_urls" ];
+
+  // Aspect ratio expressed as "W:H" (e.g. "1:1", "16:9", "9:16",
+  // "3:2", "2:3", "7:3", "3:7"). Primary knob for Flux Kontext where
+  // the model auto-sizes to ~1MP. SeeDream and Nano Banana also accept
+  // selected ratios via this field; if both aspect_ratio and
+  // width_px/height_px are set, the explicit pixel size wins.
+  // Flux constraint: must fall in [3:7, 7:3] otherwise downgraded
+  // to "1:1" with a WARN log.
+  optional string aspect_ratio = 8 [ json_name = "aspect_ratio" ];
+
+  // Output image format hint. "jpeg" | "png" | "webp". Currently honored
+  // by Flux (extra_body.output_format); SeeDream returns jpg by default
+  // and ignores this hint.
+  optional string output_format = 9 [ json_name = "output_format" ];
+
+  // Optional per-spec knobs (negative_prompt, guidance_scale, …) that
+  // are not yet promoted to typed fields. Provider-specific keys are
+  // documented in docs/image-provider-param-matrix.md.
+  map<string, string> extras = 10;
+
+  // Random seed for reproducibility. Honored by Flux; SeeDream silently
+  // ignores it and emits a `validation_warnings` entry.
+  optional uint64 seed = 11;
+
+  // Whether to render a provider watermark on the output. Defaults to
+  // false. Currently honored by SeeDream only.
+  optional bool watermark = 12;
+
+  // Force routing to a specific provider regardless of `model` prefix.
+  // Values: "flux" | "seedream" | "openai". Empty / unset uses the
+  // default prefix-based routing (flux-kontext-* -> flux,
+  // seedream-* -> seedream, fallback -> openai).
+  optional string provider_hint = 13 [ json_name = "provider_hint" ];
+
+  // Generation mode discriminator:
+  //   "text_to_image" - pure prompt -> image
+  //   "image_edit"    - prompt + reference_image_urls -> edited image
+  // When unset, scheduler infers from reference_image_urls.is_empty():
+  // empty -> text_to_image, non-empty -> image_edit.
+  optional string mode = 14;
+
+  // Content safety strictness for Flux:
+  //   0 = strictest, 6 = most permissive. Default 2.
+  // SeeDream and other providers ignore this field.
+  optional uint32 safety_tolerance = 15 [ json_name = "safety_tolerance" ];
+}
+
+// Spec for one video-generation AI job.
+// Replaces v1's mix of VideoGenerationConfig / ViduVideoConfig /
+// SeedanceVideoConfig at the plan level — those sub-messages are
+// retained and now hang off this spec.
+message VideoGenerationSpec {
+  // Prompt(s) to feed the video model.
+  // Length 1: standard scene/style description.
+  // Length > 1: per-keyframe prompts (Vidu multi_frame mode) or
+  //   shot-list prompts (one prompt per N seconds). Provider-specific.
+  repeated string prompts = 1;
+
+  // Number of videos to generate. Default 1. Most providers bill
+  // per-video, so keep small.
+  uint32 count = 2;
+
+  // Required: which provider/model to use. e.g. "veo-3.1",
+  // "sora-1.0", "doubao-seedance-2-0-260128", "vidu-q1".
+  string model = 3;
+
+  // Generation mode (see VideoGenerationMode enum names):
+  // "text_to_video" / "image_to_video" / "reference_to_video" /
+  // "start_end_to_video" / "multi_frame" / "ad_film" / etc.
+  string generation_mode = 4 [ json_name = "generation_mode" ];
+
+  // Provider-agnostic dimensions (duration, orientation, aspect…).
+  optional VideoGenerationConfig video_config = 5
+      [ json_name = "video_config" ];
+
+  // Provider-specific configs. At most one expected to be set —
+  // determined by `model`.
+  optional ViduVideoConfig vidu_config = 6 [ json_name = "vidu_config" ];
+  optional SeedanceVideoConfig seedance_config = 7
+      [ json_name = "seedance_config" ];
+  optional ReferenceVideoConfig reference_video = 8
+      [ json_name = "reference_video" ];
+
+  // Conditioning images. All three are repeated for forward-compat:
+  //   start_image_urls — first frame(s); typical length 1 (image2video,
+  //                      start_end_to_video). Vidu multi_frame can use N.
+  //   end_image_urls   — last frame(s); typical length 1 (start_end_to_video,
+  //                      FL transition models). Vidu multi_frame can use N.
+  //   reference_image_urls — style/character refs; Vidu reference2video
+  //                      supports 1..7.
+  repeated string start_image_urls = 10 [ json_name = "start_image_urls" ];
+  repeated string end_image_urls = 11 [ json_name = "end_image_urls" ];
+  repeated string reference_image_urls = 12
+      [ json_name = "reference_image_urls" ];
+
+  // What role the produced video should fill: PRIMARY (the post
+  // itself) vs COVER (animated cover for an image post — rare).
+  MediaRole role_hint = 13 [ json_name = "role_hint" ];
+
+  // Per-spec knobs not yet promoted to typed fields.
+  map<string, string> extras = 20;
+}
+
+// =============================================================
+// UnifiedAiPubInput — top-level v2 plan input
+// =============================================================
+// Stored in gm_aipub_plans.ai_input (alongside v1 shape during
+// transition; selector is `version` field).
+//
+// A single plan may schedule any combination of text / image /
+// video generations together. All three lists default to empty;
+// the plan must contain at least one non-empty list OR at least
+// one user-uploaded MediaItem in initial_media.
+message UnifiedAiPubInput {
+  // MUST be AIPUB_VERSION_2 for this message to apply.
+  int32 version = 1;
+
+  // === Generation specs — what to ask the AI to produce ===
+  repeated TextGenerationSpec text_generations = 10
+      [ json_name = "text_generations" ];
+  repeated ImageGenerationSpec image_generations = 11
+      [ json_name = "image_generations" ];
+  repeated VideoGenerationSpec video_generations = 12
+      [ json_name = "video_generations" ];
+
+  // === User-supplied assets at plan creation ===
+
+  // Initial media assets (user uploads, references, externally hosted
+  // start/end frames, etc.). Scheduler appends AI-generated items
+  // into the per-task UnifiedPublishContent.media[] alongside these.
+  repeated MediaItem initial_media = 20 [ json_name = "initial_media" ];
+
+  // Per-account media overrides — replaces v1's account_images map.
+  // key = social_account_id as string.
+  map<string, AccountMediaOverride> account_media = 21
+      [ json_name = "account_media" ];
+
+  // === Platform routing ===
+
+  // Platform-routing config. Reuses existing v1 sub-messages until
+  // they get migrated; new platforms add new variants here without
+  // touching v1.
+  oneof platform_config {
+    RedditPostConfig reddit_config_v2 = 30 [ json_name = "reddit_config" ];
+    // Future:
+    //   TikTokPostConfigV2 tiktok_config_v2 = 31;
+    //   InstagramPostConfigV2 instagram_config_v2 = 32;
+  }
+
+  // === Plan-wide free-form hints ===
+  // Cross-spec knobs (e.g. global language="zh", brand_voice="formal",
+  // explicit count_override). Per-spec knobs go on the spec's own
+  // `extras` field. Same forward-compat pattern as platform_extras.
+  map<string, string> generation_extras = 50
+      [ json_name = "generation_extras" ];
+}
+
+// Per-account media override container.
+message AccountMediaOverride {
+  repeated MediaItem media = 1;
+}

@@ -1,0 +1,109 @@
+syntax = "proto3";
+package glance_mind;
+
+option java_package = "io.glancemind.protocol";
+option java_multiple_files = true;
+
+import "common.proto";
+
+// Request parameters for device-based comment query
+message DeviceCommentsQuery {
+  string device_id = 1 [ json_name = "device_id" ];
+  optional int32 status = 2;
+  int32 page = 3;
+  int32 per_page = 4 [ json_name = "per_page" ];
+  // Platform name: "tiktok", "facebook", "instagram", "reddit", "twitter"
+  string platform = 5;
+}
+
+// Optimized response structure: campaign config extracted, comments as array
+message DeviceCommentsResponse {
+  // Campaign configuration (returned once)
+  CampaignConfig campaign = 1;
+  // Comment data array
+  repeated CommentData comments = 2;
+  // Pagination info
+  Pagination pagination = 3;
+}
+
+// Campaign auto-interaction configuration
+message CampaignConfig {
+  int32 campaign_id = 1 [ json_name = "campaign_id" ];
+  bool auto_like = 2 [ json_name = "auto_like" ];
+  bool auto_follow = 3 [ json_name = "auto_follow" ];
+  bool auto_dm = 4 [ json_name = "auto_dm" ];
+  bool auto_reply_comments = 5 [ json_name = "auto_reply_comments" ];
+  bool auto_reply_post = 6 [ json_name = "auto_reply_post" ];
+  // Randomly selected profile_name from campaign's group
+  optional string profile_name = 7 [ json_name = "profile_name" ];
+}
+
+// Individual comment data
+message CommentData {
+  // Database ID
+  int32 id = 1;
+  // Platform-specific comment ID
+  string comment_id = 2 [ json_name = "comment_id" ];
+  // Content ID (video_id / post_id / tweet_id)
+  string content_id = 3 [ json_name = "content_id" ];
+  // Platform enum
+  Platform platform = 4;
+  // Comment text content
+  optional string content = 5;
+  // Processing status
+  CommentStatus status = 6;
+
+  // User information
+  optional string user_nickname = 7 [ json_name = "user_nickname" ];
+  optional string user_unique_id = 8 [ json_name = "user_unique_id" ];
+
+  // AI-generated suggestions
+  optional string suggested_reply = 9 [ json_name = "suggested_reply" ];
+  optional string suggested_dm = 10 [ json_name = "suggested_dm" ];
+  optional string suggested_reply_post = 11
+      [ json_name = "suggested_reply_post" ];
+  optional string reason = 12;
+
+  // Timestamps (ISO 8601 format string)
+  optional string create_time = 13 [ json_name = "create_time" ];
+  string created_at = 14 [ json_name = "created_at" ];
+
+  // Platform-specific fields for URL construction
+  // Direct URL to the content (post/video/tweet)
+  optional string content_url = 15 [ json_name = "content_url" ];
+  // Content type: POST/VIDEO/REEL (mainly for Facebook)
+  optional string content_type = 16 [ json_name = "content_type" ];
+  // Author's unique ID (for TikTok URL construction:
+  // @{author_unique_id}/video/{content_id})
+  optional string author_unique_id = 17 [ json_name = "author_unique_id" ];
+  // Direct URL to the comment (for platforms that support it)
+  optional string comment_url = 18 [ json_name = "comment_url" ];
+
+  // Profile name for task execution
+  // Randomly selected from campaign's associated social group
+  // Used by executor to determine which browser profile to use
+  optional string profile_name = 19 [ json_name = "profile_name" ];
+
+  // Direct URL to the comment author's profile page
+  optional string comment_user_url = 20 [ json_name = "comment_user_url" ];
+}
+
+// Pagination information
+message Pagination {
+  int64 total = 1;
+  int32 page = 2;
+  int32 per_page = 3 [ json_name = "per_page" ];
+  int32 total_pages = 4 [ json_name = "total_pages" ];
+}
+
+// Request to update comment status
+message UpdateCommentStatusRequest {
+  string comment_id = 1 [ json_name = "comment_id" ];
+  CommentStatus status = 2;
+}
+
+// Response for status update
+message UpdateCommentStatusResponse {
+  bool success = 1;
+  string message = 2;
+}

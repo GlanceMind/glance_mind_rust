@@ -1,0 +1,159 @@
+syntax = "proto3";
+package glance_mind;
+
+option java_package = "io.glancemind.protocol";
+option java_multiple_files = true;
+
+import "common.proto";
+
+// ============================================================
+// DM Group Control Types
+// NATS JetStream message formats for DM monitoring and reply
+// ============================================================
+
+// Direction of a DM message
+enum DmDirection {
+  DM_DIRECTION_UNSPECIFIED = 0;
+  DM_DIRECTION_INBOUND = 1;    // received from remote user
+  DM_DIRECTION_OUTBOUND = 2;   // sent to remote user
+}
+
+// Status of a DM message
+enum DmMessageStatus {
+  DM_MESSAGE_STATUS_UNSPECIFIED = 0;
+  DM_MESSAGE_STATUS_PENDING = 1;     // outbound: queued, not yet sent
+  DM_MESSAGE_STATUS_SENT = 2;        // outbound: successfully sent
+  DM_MESSAGE_STATUS_DELIVERED = 3;   // inbound: received and stored
+  DM_MESSAGE_STATUS_FAILED = 4;      // outbound: send failed
+}
+
+// Type of DM event notification
+enum DmEventType {
+  DM_EVENT_TYPE_UNSPECIFIED = 0;
+  DM_EVENT_TYPE_NEW_MESSAGE = 1;     // new inbound message received
+  DM_EVENT_TYPE_MESSAGE_SENT = 2;    // outbound message sent successfully
+  DM_EVENT_TYPE_MESSAGE_FAILED = 3;  // outbound message failed to send
+}
+
+// Content type of a DM message
+enum DmContentType {
+  DM_CONTENT_TYPE_UNSPECIFIED = 0;
+  DM_CONTENT_TYPE_TEXT = 1;
+  DM_CONTENT_TYPE_IMAGE = 2;
+  DM_CONTENT_TYPE_VIDEO = 3;
+  DM_CONTENT_TYPE_LINK = 4;
+}
+
+// Conversation status
+enum DmConversationStatus {
+  DM_CONVERSATION_STATUS_UNSPECIFIED = 0;
+  DM_CONVERSATION_STATUS_ACTIVE = 1;
+  DM_CONVERSATION_STATUS_ARCHIVED = 2;
+  DM_CONVERSATION_STATUS_MUTED = 3;
+}
+
+// Reply mode for a conversation
+enum DmReplyMode {
+  DM_REPLY_MODE_UNSPECIFIED = 0;
+  DM_REPLY_MODE_MANUAL = 1;   // user must manually reply
+  DM_REPLY_MODE_AUTO = 2;     // AI auto-reply enabled
+}
+
+// ============================================================
+// DM Message - stored in NATS Stream DM_MESSAGES
+// Subject: dm.msg.{conv_id}
+// ============================================================
+
+message DmMessage {
+  string msg_id = 1;            // UUID
+  string conv_id = 2;           // {social_account_id}_{remote_user_id}
+  DmDirection direction = 3;
+  string content = 4;
+  DmContentType content_type = 5;
+  repeated string attachments = 6;
+  DmMessageStatus status = 7;
+  string platform_msg_id = 8;   // platform-native message ID (for dedup)
+  string timestamp = 9;         // ISO 8601
+}
+
+// ============================================================
+// Conversation Metadata - stored in NATS KV dm_conversations
+// Key: {user_id}.{conv_id}
+// ============================================================
+
+message ConversationMeta {
+  string conv_id = 1;
+  int32 user_id = 2;
+  int32 social_account_id = 3;
+  string device_id = 4;            // redundant, avoid PG lookup
+  int32 platform_id = 5;           // redundant
+  string platform_name = 6;
+  // My account info
+  string my_username = 7;
+  string my_profile_name = 8;
+  // Remote user info
+  string remote_user_id = 9;
+  string remote_username = 10;
+  string remote_display_name = 11;
+  string remote_avatar_url = 12;
+  // Conversation state
+  string last_message_at = 13;     // ISO 8601
+  string last_message_preview = 14;
+  DmDirection last_message_direction = 15;
+  int32 unread_count = 16;
+  DmConversationStatus status = 17;
+  DmReplyMode reply_mode = 18;
+  // AI
+  string ai_suggestion = 19;
+  string updated_at = 20;          // ISO 8601
+}
+
+// ============================================================
+// DM Event - published to NATS Stream DM_EVENTS
+// Subject: dm.evt.{user_id}
+// Frontend subscribes via WebSocket for real-time updates
+// ============================================================
+
+message DmEvent {
+  DmEventType event_type = 1;
+  int32 user_id = 2;
+  string conv_id = 3;
+  string device_id = 4;
+  int32 social_account_id = 5;
+  int32 platform_id = 6;
+  string remote_username = 7;
+  string preview = 8;
+  DmDirection direction = 9;
+  int32 unread_count = 10;
+  string timestamp = 11;           // ISO 8601
+  string platform_name = 12;       // e.g. "tiktok", "facebook", "twitter"
+}
+
+// ============================================================
+// Reply Command - published to NATS Stream DM_COMMANDS
+// Subject: dm.cmd.{device_id}
+// API publishes, Executor consumes via WorkQueue
+// ============================================================
+
+message ReplyCommand {
+  string cmd_id = 1;               // UUID
+  string conv_id = 2;
+  int32 social_account_id = 3;
+  int32 platform_id = 4;
+  string profile_name = 5;         // browser profile to use
+  string remote_username = 6;      // DM target
+  string content = 7;
+  DmContentType content_type = 8;
+  string timestamp = 9;            // ISO 8601
+}
+
+// ============================================================
+// Device Heartbeat - stored in NATS KV dm_device_heartbeat
+// Key: {device_id}, TTL: 120s
+// ============================================================
+
+message DeviceHeartbeat {
+  int32 user_id = 1;
+  string device_id = 2;
+  string last_seen = 3;            // ISO 8601
+}

@@ -22,11 +22,10 @@ FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
 COPY crates/api/Cargo.toml crates/api/Cargo.toml
 COPY crates/db/Cargo.toml crates/db/Cargo.toml
-# Satisfy `glance_mind_protocol = { path = "../../../glance_mind_protocol/generated/rust" }`
-# declared in crates/api/Cargo.toml. CI vendors the sibling repo into
-# `.protocol-sibling/` via platform-infra's `protocol_sibling` input;
-# see deploy-api.yml.
-COPY .protocol-sibling/generated/rust /glance_mind_protocol/generated/rust
+# Vendored glance_mind_protocol crate (in-repo, synced via `make sync`
+# in the glance_mind_protocol repo). Path-dep in crates/api/Cargo.toml
+# points to vendor/glance_mind_protocol/generated/rust.
+COPY vendor/glance_mind_protocol vendor/glance_mind_protocol
 RUN mkdir -p crates/api/src crates/db/src && \
     echo "fn main() {}" > crates/api/src/main.rs && \
     echo "// dummy" > crates/api/src/lib.rs && \
@@ -35,8 +34,7 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS deps
 COPY --from=planner /app/recipe.json recipe.json
-# cargo-chef cook re-resolves the workspace manifest; path-deps must exist.
-COPY --from=planner /glance_mind_protocol /glance_mind_protocol
+COPY --from=planner /app/vendor /app/vendor
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \
@@ -45,7 +43,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM deps AS builder
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-COPY .protocol-sibling/generated/rust /glance_mind_protocol/generated/rust
+COPY vendor ./vendor
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \

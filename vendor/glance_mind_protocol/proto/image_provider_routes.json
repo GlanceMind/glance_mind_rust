@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "_doc": "Single source of truth for image provider routing. Mirrors Table B of docs/image-provider-param-matrix.md. Any addition here MUST be accompanied by: (1) implementation in glance_mind_scheduler/src/image_providers/factory.rs::resolve_kind, (2) ExpectMatrix fixture in tests/image_providers_live_test.rs, (3) live test pass for the new route. See matrix doc 'Strong rule' section.",
+  "_consumers": [
+    "glance_mind_scheduler/src/image_providers/factory.rs (resolve_kind)",
+    "glance_mind_rust/crates/api/src/service/image_generation_validation.rs (model whitelist)",
+    "glance_mind_front/src/components/aipub/ImageGenerationConfig.tsx (useImageProviderRouting)",
+    "glance_mind_scheduler/tests/image_providers_live_test.rs (Route enum)"
+  ],
+  "routes": [
+    {
+      "model_key": "flux-kontext-pro",
+      "provider": "flux",
+      "modes": ["text_to_image", "image_edit"],
+      "unit_price_usd": 0.035,
+      "notes": "Default cheap baseline; multi-ref via horizontal stitching"
+    },
+    {
+      "model_key": "flux-kontext-max",
+      "provider": "flux",
+      "modes": ["text_to_image", "image_edit"],
+      "unit_price_usd": 0.07,
+      "notes": "Max-tier T2I + multi-ref edit"
+    },
+    {
+      "model_key": "seedream-4-0-250828",
+      "provider": "seedream",
+      "modes": ["text_to_image", "image_edit"],
+      "unit_price_usd": 0.035,
+      "notes": "SeeDream 4.0; multi-ref via JSON array (max 10)"
+    },
+    {
+      "model_key": "seedream-4-5-251128",
+      "provider": "seedream",
+      "modes": ["text_to_image", "image_edit"],
+      "unit_price_usd": 0.045,
+      "notes": "SeeDream 4.5 newer model"
+    },
+    {
+      "model_key": "gpt-4o-image",
+      "provider": "openai",
+      "modes": ["text_to_image"],
+      "unit_price_usd": null,
+      "notes": "OpenAI legacy; T2I only, no image_edit"
+    },
+    {
+      "model_key": "dall-e-3",
+      "provider": "openai",
+      "modes": ["text_to_image"],
+      "unit_price_usd": null,
+      "notes": "OpenAI legacy; T2I only"
+    }
+  ]
+}
