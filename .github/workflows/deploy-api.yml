@@ -29,7 +29,11 @@ on:
 jobs:
   check-changes:
     name: Check for DB changes
-    runs-on: ubuntu-latest
+    # Use self-hosted runner — GitHub-hosted runners require paid minutes
+    # and get blocked when the org's billing / payment is unhealthy. The
+    # only work here is a shallow git diff, so a self-hosted runner is
+    # both cheaper and more reliable.
+    runs-on: [self-hosted, Linux, backend]
     outputs:
       db_changed: ${{ steps.check.outputs.db_changed }}
     steps:
