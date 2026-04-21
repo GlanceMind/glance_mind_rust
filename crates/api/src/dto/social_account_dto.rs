@@ -147,6 +147,13 @@ pub struct BatchCreateResultDto {
     pub created_count: i32,
     /// Total accounts attempted
     pub total_attempted: i32,
+    /// Number of profiles skipped because they already exist for this
+    /// (user_id, platform_id)
+    #[serde(default)]
+    pub skipped_count: i32,
+    /// Profile names that were skipped because they already exist
+    #[serde(default)]
+    pub skipped_profiles: Vec<String>,
     /// List of created account IDs
     pub created_ids: Vec<i32>,
     /// Errors if any

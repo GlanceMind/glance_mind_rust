@@ -277,14 +277,14 @@ impl SocialAccountService {
             total_count, user_id, prefix, start_num, end_num
         );
 
-        // Generate accounts
-        let mut new_accounts: Vec<NewSocialAccount> = Vec::with_capacity(total_count as usize);
-
+        // Generate candidate accounts first (preserve request order)
+        let mut candidates: Vec<NewSocialAccount> = Vec::with_capacity(total_count as usize);
+        let mut candidate_profiles: Vec<String> = Vec::with_capacity(total_count as usize);
         for i in start_num..=end_num {
             let profile_name = format!("{}{}", prefix, i);
             let username = format!("{}_{}", dto.username, profile_name);
 
-            new_accounts.push(NewSocialAccount {
+            candidates.push(NewSocialAccount {
                 user_id,
                 platform_id: dto.platform_id,
                 group_id: dto.group_id,
@@ -295,19 +295,69 @@ impl SocialAccountService {
                 health_score: Some(100),
                 daily_max_replies: dto.daily_max_replies,
                 device_id: dto.device_id.clone(),
-                profile_name: Some(profile_name),
+                profile_name: Some(profile_name.clone()),
+            });
+            candidate_profiles.push(profile_name);
+        }
+
+        // Pre-query existing profile_names for this (user, platform) so we can
+        // skip duplicates. There is no UNIQUE constraint on the table, so this
+        // is best-effort dedupe (not race-proof across concurrent callers, but
+        // good enough for a user-facing "retry batch" flow).
+        let existing: std::collections::HashSet<String> = self
+            .repo
+            .find_existing_profile_names(user_id, dto.platform_id, &candidate_profiles)
+            .await
+            .map_err(|e| {
+                error!("Failed to query existing profile_names: {:?}", e);
+                ApiError::InternalServerError("Failed to check existing accounts".to_string())
+            })?
+            .into_iter()
+            .collect();
+
+        let mut new_accounts: Vec<NewSocialAccount> = Vec::with_capacity(candidates.len());
+        let mut skipped_profiles: Vec<String> = Vec::new();
+        for acc in candidates {
+            match &acc.profile_name {
+                Some(name) if existing.contains(name) => {
+                    skipped_profiles.push(name.clone());
+                }
+                _ => new_accounts.push(acc),
+            }
+        }
+
+        if new_accounts.is_empty() {
+            info!(
+                "All {} profiles already exist for user {} on platform {}; nothing to insert",
+                skipped_profiles.len(),
+                user_id,
+                dto.platform_id
+            );
+            return Ok(BatchCreateResultDto {
+                created_count: 0,
+                total_attempted: total_count,
+                skipped_count: skipped_profiles.len() as i32,
+                skipped_profiles,
+                created_ids: vec![],
+                errors: vec![],
             });
         }
 
-        // Batch insert
+        // Batch insert the survivors
         match self.repo.batch_create(new_accounts).await {
             Ok(accounts) => {
                 let created_ids: Vec<i32> = accounts.iter().map(|a| a.id).collect();
-                info!("Successfully created {} accounts", accounts.len());
+                info!(
+                    "Batch create: inserted {}, skipped {} duplicates",
+                    accounts.len(),
+                    skipped_profiles.len()
+                );
 
                 Ok(BatchCreateResultDto {
                     created_count: accounts.len() as i32,
                     total_attempted: total_count,
+                    skipped_count: skipped_profiles.len() as i32,
+                    skipped_profiles,
                     created_ids,
                     errors: vec![],
                 })

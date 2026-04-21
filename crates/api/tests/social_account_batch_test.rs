@@ -63,11 +63,107 @@ async fn test_batch_create_accounts_small_range() {
 
     assert_eq!(body["data"]["created_count"].as_i64(), Some(10));
     assert_eq!(body["data"]["total_attempted"].as_i64(), Some(10));
+    assert_eq!(body["data"]["skipped_count"].as_i64(), Some(0));
     assert!(body["data"]["created_ids"].is_array());
     assert_eq!(body["data"]["created_ids"].as_array().unwrap().len(), 10);
+    assert_eq!(
+        body["data"]["skipped_profiles"].as_array().unwrap().len(),
+        0
+    );
 
     println!("✅ Batch created 10 accounts successfully");
     println!("   Created IDs: {:?}", body["data"]["created_ids"]);
+}
+
+/// Test: Batch creating the same profile range twice should skip duplicates
+/// (instead of failing the whole batch).
+#[tokio::test]
+#[ignore]
+async fn test_batch_create_accounts_skip_duplicates() {
+    let token = login().await.expect("Failed to login");
+    let client = reqwest::Client::new();
+
+    // Use a fresh, unique prefix so reruns of the test don't collide with
+    // previous data.
+    let run_tag = format!(
+        "dedup_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    );
+    let payload_first = json!({
+        "platform_id": 1,
+        "username": "dedup_test",
+        "device_id": "device_dedup_001",
+        "profile_start": format!("{}_1", run_tag),
+        "profile_end":   format!("{}_3", run_tag),
+        "daily_max_replies": 20
+    });
+
+    // First call: creates 3, skips 0
+    let first = client
+        .post(format!("{}/accounts/batch", BASE_URL))
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .json(&payload_first)
+        .send()
+        .await
+        .expect("first batch failed");
+    assert_eq!(first.status(), 200);
+    let first_body: serde_json::Value = first.json().await.unwrap();
+    assert_eq!(first_body["data"]["created_count"].as_i64(), Some(3));
+    assert_eq!(first_body["data"]["skipped_count"].as_i64(), Some(0));
+
+    // Second call: overlapping range 2..=4 → profiles 2 & 3 already exist,
+    // only profile 4 should be created.
+    let payload_second = json!({
+        "platform_id": 1,
+        "username": "dedup_test",
+        "device_id": "device_dedup_001",
+        "profile_start": format!("{}_2", run_tag),
+        "profile_end":   format!("{}_4", run_tag),
+        "daily_max_replies": 20
+    });
+
+    let second = client
+        .post(format!("{}/accounts/batch", BASE_URL))
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .json(&payload_second)
+        .send()
+        .await
+        .expect("second batch failed");
+    assert_eq!(second.status(), 200);
+    let second_body: serde_json::Value = second.json().await.unwrap();
+    assert_eq!(second_body["data"]["total_attempted"].as_i64(), Some(3));
+    assert_eq!(second_body["data"]["created_count"].as_i64(), Some(1));
+    assert_eq!(second_body["data"]["skipped_count"].as_i64(), Some(2));
+
+    let skipped: Vec<String> = second_body["data"]["skipped_profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert!(skipped.contains(&format!("{}_2", run_tag)));
+    assert!(skipped.contains(&format!("{}_3", run_tag)));
+
+    // Third call: fully overlapping → all skipped, created_count=0
+    let third = client
+        .post(format!("{}/accounts/batch", BASE_URL))
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .json(&payload_first)
+        .send()
+        .await
+        .expect("third batch failed");
+    assert_eq!(third.status(), 200);
+    let third_body: serde_json::Value = third.json().await.unwrap();
+    assert_eq!(third_body["data"]["created_count"].as_i64(), Some(0));
+    assert_eq!(third_body["data"]["skipped_count"].as_i64(), Some(3));
+
+    println!("✅ Duplicate profiles are skipped instead of failing the batch");
 }
 
 /// Test: Batch create accounts with maximum limit (100 accounts)

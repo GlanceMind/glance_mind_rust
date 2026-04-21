@@ -247,6 +247,30 @@ impl SocialAccountRepository {
             .get_results(&mut conn)
     }
 
+    /// Return the subset of `profile_names` that already exist as non-DELETED
+    /// accounts for this (user, platform). Used to dedupe before batch insert
+    /// since there is no DB-level UNIQUE constraint on (user_id, platform_id,
+    /// profile_name).
+    pub async fn find_existing_profile_names(
+        &self,
+        user_id: i32,
+        platform_id: i32,
+        profile_names: &[String],
+    ) -> Result<Vec<String>, DieselError> {
+        if profile_names.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut conn = self.pool.get().expect("Connection error");
+        let rows: Vec<Option<String>> = social_accounts::table
+            .filter(social_accounts::user_id.eq(user_id))
+            .filter(social_accounts::platform_id.eq(platform_id))
+            .filter(social_accounts::status.ne("DELETED"))
+            .filter(social_accounts::profile_name.eq_any(profile_names))
+            .select(social_accounts::profile_name)
+            .load(&mut conn)?;
+        Ok(rows.into_iter().flatten().collect())
+    }
+
     /// Batch update accounts by profile_name to add them to a group
     pub async fn batch_update_group_by_profile_names(
         &self,
