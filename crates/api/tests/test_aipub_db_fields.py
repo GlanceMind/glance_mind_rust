@@ -699,6 +699,38 @@ class TestBehaviorScheduleBranchMatrix:
         row = _read_plan_row(db_cursor, plan_id)
         assert row["behavior"]["visibility"] == visibility
 
+    def test_behavior_extras_map_persisted_verbatim(
+        self, auth_client, db_cursor, account_id
+    ):
+        """behavior.extras (string→string JSONB map) roundtrip — keys and
+        values persist exactly as submitted. Covers the case where a
+        front-end component passes a campaign-tag or arbitrary metadata
+        through `buildBehaviorPayload`'s extras path.
+        """
+        payload = {
+            "social_account_id": account_id,
+            "platform_id": PLATFORM_FACEBOOK,
+            "content_type": "post",
+            "plan_type": "direct_publish",
+            "content": {"title": "t"},
+            "behavior": {
+                "visibility": "public",
+                "extras": {
+                    "campaign_tag": "spring_2026",
+                    "source": "autotest",
+                },
+            },
+        }
+        resp = auth_client.post("/api/v1/publish_plans", json=payload)
+        assert_response_success(resp)
+        plan_id = extract_data(resp.json())["id"]
+        row = _read_plan_row(db_cursor, plan_id)
+        assert row["behavior"] is not None
+        assert row["behavior"].get("extras") == {
+            "campaign_tag": "spring_2026",
+            "source": "autotest",
+        }
+
     # ---- Boolean toggle matrix ----
 
     @pytest.mark.parametrize(
