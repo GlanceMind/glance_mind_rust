@@ -5,7 +5,7 @@ Harness changes should prefer API/DB contract tests and schema checks in v1.
 
 Use:
 
-- `cargo test --workspace`
+- `make harness-api-db`
 - DB schema/entity/accounting focused tests for wallet and billing changes.
 
 Do not promise a complete in-process API harness until route startup side
