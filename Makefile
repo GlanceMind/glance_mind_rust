@@ -4,7 +4,7 @@
 
 .PHONY: help db-up db-down db-restart db-logs db-shell \
         migrate migrate-new migrate-status schema-sync schema-export \
-        build test check clippy fmt clean \
+        build test harness-api-db check clippy fmt clean \
         dev dev-down dev-restart dev-logs \
         api-up api-down api-logs \
         setup all
@@ -133,6 +133,9 @@ build-release: ## Build all crates in release mode
 test: ## Run all tests
 	@echo "$(GREEN)Running tests...$(RESET)"
 	cargo test --workspace
+
+harness-api-db: ## Run Harness API/DB static and component checks
+	cargo test --workspace wallet_billing_harness
 
 test-verbose: ## Run all tests with verbose output
 	cargo test --workspace -- --nocapture
