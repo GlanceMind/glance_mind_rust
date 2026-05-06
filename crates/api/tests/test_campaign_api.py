@@ -12,12 +12,15 @@ Test Coverage:
 6. Campaign templates CRUD
 """
 
+import concurrent.futures
 import io
 import uuid
 import zipfile
 
 import pytest
 from conftest import (
+    API_BASE_URL,
+    APIClient,
     assert_response_success,
     extract_data,
     PLATFORM_FACEBOOK,
@@ -39,17 +42,24 @@ class TestCampaignCRUD:
 
     def _get_config_ids(self, api_client):
         """Helper to get platform, region, and AI model IDs."""
-        # Get platform
         resp = api_client.get("/api/v1/config/platforms")
         platforms = extract_data(resp.json())
-        platform_id = platforms[0]["id"]
-        
-        # Get region
-        resp = api_client.get(f"/api/v1/config/platforms/{platform_id}/regions")
-        regions = extract_data(resp.json())
-        region_id = regions[0]["id"]
-        
-        # Get AI model
+
+        platform_id = None
+        region_id = None
+        for platform in platforms:
+            candidate_platform_id = platform["id"]
+            resp = api_client.get(f"/api/v1/config/platforms/{candidate_platform_id}/regions")
+            regions = extract_data(resp.json())
+            if regions:
+                platform_id = candidate_platform_id
+                region_id = regions[0]["id"]
+                break
+
+        assert platform_id is not None and region_id is not None, (
+            "Expected at least one platform with configured regions"
+        )
+
         resp = api_client.get("/api/v1/config/ai-models")
         models = extract_data(resp.json())
         ai_model_id = models[0]["id"]
@@ -66,7 +76,8 @@ class TestCampaignCRUD:
             "region_id": region_id,
             "ai_model_id": ai_model_id,
             "schedule_type": "ONCE",
-            "product_prompt": "E2E Test Product"
+            "product_prompt": "E2E Test Product",
+            "max_scan_count": 1,
         }
         
         resp = auth_client.post(
@@ -246,10 +257,44 @@ class TestCampaignTemplates:
                 "region_id": region_id,
                 "ai_model_id": ai_model_id,
                 "schedule_type": "ONCE",
-                "product_prompt": "Test"
+                "product_prompt": "Test",
+                "max_scan_count": 1,
             }
         )
         return extract_data(create_resp.json()).get("id")
+
+    def _create_reusable_template(self, auth_client, suffix=None, **overrides):
+        unique = suffix or uuid.uuid4().hex[:8]
+        payload = {
+            "name": f"E2E reusable reply style {unique}",
+            "description": f"reusable description {unique}",
+            "weight": 77,
+            "reply_prompt": f"library reply prompt {unique}",
+            "dm_prompt": f"library dm prompt {unique}",
+            "reply_post_prompt": f"library post prompt {unique}",
+        }
+        payload.update(overrides)
+
+        resp = auth_client.post("/api/v1/reply-template-library", json=payload)
+        assert_response_success(resp)
+        return extract_data(resp.json()), payload
+
+    def _create_fresh_campaign(self, auth_client, api_client, name_suffix):
+        platform_id, region_id, ai_model_id = TestCampaignCRUD()._get_config_ids(api_client)
+        create_resp = auth_client.post(
+            "/api/v1/campaigns",
+            json={
+                "name": f"Reusable Template E2E {name_suffix}",
+                "platform_id": platform_id,
+                "region_id": region_id,
+                "ai_model_id": ai_model_id,
+                "schedule_type": "ONCE",
+                "product_prompt": f"Reusable template product {name_suffix}",
+                "max_scan_count": 1,
+            },
+        )
+        assert_response_success(create_resp)
+        return extract_data(create_resp.json())["id"]
 
     def test_create_template(self, auth_client, api_client, db_cursor):
         """Test creating a campaign template."""
@@ -290,6 +335,325 @@ class TestCampaignTemplates:
         
         templates = data if isinstance(data, list) else data.get("list", [])
         print(f"  Template count: {len(templates)}")
+
+    def test_reusable_template_assignment_persists_agent_contract(
+        self, auth_client, api_client, db_cursor, db_connection
+    ):
+        """Reusable template assignment should persist the DB shape consumed by agent_rs."""
+        campaign_id = self._get_or_create_campaign(auth_client, api_client, db_cursor)
+        if not campaign_id:
+            pytest.skip("No campaign available")
+
+        unique = uuid.uuid4().hex[:8]
+        library_payload = {
+            "name": f"E2E reusable reply style {unique}",
+            "description": "front+api+agent_rs contract test",
+            "weight": 77,
+            "reply_prompt": f"library reply prompt {unique}",
+            "dm_prompt": f"library dm prompt {unique}",
+            "reply_post_prompt": f"library post prompt {unique}",
+        }
+
+        create_resp = auth_client.post("/api/v1/reply-template-library", json=library_payload)
+        assert_response_success(create_resp)
+        reusable = extract_data(create_resp.json())
+
+        assign_resp = auth_client.post(
+            f"/api/v1/reply-template-library/{reusable['id']}/assign",
+            json={"campaign_id": campaign_id},
+        )
+        assert_response_success(assign_resp)
+        assignment = extract_data(assign_resp.json())
+
+        reassign_resp = auth_client.post(
+            f"/api/v1/reply-template-library/{reusable['id']}/assign",
+            json={"campaign_id": campaign_id, "weight": 23},
+        )
+        assert_response_success(reassign_resp)
+        reassignment = extract_data(reassign_resp.json())
+
+        assert assignment["campaign_id"] == campaign_id
+        assert assignment["library_template_id"] == reusable["id"]
+        assert assignment["weight"] == library_payload["weight"]
+        assert assignment["reusable_template"]["reply_prompt"] == library_payload["reply_prompt"]
+        assert assignment["reusable_template"]["usage_count"] == 1
+        assert reassignment["reusable_template"]["usage_count"] == 1
+        assert reassignment["weight"] == 23
+        assert reassignment["id"] == assignment["id"]
+
+        db_connection.commit()
+        db_cursor.execute(
+            """
+            SELECT
+                ct.id,
+                ct.library_template_id,
+                ct.reply_prompt AS campaign_reply_prompt,
+                ct.dm_prompt AS campaign_dm_prompt,
+                library.reply_prompt AS library_reply_prompt,
+                library.dm_prompt AS library_dm_prompt,
+                library.reply_post_prompt AS library_post_prompt,
+                ct.weight AS assignment_weight,
+                (
+                    SELECT COUNT(*)
+                    FROM gm_campaign_templates bound
+                    WHERE bound.library_template_id = library.id
+                ) AS binding_count
+            FROM gm_campaign_templates ct
+            JOIN gm_reply_template_library library ON library.id = ct.library_template_id
+            WHERE ct.campaign_id = %s AND ct.library_template_id = %s
+            """,
+            (campaign_id, reusable["id"]),
+        )
+        row = db_cursor.fetchone()
+
+        assert row is not None
+        assert row["library_template_id"] == reusable["id"]
+        assert row["campaign_reply_prompt"] == library_payload["reply_prompt"]
+        assert row["library_reply_prompt"] == library_payload["reply_prompt"]
+        assert row["library_dm_prompt"] == library_payload["dm_prompt"]
+        assert row["library_post_prompt"] == library_payload["reply_post_prompt"]
+        assert row["assignment_weight"] == 23
+        assert row["binding_count"] == 1
+
+        db_cursor.execute(
+            """
+            SELECT COUNT(*) AS row_count
+            FROM gm_campaign_templates
+            WHERE campaign_id = %s AND library_template_id = %s
+            """,
+            (campaign_id, reusable["id"]),
+        )
+        assert db_cursor.fetchone()["row_count"] == 1
+
+        reusable_list_resp = auth_client.get("/api/v1/reply-template-library?page=1&page_size=10")
+        assert_response_success(reusable_list_resp)
+        reusable_list = extract_data(reusable_list_resp.json())["list"]
+        listed_reusable = next(item for item in reusable_list if item["id"] == reusable["id"])
+        assert listed_reusable["usage_count"] == 1
+
+        updated_reply_prompt = f"library reply prompt updated {unique}"
+        update_resp = auth_client.put(
+            f"/api/v1/reply-template-library/{reusable['id']}",
+            json={
+                "reply_prompt": updated_reply_prompt,
+                "dm_prompt": None,
+            },
+        )
+        assert_response_success(update_resp)
+        updated_reusable = extract_data(update_resp.json())
+        assert updated_reusable["reply_prompt"] == updated_reply_prompt
+        assert updated_reusable["dm_prompt"] is None
+        assert updated_reusable["usage_count"] == 1
+
+        detail_resp = auth_client.get(f"/api/v1/templates/{assignment['id']}")
+        assert_response_success(detail_resp)
+        detail = extract_data(detail_resp.json())
+        assert detail["reply_prompt"] == updated_reply_prompt
+        assert detail["weight"] == 23
+        assert detail["dm_prompt"] is None
+        assert detail["reusable_template"]["reply_prompt"] == updated_reply_prompt
+        assert detail["reusable_template"]["dm_prompt"] is None
+
+        list_resp = auth_client.get(
+            f"/api/v1/campaigns/{campaign_id}/templates?page=1&page_size=10"
+        )
+        assert_response_success(list_resp)
+        template_list = extract_data(list_resp.json())["list"]
+        listed_template = next(item for item in template_list if item["id"] == assignment["id"])
+        assert listed_template["reply_prompt"] == updated_reply_prompt
+        assert listed_template["weight"] == 23
+        assert listed_template["dm_prompt"] is None
+        assert listed_template["reusable_template"]["reply_prompt"] == updated_reply_prompt
+        assert listed_template["reusable_template"]["dm_prompt"] is None
+
+        reusable_detail_resp = auth_client.get(f"/api/v1/reply-template-library/{reusable['id']}")
+        assert_response_success(reusable_detail_resp)
+        assert extract_data(reusable_detail_resp.json())["usage_count"] == 1
+
+        db_connection.commit()
+        db_cursor.execute(
+            """
+            SELECT
+                id,
+                campaign_id,
+                library_template_id,
+                weight,
+                reply_prompt,
+                created_at,
+                updated_at,
+                dm_prompt,
+                reply_post_prompt,
+                name
+            FROM gm_resolved_campaign_templates
+            WHERE id = %s
+            """,
+            (assignment["id"],),
+        )
+        resolved = db_cursor.fetchone()
+
+        assert resolved is not None
+        assert resolved["campaign_id"] == campaign_id
+        assert resolved["library_template_id"] == reusable["id"]
+        assert resolved["weight"] == 23
+        assert resolved["reply_prompt"] == updated_reply_prompt
+        assert resolved["dm_prompt"] is None
+        assert resolved["reply_post_prompt"] == library_payload["reply_post_prompt"]
+
+    def test_reusable_template_assignment_is_idempotent_under_concurrency(
+        self, auth_client, api_client, db_cursor, db_connection
+    ):
+        """Concurrent assignment should converge to one campaign binding and one usage."""
+        campaign_id = self._create_fresh_campaign(auth_client, api_client, uuid.uuid4().hex[:8])
+        reusable, payload = self._create_reusable_template(auth_client)
+        token = auth_client.token
+
+        def assign(weight):
+            client = APIClient(API_BASE_URL, token)
+            resp = client.post(
+                f"/api/v1/reply-template-library/{reusable['id']}/assign",
+                json={"campaign_id": campaign_id, "weight": weight},
+            )
+            assert_response_success(resp)
+            return extract_data(resp.json())
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            assignments = list(executor.map(assign, range(20, 28)))
+
+        assignment_ids = {item["id"] for item in assignments}
+        assert len(assignment_ids) == 1
+        assert {item["campaign_id"] for item in assignments} == {campaign_id}
+        assert {item["library_template_id"] for item in assignments} == {reusable["id"]}
+
+        detail_resp = auth_client.get(f"/api/v1/reply-template-library/{reusable['id']}")
+        assert_response_success(detail_resp)
+        assert extract_data(detail_resp.json())["usage_count"] == 1
+
+        db_connection.commit()
+        db_cursor.execute(
+            """
+            SELECT COUNT(*) AS row_count
+            FROM gm_campaign_templates
+            WHERE campaign_id = %s AND library_template_id = %s
+            """,
+            (campaign_id, reusable["id"]),
+        )
+        assert db_cursor.fetchone()["row_count"] == 1
+
+        db_cursor.execute(
+            """
+            SELECT reply_prompt, dm_prompt, reply_post_prompt
+            FROM gm_resolved_campaign_templates
+            WHERE campaign_id = %s AND library_template_id = %s
+            """,
+            (campaign_id, reusable["id"]),
+        )
+        resolved = db_cursor.fetchone()
+        assert resolved["reply_prompt"] == payload["reply_prompt"]
+        assert resolved["dm_prompt"] == payload["dm_prompt"]
+        assert resolved["reply_post_prompt"] == payload["reply_post_prompt"]
+
+    def test_reusable_template_usage_counts_distinct_campaign_bindings(
+        self, auth_client, api_client, db_cursor, db_connection
+    ):
+        """usage_count should reflect distinct campaign assignments, not click count."""
+        reusable, _payload = self._create_reusable_template(auth_client)
+        campaign_ids = [
+            self._create_fresh_campaign(auth_client, api_client, f"{uuid.uuid4().hex[:8]}-{index}")
+            for index in range(3)
+        ]
+
+        for campaign_id in campaign_ids:
+            resp = auth_client.post(
+                f"/api/v1/reply-template-library/{reusable['id']}/assign",
+                json={"campaign_id": campaign_id},
+            )
+            assert_response_success(resp)
+
+        repeat_resp = auth_client.post(
+            f"/api/v1/reply-template-library/{reusable['id']}/assign",
+            json={"campaign_id": campaign_ids[0], "weight": 11},
+        )
+        assert_response_success(repeat_resp)
+
+        detail_resp = auth_client.get(f"/api/v1/reply-template-library/{reusable['id']}")
+        assert_response_success(detail_resp)
+        assert extract_data(detail_resp.json())["usage_count"] == len(campaign_ids)
+
+        db_connection.commit()
+        db_cursor.execute(
+            """
+            SELECT COUNT(*) AS row_count, COUNT(DISTINCT campaign_id) AS campaign_count
+            FROM gm_campaign_templates
+            WHERE library_template_id = %s
+            """,
+            (reusable["id"],),
+        )
+        counts = db_cursor.fetchone()
+        assert counts["row_count"] == len(campaign_ids)
+        assert counts["campaign_count"] == len(campaign_ids)
+
+    def test_reusable_template_cleared_prompts_resolve_to_null_not_snapshot_fallback(
+        self, auth_client, api_client, db_cursor, db_connection
+    ):
+        campaign_id = self._create_fresh_campaign(auth_client, api_client, uuid.uuid4().hex[:8])
+        reusable, payload = self._create_reusable_template(auth_client)
+
+        assign_resp = auth_client.post(
+            f"/api/v1/reply-template-library/{reusable['id']}/assign",
+            json={"campaign_id": campaign_id},
+        )
+        assert_response_success(assign_resp)
+        assignment = extract_data(assign_resp.json())
+
+        clear_resp = auth_client.put(
+            f"/api/v1/reply-template-library/{reusable['id']}",
+            json={
+                "description": None,
+                "dm_prompt": None,
+                "reply_prompt": None,
+                "reply_post_prompt": None,
+            },
+        )
+        assert_response_success(clear_resp)
+        cleared = extract_data(clear_resp.json())
+        assert cleared["description"] is None
+        assert cleared["dm_prompt"] is None
+        assert cleared["reply_prompt"] is None
+        assert cleared["reply_post_prompt"] is None
+
+        detail_resp = auth_client.get(f"/api/v1/templates/{assignment['id']}")
+        assert_response_success(detail_resp)
+        detail = extract_data(detail_resp.json())
+        assert detail["reply_prompt"] is None
+        assert detail["dm_prompt"] is None
+        assert detail["reply_post_prompt"] is None
+        assert detail["reusable_template"]["reply_prompt"] is None
+        assert detail["reusable_template"]["dm_prompt"] is None
+        assert detail["reusable_template"]["reply_post_prompt"] is None
+
+        db_connection.commit()
+        db_cursor.execute(
+            """
+            SELECT
+                ct.reply_prompt AS snapshot_reply_prompt,
+                ct.dm_prompt AS snapshot_dm_prompt,
+                ct.reply_post_prompt AS snapshot_post_prompt,
+                resolved.reply_prompt AS resolved_reply_prompt,
+                resolved.dm_prompt AS resolved_dm_prompt,
+                resolved.reply_post_prompt AS resolved_post_prompt
+            FROM gm_campaign_templates ct
+            JOIN gm_resolved_campaign_templates resolved ON resolved.id = ct.id
+            WHERE ct.id = %s
+            """,
+            (assignment["id"],),
+        )
+        row = db_cursor.fetchone()
+        assert row["snapshot_reply_prompt"] == payload["reply_prompt"]
+        assert row["snapshot_dm_prompt"] == payload["dm_prompt"]
+        assert row["snapshot_post_prompt"] == payload["reply_post_prompt"]
+        assert row["resolved_reply_prompt"] is None
+        assert row["resolved_dm_prompt"] is None
+        assert row["resolved_post_prompt"] is None
 
 
 class TestCampaignPlatformRouting:

@@ -1,4 +1,7 @@
-use crate::dto::template_dto::{TemplateCreateDto, TemplateUpdateDto};
+use crate::dto::template_dto::{
+    AssignReusableTemplateDto, ReusableTemplateCreateDto, ReusableTemplateUpdateDto,
+    TemplateCreateDto, TemplateUpdateDto,
+};
 use crate::error::api_error::ApiError;
 use crate::error::request_error::ValidatedRequest;
 use crate::state::user_state::UserState;
@@ -49,9 +52,6 @@ pub async fn create_template(
     Path(campaign_id): Path<i32>,
     ValidatedRequest(payload): ValidatedRequest<TemplateCreateDto>,
 ) -> Result<ApiResult<impl serde::Serialize>, ApiError> {
-    println!("DEBUG: create_template received payload: {:?}", payload);
-    println!("DEBUG: dm_prompt value: {:?}", payload.dm_prompt);
-
     let template = state
         .template_service
         .create_template(user.id, campaign_id, payload)
@@ -69,9 +69,6 @@ pub async fn update_template(
     Path(template_id): Path<i32>,
     ValidatedRequest(payload): ValidatedRequest<TemplateUpdateDto>,
 ) -> Result<ApiResult<impl serde::Serialize>, ApiError> {
-    println!("DEBUG: update_template received payload: {:?}", payload);
-    println!("DEBUG: dm_prompt value: {:?}", payload.dm_prompt);
-
     let template = state
         .template_service
         .update_template(user.id, template_id, payload)
@@ -132,4 +129,92 @@ pub async fn auto_generate(
         "templates": templates,
         "count": templates.len()
     })))
+}
+
+pub async fn list_reusable_templates(
+    State(state): State<UserState>,
+    Extension(user): Extension<User>,
+    Query(req): Query<crate::dto::common::PageRequest>,
+) -> Result<ApiResult<impl serde::Serialize>, ApiError> {
+    let response = state
+        .template_service
+        .list_reusable_templates(user.id, req)
+        .await?;
+    Ok(api_result!(response))
+}
+
+pub async fn get_reusable_template(
+    State(state): State<UserState>,
+    Extension(user): Extension<User>,
+    Path(template_id): Path<i32>,
+) -> Result<ApiResult<impl serde::Serialize>, ApiError> {
+    let template = state
+        .template_service
+        .get_reusable_template(user.id, template_id)
+        .await?;
+    Ok(api_result!(template))
+}
+
+pub async fn create_reusable_template(
+    State(state): State<UserState>,
+    Extension(user): Extension<User>,
+    ValidatedRequest(payload): ValidatedRequest<ReusableTemplateCreateDto>,
+) -> Result<ApiResult<impl serde::Serialize>, ApiError> {
+    let template = state
+        .template_service
+        .create_reusable_template(user.id, payload)
+        .await?;
+    Ok(api_result!(
+        template,
+        "Reusable template created successfully",
+        "Reusable template created successfully"
+    ))
+}
+
+pub async fn update_reusable_template(
+    State(state): State<UserState>,
+    Extension(user): Extension<User>,
+    Path(template_id): Path<i32>,
+    ValidatedRequest(payload): ValidatedRequest<ReusableTemplateUpdateDto>,
+) -> Result<ApiResult<impl serde::Serialize>, ApiError> {
+    let template = state
+        .template_service
+        .update_reusable_template(user.id, template_id, payload)
+        .await?;
+    Ok(api_result!(
+        template,
+        "Reusable template updated successfully",
+        "Reusable template updated successfully"
+    ))
+}
+
+pub async fn delete_reusable_template(
+    State(state): State<UserState>,
+    Extension(user): Extension<User>,
+    Path(template_id): Path<i32>,
+) -> Result<ApiResult<()>, ApiError> {
+    state
+        .template_service
+        .delete_reusable_template(user.id, template_id)
+        .await?;
+    Ok(
+        api_result!(msg: "Reusable template deleted successfully", "Reusable template deleted successfully"),
+    )
+}
+
+pub async fn assign_reusable_template(
+    State(state): State<UserState>,
+    Extension(user): Extension<User>,
+    Path(template_id): Path<i32>,
+    ValidatedRequest(payload): ValidatedRequest<AssignReusableTemplateDto>,
+) -> Result<ApiResult<impl serde::Serialize>, ApiError> {
+    let template = state
+        .template_service
+        .assign_reusable_template(user.id, template_id, payload)
+        .await?;
+    Ok(api_result!(
+        template,
+        "Reusable template assigned successfully",
+        "Reusable template assigned successfully"
+    ))
 }

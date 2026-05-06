@@ -83,6 +83,10 @@ impl AgentAnalysisService {
             ));
         }
 
+        let template = self
+            .resolve_reusable_template_for_prompt(template, user_id)
+            .await?;
+
         // 3. Build system prompt (similar to Python agent logic)
         let system_prompt =
             self.build_system_prompt(&campaign, &template, req.user_instruction.as_deref());
@@ -104,6 +108,37 @@ impl AgentAnalysisService {
     }
 
     // Removed fetch_comments_from_db, no longer needed
+
+    async fn resolve_reusable_template_for_prompt(
+        &self,
+        mut template: CampaignTemplate,
+        user_id: i32,
+    ) -> Result<CampaignTemplate, ApiError> {
+        let Some(library_template_id) = template.library_template_id else {
+            return Ok(template);
+        };
+
+        let reusable = match self
+            .template_repo
+            .find_reusable_by_id_and_user(library_template_id, user_id)
+            .await
+        {
+            Ok(reusable) => reusable,
+            Err(DieselError::NotFound) => return Ok(template),
+            Err(e) => {
+                return Err(ApiError::InfrastructureError(
+                    InfrastructureError::DatabaseOperationFailed(e.to_string()),
+                ));
+            }
+        };
+
+        template.name = Some(reusable.name);
+        template.dm_prompt = reusable.dm_prompt;
+        template.reply_prompt = reusable.reply_prompt;
+        template.reply_post_prompt = reusable.reply_post_prompt;
+
+        Ok(template)
+    }
 
     /// Build system prompt (reference: Python services.py:153-213)
     fn build_system_prompt(

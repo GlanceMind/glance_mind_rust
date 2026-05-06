@@ -679,6 +679,7 @@ diesel::table! {
     gm_campaign_templates (id) {
         id -> Int4,
         campaign_id -> Int4,
+        library_template_id -> Nullable<Int4>,
         weight -> Int4,
         reply_prompt -> Nullable<Text>,
         created_at -> Timestamptz,
@@ -687,6 +688,23 @@ diesel::table! {
         reply_post_prompt -> Nullable<Text>,
         #[max_length = 255]
         name -> Nullable<Varchar>,
+    }
+}
+
+diesel::table! {
+    gm_reply_template_library (id) {
+        id -> Int4,
+        user_id -> Int4,
+        #[max_length = 255]
+        name -> Varchar,
+        description -> Nullable<Text>,
+        weight -> Int4,
+        dm_prompt -> Nullable<Text>,
+        reply_prompt -> Nullable<Text>,
+        reply_post_prompt -> Nullable<Text>,
+        usage_count -> Int4,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -1784,6 +1802,7 @@ diesel::joinable!(gm_aipub_tasks -> gm_social_accounts (social_account_id));
 diesel::joinable!(gm_campaign_accounts -> gm_campaigns (campaign_id));
 diesel::joinable!(gm_campaign_accounts -> gm_social_accounts (account_id));
 diesel::joinable!(gm_campaign_templates -> gm_campaigns (campaign_id));
+diesel::joinable!(gm_campaign_templates -> gm_reply_template_library (library_template_id));
 diesel::joinable!(gm_campaigns -> gm_ai_models (ai_model_id));
 diesel::joinable!(gm_campaigns -> gm_platforms (platform_id));
 diesel::joinable!(gm_campaigns -> gm_regions (region_id));
@@ -1928,6 +1947,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     gm_referral_earnings,
     gm_referrals,
     gm_regions,
+    gm_reply_template_library,
     gm_social_accounts,
     gm_social_groups,
     gm_material_folders,

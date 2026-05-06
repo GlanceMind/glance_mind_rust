@@ -1925,6 +1925,10 @@ impl ToolRegistry {
                     as i32;
                 let dto = crate::dto::template_dto::TemplateCreateDto {
                     campaign_id,
+                    library_template_id: params
+                        .get("library_template_id")
+                        .and_then(|v| v.as_i64())
+                        .map(|v| v as i32),
                     name: params
                         .get("name")
                         .and_then(|v| v.as_str())

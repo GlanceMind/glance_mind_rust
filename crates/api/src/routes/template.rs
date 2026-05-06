@@ -26,4 +26,19 @@ pub fn routes() -> Router<UserState> {
                 .put(template_handler::update_template)
                 .delete(template_handler::delete_template),
         )
+        .route(
+            "/reply-template-library",
+            get(template_handler::list_reusable_templates)
+                .post(template_handler::create_reusable_template),
+        )
+        .route(
+            "/reply-template-library/:id",
+            get(template_handler::get_reusable_template)
+                .put(template_handler::update_reusable_template)
+                .delete(template_handler::delete_reusable_template),
+        )
+        .route(
+            "/reply-template-library/:id/assign",
+            post(template_handler::assign_reusable_template),
+        )
 }
