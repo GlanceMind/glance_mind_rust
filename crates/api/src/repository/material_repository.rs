@@ -292,7 +292,7 @@ impl MaterialRepository {
                 })
                 .collect();
 
-            tags.sort_by(|a, b| b.2.cmp(&a.2));
+            tags.sort_by_key(|tag| std::cmp::Reverse(tag.2));
 
             Ok(tags)
         })

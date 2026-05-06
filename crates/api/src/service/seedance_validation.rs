@@ -145,12 +145,10 @@ pub fn validate_seedance_config(ai_input: &JsonValue) -> Result<SeedanceValidate
 
     match config.mode.as_str() {
         "text2video" => {}
-        "image2video" => {
-            if image_count < 1 {
-                return Err(invalid_input(
-                    "image2video mode requires at least 1 image in image_urls",
-                ));
-            }
+        "image2video" if image_count < 1 => {
+            return Err(invalid_input(
+                "image2video mode requires at least 1 image in image_urls",
+            ));
         }
         "start_end_frame" => {
             if image_count != 2 {
@@ -160,26 +158,20 @@ pub fn validate_seedance_config(ai_input: &JsonValue) -> Result<SeedanceValidate
             }
             validate_start_end_frame_roles(&config.image_roles)?;
         }
-        "multimodal" => {
-            if total_media < 1 {
-                return Err(invalid_input(
-                    "multimodal mode requires at least 1 media item",
-                ));
-            }
+        "multimodal" if total_media < 1 => {
+            return Err(invalid_input(
+                "multimodal mode requires at least 1 media item",
+            ));
         }
-        "edit" => {
-            if video_count < 1 {
-                return Err(invalid_input(
-                    "edit mode requires at least 1 video in video_urls",
-                ));
-            }
+        "edit" if video_count < 1 => {
+            return Err(invalid_input(
+                "edit mode requires at least 1 video in video_urls",
+            ));
         }
-        "extend" => {
-            if !(1..=3).contains(&video_count) {
-                return Err(invalid_input(
-                    "extend mode requires 1-3 videos in video_urls",
-                ));
-            }
+        "extend" if !(1..=3).contains(&video_count) => {
+            return Err(invalid_input(
+                "extend mode requires 1-3 videos in video_urls",
+            ));
         }
         _ => {}
     }

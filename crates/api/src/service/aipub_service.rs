@@ -503,10 +503,9 @@ impl AipubService {
         // The Scheduler will pick up pending plans and create ai_tasks.
         //
         // If direct content is provided (no AI generation needed), create publish tasks immediately.
-        if dto.content.is_some() && dto.ai_task_types.is_none() {
+        if let (Some(content), None) = (&dto.content, &dto.ai_task_types) {
             // Direct content - create publish tasks immediately
-            self.expand_plan_to_tasks(plan.id, dto.content.as_ref().unwrap().clone())
-                .await?;
+            self.expand_plan_to_tasks(plan.id, content.clone()).await?;
 
             // Update plan status to ready
             let update = UpdateAipubPlan {
