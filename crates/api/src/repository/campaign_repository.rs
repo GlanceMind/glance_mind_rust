@@ -5,7 +5,9 @@ use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel::result::Error as DieselError;
 use diesel::sql_query;
-use diesel::sql_types::{BigInt, Bool, Integer, Nullable, Numeric, Text, Timestamptz};
+use diesel::sql_types::{
+    Array, BigInt, Bool, Integer, Jsonb, Nullable, Numeric, Text, Timestamptz,
+};
 use diesel::SelectableHelper;
 use glance_mind_db::entity::campaign::{Campaign, NewCampaign};
 use glance_mind_db::schema::gm_campaigns as campaigns;
@@ -20,12 +22,20 @@ impl CampaignRepository {
         Self { pool }
     }
 
-    pub async fn create(&self, new_campaign: NewCampaign) -> Result<Campaign, DieselError> {
+    pub async fn create_with_reply_template_ids(
+        &self,
+        new_campaign: NewCampaign,
+        reply_template_ids: &[i32],
+    ) -> Result<Campaign, DieselError> {
         let mut conn = self.pool.get().expect("Connection error");
-        diesel::insert_into(campaigns::table)
-            .values(&new_campaign)
-            .returning(Campaign::as_returning())
-            .get_result(&mut conn)
+        conn.transaction(|conn| {
+            Self::lock_reply_template_ids_for_user(conn, new_campaign.user_id, reply_template_ids)?;
+
+            diesel::insert_into(campaigns::table)
+                .values(&new_campaign)
+                .returning(Campaign::as_returning())
+                .get_result(conn)
+        })
     }
 
     #[allow(dead_code)]
@@ -97,12 +107,153 @@ impl CampaignRepository {
         changeset: &NewCampaign,
     ) -> Result<Campaign, DieselError> {
         let mut conn = self.pool.get().expect("Connection error");
-        diesel::update(campaigns::table)
-            .filter(campaigns::id.eq(id))
-            .filter(campaigns::user_id.eq(user_id))
-            .set(changeset)
-            .returning(Campaign::as_returning())
-            .get_result(&mut conn)
+        conn.transaction(|conn| {
+            diesel::sql_query(
+                r#"
+                UPDATE gm_campaigns
+                SET
+                    user_id = $3,
+                    name = $4,
+                    status = $5,
+                    target_audience = $6,
+                    keyword = $7,
+                    schedule_config = $8,
+                    platform_id = $9,
+                    region_id = $10,
+                    enable_ai_refactor = $11,
+                    ai_model_id = $12,
+                    persona_id = $13,
+                    max_scan_count = $14,
+                    budget_cap = $15,
+                    end_date = $16,
+                    schedule_type = $17,
+                    product_prompt = $18,
+                    call_to_action = $19,
+                    tone_of_voice = $20,
+                    additional_info = $21,
+                    social_group_id = $22,
+                    auto_like = $23,
+                    auto_follow = $24,
+                    auto_dm = $25,
+                    auto_reply_comments = $26,
+                    auto_reply_post = $27,
+                    search_options = $28
+                WHERE id = $1
+                  AND user_id = $2
+                "#,
+            )
+            .bind::<Integer, _>(id)
+            .bind::<Integer, _>(user_id)
+            .bind::<Integer, _>(changeset.user_id)
+            .bind::<Text, _>(&changeset.name)
+            .bind::<Nullable<Text>, _>(&changeset.status)
+            .bind::<Nullable<Text>, _>(&changeset.target_audience)
+            .bind::<Nullable<Text>, _>(&changeset.keyword)
+            .bind::<Nullable<Jsonb>, _>(&changeset.schedule_config)
+            .bind::<Integer, _>(changeset.platform_id)
+            .bind::<Integer, _>(changeset.region_id)
+            .bind::<Nullable<Bool>, _>(changeset.enable_ai_refactor)
+            .bind::<Integer, _>(changeset.ai_model_id)
+            .bind::<Nullable<Integer>, _>(changeset.persona_id)
+            .bind::<Nullable<Integer>, _>(changeset.max_scan_count)
+            .bind::<Nullable<Numeric>, _>(&changeset.budget_cap)
+            .bind::<Nullable<Timestamptz>, _>(changeset.end_date)
+            .bind::<Text, _>(&changeset.schedule_type)
+            .bind::<Text, _>(&changeset.product_prompt)
+            .bind::<Nullable<Text>, _>(&changeset.call_to_action)
+            .bind::<Nullable<Text>, _>(&changeset.tone_of_voice)
+            .bind::<Nullable<Text>, _>(&changeset.additional_info)
+            .bind::<Nullable<Integer>, _>(changeset.social_group_id)
+            .bind::<Nullable<Bool>, _>(changeset.auto_like)
+            .bind::<Nullable<Bool>, _>(changeset.auto_follow)
+            .bind::<Nullable<Bool>, _>(changeset.auto_dm)
+            .bind::<Nullable<Bool>, _>(changeset.auto_reply_comments)
+            .bind::<Nullable<Bool>, _>(changeset.auto_reply_post)
+            .bind::<Nullable<Jsonb>, _>(&changeset.search_options)
+            .execute(conn)?;
+
+            campaigns::table
+                .filter(campaigns::id.eq(id))
+                .filter(campaigns::user_id.eq(user_id))
+                .select(Campaign::as_select())
+                .first(conn)
+        })
+    }
+
+    pub async fn update_with_reply_template_ids(
+        &self,
+        id: i32,
+        user_id: i32,
+        changeset: &NewCampaign,
+        reply_template_ids: &[i32],
+    ) -> Result<Campaign, DieselError> {
+        let mut conn = self.pool.get().expect("Connection error");
+        conn.transaction(|conn| {
+            campaigns::table
+                .filter(campaigns::id.eq(id))
+                .filter(campaigns::user_id.eq(user_id))
+                .for_update()
+                .select(campaigns::id)
+                .first::<i32>(conn)?;
+
+            Self::lock_reply_template_ids_for_user(conn, user_id, reply_template_ids)?;
+
+            let updated = diesel::update(campaigns::table)
+                .filter(campaigns::id.eq(id))
+                .filter(campaigns::user_id.eq(user_id))
+                .set(changeset)
+                .returning(Campaign::as_returning())
+                .get_result(conn)?;
+
+            diesel::sql_query(
+                r#"
+                DELETE FROM gm_campaign_templates
+                WHERE campaign_id = $1
+                  AND library_template_id IS NOT NULL
+                  AND NOT (library_template_id = ANY($2))
+                "#,
+            )
+            .bind::<Integer, _>(id)
+            .bind::<Array<Integer>, _>(reply_template_ids)
+            .execute(conn)?;
+
+            Ok(updated)
+        })
+    }
+
+    fn lock_reply_template_ids_for_user(
+        conn: &mut PgConnection,
+        user_id: i32,
+        reply_template_ids: &[i32],
+    ) -> Result<(), DieselError> {
+        if reply_template_ids.is_empty() {
+            return Ok(());
+        }
+
+        let locked_template_ids = diesel::sql_query(
+            r#"
+            SELECT id
+            FROM gm_reply_template_library
+            WHERE user_id = $1
+              AND id = ANY($2)
+            FOR KEY SHARE
+            "#,
+        )
+        .bind::<Integer, _>(user_id)
+        .bind::<Array<Integer>, _>(reply_template_ids)
+        .load::<IdRow>(conn)?;
+
+        let locked_template_id_set: std::collections::HashSet<i32> =
+            locked_template_ids.iter().map(|row| row.id).collect();
+        if locked_template_id_set.len() != reply_template_ids.len()
+            || reply_template_ids
+                .iter()
+                .any(|id| !locked_template_id_set.contains(id))
+        {
+            return Err(DieselError::NotFound);
+        }
+
+        Ok(())
     }
 
     pub async fn update_status(
@@ -352,6 +503,12 @@ pub struct StopCampaignResult {
     pub immediate_stopped: bool,
     #[diesel(sql_type = Numeric)]
     pub refunded_amount: BigDecimal,
+}
+
+#[derive(Debug, QueryableByName)]
+struct IdRow {
+    #[diesel(sql_type = Integer)]
+    id: i32,
 }
 
 /// Raw row returned by the dedup-then-aggregate SQL in `aggregate_lead_metrics`.

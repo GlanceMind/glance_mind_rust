@@ -94,6 +94,326 @@ class TestCampaignCRUD:
         assert data.get("name") == "E2E Test Campaign"
         assert data.get("status") in ["DRAFT", "draft"]
 
+    def _create_reusable_template(self, auth_client, suffix=None):
+        unique = suffix or uuid.uuid4().hex[:8]
+        resp = auth_client.post(
+            "/api/v1/reply-template-library",
+            json={
+                "name": f"Campaign reusable {unique}",
+                "description": f"campaign reusable description {unique}",
+                "weight": 50,
+                "reply_prompt": f"campaign reusable reply {unique}",
+            },
+        )
+        assert_response_success(resp)
+        return extract_data(resp.json())
+
+    def _create_campaign_payload(self, api_client, suffix=None, **overrides):
+        platform_id, region_id, ai_model_id = self._get_config_ids(api_client)
+        unique = suffix or uuid.uuid4().hex[:8]
+        payload = {
+            "name": f"Reply Template IDs Campaign {unique}",
+            "platform_id": platform_id,
+            "region_id": region_id,
+            "ai_model_id": ai_model_id,
+            "schedule_type": "ONCE",
+            "product_prompt": f"Reply template IDs product {unique}",
+            "max_scan_count": 1,
+        }
+        payload.update(overrides)
+        return payload
+
+    def _db_reply_template_ids(self, db_cursor, db_connection, campaign_id):
+        db_connection.commit()
+        db_cursor.execute(
+            "SELECT reply_template_ids FROM gm_campaigns WHERE id = %s",
+            (campaign_id,),
+        )
+        return db_cursor.fetchone()["reply_template_ids"]
+
+    def test_campaign_create_accepts_reply_template_ids_and_deduplicates_preserving_order(
+        self, auth_client, api_client, db_cursor, db_connection
+    ):
+        first = self._create_reusable_template(auth_client)
+        second = self._create_reusable_template(auth_client)
+        payload = self._create_campaign_payload(
+            api_client,
+            reply_template_ids=[first["id"], second["id"], first["id"]],
+        )
+
+        resp = auth_client.post("/api/v1/campaigns", json=payload)
+        assert_response_success(resp)
+        data = extract_data(resp.json())
+
+        assert data["reply_template_ids"] == [first["id"], second["id"]]
+        assert self._db_reply_template_ids(db_cursor, db_connection, data["id"]) == [
+            first["id"],
+            second["id"],
+        ]
+
+        detail_resp = auth_client.get(f"/api/v1/campaigns/{data['id']}")
+        assert_response_success(detail_resp)
+        detail = extract_data(detail_resp.json())
+        assert detail["reply_template_ids"] == [first["id"], second["id"]]
+
+    def test_create_campaign_null_reply_template_ids_serializes_empty(
+        self, auth_client, api_client, db_cursor, db_connection
+    ):
+        payload = self._create_campaign_payload(api_client, reply_template_ids=None)
+
+        resp = auth_client.post("/api/v1/campaigns", json=payload)
+        assert_response_success(resp)
+        data = extract_data(resp.json())
+
+        assert data["reply_template_ids"] == []
+        assert self._db_reply_template_ids(db_cursor, db_connection, data["id"]) == []
+
+    def test_campaign_update_omitted_reply_template_ids_keeps_existing(
+        self, auth_client, api_client, db_cursor, db_connection
+    ):
+        reusable = self._create_reusable_template(auth_client)
+        db_side_reusable = self._create_reusable_template(auth_client)
+        create_resp = auth_client.post(
+            "/api/v1/campaigns",
+            json=self._create_campaign_payload(api_client, reply_template_ids=[reusable["id"]]),
+        )
+        assert_response_success(create_resp)
+        campaign_id = extract_data(create_resp.json())["id"]
+
+        db_cursor.execute(
+            """
+            UPDATE gm_campaigns
+            SET reply_template_ids = ARRAY[%s]::INTEGER[]
+            WHERE id = %s
+            """,
+            (db_side_reusable["id"], campaign_id),
+        )
+        db_connection.commit()
+
+        update_resp = auth_client.put(
+            f"/api/v1/campaigns/{campaign_id}",
+            json={"name": "Reply Template IDs Kept"},
+        )
+        assert_response_success(update_resp)
+        data = extract_data(update_resp.json())
+
+        assert data["reply_template_ids"] == [db_side_reusable["id"]]
+        assert self._db_reply_template_ids(db_cursor, db_connection, campaign_id) == [
+            db_side_reusable["id"]
+        ]
+
+    def test_update_campaign_null_reply_template_ids_keeps_existing(
+        self, auth_client, api_client, db_cursor, db_connection
+    ):
+        reusable = self._create_reusable_template(auth_client)
+        create_resp = auth_client.post(
+            "/api/v1/campaigns",
+            json=self._create_campaign_payload(api_client, reply_template_ids=[reusable["id"]]),
+        )
+        assert_response_success(create_resp)
+        campaign_id = extract_data(create_resp.json())["id"]
+
+        update_resp = auth_client.put(
+            f"/api/v1/campaigns/{campaign_id}",
+            json={
+                "name": "Reply Template IDs Null Kept",
+                "reply_template_ids": None,
+            },
+        )
+        assert_response_success(update_resp)
+        data = extract_data(update_resp.json())
+
+        assert data["reply_template_ids"] == [reusable["id"]]
+        assert self._db_reply_template_ids(db_cursor, db_connection, campaign_id) == [
+            reusable["id"]
+        ]
+
+    def test_update_campaign_replaces_reply_template_ids_with_deduped_order(
+        self, auth_client, api_client, db_cursor, db_connection
+    ):
+        original = self._create_reusable_template(auth_client)
+        replacement_first = self._create_reusable_template(auth_client)
+        replacement_second = self._create_reusable_template(auth_client)
+        create_resp = auth_client.post(
+            "/api/v1/campaigns",
+            json=self._create_campaign_payload(api_client, reply_template_ids=[original["id"]]),
+        )
+        assert_response_success(create_resp)
+        campaign_id = extract_data(create_resp.json())["id"]
+
+        update_resp = auth_client.put(
+            f"/api/v1/campaigns/{campaign_id}",
+            json={
+                "reply_template_ids": [
+                    replacement_first["id"],
+                    replacement_second["id"],
+                    replacement_first["id"],
+                ]
+            },
+        )
+        assert_response_success(update_resp)
+        data = extract_data(update_resp.json())
+
+        expected_ids = [replacement_first["id"], replacement_second["id"]]
+        assert data["reply_template_ids"] == expected_ids
+        assert self._db_reply_template_ids(db_cursor, db_connection, campaign_id) == expected_ids
+
+        detail_resp = auth_client.get(f"/api/v1/campaigns/{campaign_id}")
+        assert_response_success(detail_resp)
+        detail = extract_data(detail_resp.json())
+        assert detail["reply_template_ids"] == expected_ids
+
+    def test_campaign_update_empty_reply_template_ids_clears_associations(
+        self, auth_client, api_client, db_cursor, db_connection
+    ):
+        reusable = self._create_reusable_template(auth_client)
+        create_resp = auth_client.post(
+            "/api/v1/campaigns",
+            json=self._create_campaign_payload(api_client, reply_template_ids=[reusable["id"]]),
+        )
+        assert_response_success(create_resp)
+        campaign_id = extract_data(create_resp.json())["id"]
+
+        update_resp = auth_client.put(
+            f"/api/v1/campaigns/{campaign_id}",
+            json={"reply_template_ids": []},
+        )
+        assert_response_success(update_resp)
+        data = extract_data(update_resp.json())
+
+        assert data["reply_template_ids"] == []
+        assert self._db_reply_template_ids(db_cursor, db_connection, campaign_id) == []
+
+    def test_update_campaign_reply_template_ids_removes_stale_reusable_bindings_only(
+        self, auth_client, api_client, db_cursor, db_connection
+    ):
+        kept = self._create_reusable_template(auth_client)
+        stale = self._create_reusable_template(auth_client)
+        create_resp = auth_client.post(
+            "/api/v1/campaigns",
+            json=self._create_campaign_payload(
+                api_client,
+                reply_template_ids=[kept["id"], stale["id"]],
+            ),
+        )
+        assert_response_success(create_resp)
+        campaign_id = extract_data(create_resp.json())["id"]
+
+        for template in (kept, stale):
+            assign_resp = auth_client.post(
+                f"/api/v1/reply-template-library/{template['id']}/assign",
+                json={"campaign_id": campaign_id},
+            )
+            assert_response_success(assign_resp)
+
+        campaign_only_resp = auth_client.post(
+            f"/api/v1/campaigns/{campaign_id}/templates",
+            json={"reply_prompt": "campaign-only reply survives", "weight": 31},
+        )
+        assert_response_success(campaign_only_resp)
+        campaign_only_id = extract_data(campaign_only_resp.json())["id"]
+
+        update_resp = auth_client.put(
+            f"/api/v1/campaigns/{campaign_id}",
+            json={"reply_template_ids": [kept["id"]]},
+        )
+        assert_response_success(update_resp)
+        assert extract_data(update_resp.json())["reply_template_ids"] == [kept["id"]]
+
+        db_connection.commit()
+        db_cursor.execute(
+            """
+            SELECT id, library_template_id
+            FROM gm_campaign_templates
+            WHERE campaign_id = %s
+            ORDER BY library_template_id NULLS LAST, id
+            """,
+            (campaign_id,),
+        )
+        rows = db_cursor.fetchall()
+
+        assert any(row["library_template_id"] == kept["id"] for row in rows)
+        assert all(row["library_template_id"] != stale["id"] for row in rows)
+        assert any(
+            row["id"] == campaign_only_id and row["library_template_id"] is None
+            for row in rows
+        )
+        assert self._db_reply_template_ids(db_cursor, db_connection, campaign_id) == [kept["id"]]
+
+    def test_campaign_reply_template_ids_reject_unknown_or_foreign_ids(
+        self, auth_client, api_client, db_cursor, db_connection
+    ):
+        user_id = self._get_auth_user_id(auth_client)
+        unique = uuid.uuid4().hex[:8]
+        db_cursor.execute(
+            """
+            INSERT INTO gm_users (
+                email,
+                username,
+                password_hash,
+                status,
+                full_name,
+                role,
+                is_active,
+                created_at,
+                permissions
+            )
+            VALUES (%s, %s, 'not-used', 'active', 'Foreign User', 'user', true, NOW(), 0)
+            RETURNING id
+            """,
+            (f"foreign-{unique}@example.com", f"foreign-{unique}"),
+        )
+        foreign_user_id = db_cursor.fetchone()["id"]
+        db_cursor.execute(
+            """
+            INSERT INTO gm_reply_template_library (
+                user_id, name, description, weight, reply_prompt, usage_count, created_at
+            )
+            VALUES (%s, 'Foreign reusable', NULL, 50, 'foreign reply', 0, NOW())
+            RETURNING id
+            """,
+            (foreign_user_id,),
+        )
+        foreign_id = db_cursor.fetchone()["id"]
+        db_connection.commit()
+
+        for candidate_id in (2147480000, foreign_id):
+            resp = auth_client.post(
+                "/api/v1/campaigns",
+                json=self._create_campaign_payload(api_client, reply_template_ids=[candidate_id]),
+            )
+            assert resp.status_code == 404, (
+                f"Expected TemplateNotFound for user={user_id} template={candidate_id}, got {resp.text}"
+            )
+            body = resp.json()
+            assert body["code"] == 4200
+            assert "Template not found" in body["msg"]
+
+    def test_campaign_reply_template_ids_reject_non_positive_and_more_than_100_ids(
+        self, auth_client, api_client
+    ):
+        create_resp = auth_client.post(
+            "/api/v1/campaigns",
+            json=self._create_campaign_payload(api_client),
+        )
+        assert_response_success(create_resp)
+        campaign_id = extract_data(create_resp.json())["id"]
+
+        for ids in ([0], [-1], list(range(1, 102))):
+            resp = auth_client.post(
+                "/api/v1/campaigns",
+                json=self._create_campaign_payload(api_client, reply_template_ids=ids),
+            )
+            assert resp.status_code == 400, f"Expected bad request for ids={ids[:3]}, got {resp.text}"
+
+            update_resp = auth_client.put(
+                f"/api/v1/campaigns/{campaign_id}",
+                json={"reply_template_ids": ids},
+            )
+            assert update_resp.status_code == 400, (
+                f"Expected update bad request for ids={ids[:3]}, got {update_resp.text}"
+            )
+
     def test_get_campaign_details(self, auth_client, api_client, db_cursor):
         """Test getting campaign details."""
         user_id = self._get_auth_user_id(auth_client)
@@ -279,6 +599,57 @@ class TestCampaignTemplates:
         assert_response_success(resp)
         return extract_data(resp.json()), payload
 
+    def _fill_campaign_reply_template_ids_to_cap(
+        self, auth_client, db_cursor, db_connection, campaign_id
+    ):
+        user_id = self._get_auth_user_id(auth_client)
+        capped_ids = list(range(10000, 10100))
+        library_values = ",\n".join(
+            "(%s, %s, %s, NULL, 50, NULL, %s, NULL, 0, NOW(), NULL)"
+            for _template_id in capped_ids
+        )
+        params = []
+        for template_id in capped_ids:
+            params.extend(
+                [
+                    template_id,
+                    user_id,
+                    f"Cap reusable {template_id}",
+                    f"Cap reply {template_id}",
+                ]
+            )
+        db_cursor.execute(
+            f"""
+            INSERT INTO gm_reply_template_library (
+                id,
+                user_id,
+                name,
+                description,
+                weight,
+                dm_prompt,
+                reply_prompt,
+                reply_post_prompt,
+                usage_count,
+                created_at,
+                updated_at
+            )
+            VALUES
+                {library_values}
+            ON CONFLICT (id) DO NOTHING
+            """,
+            params,
+        )
+        db_cursor.execute(
+            """
+            UPDATE gm_campaigns
+            SET reply_template_ids = %s::INTEGER[]
+            WHERE id = %s
+            """,
+            (capped_ids, campaign_id),
+        )
+        db_connection.commit()
+        return capped_ids
+
     def _create_fresh_campaign(self, auth_client, api_client, name_suffix):
         platform_id, region_id, ai_model_id = TestCampaignCRUD()._get_config_ids(api_client)
         create_resp = auth_client.post(
@@ -320,6 +691,55 @@ class TestCampaignTemplates:
             print(f"\nCreated template: {data}")
             assert "id" in data
 
+    def test_create_campaign_scoped_template_uses_path_campaign_id_when_body_omits_it(
+        self, auth_client, api_client, db_cursor, db_connection
+    ):
+        """POST /campaigns/:id/templates must accept a body that omits campaign_id.
+
+        Contract: the campaign id comes from the URL path. Before this was
+        locked in, a minimal body (`reply_prompt` + `weight`) caused a 400
+        because serde required `campaign_id` on the DTO. The full-stack
+        scenario exercises this via gm-e2e, but we also need a hermetic
+        API-level integration check that inspects the persisted row.
+        """
+        campaign_id = self._get_or_create_campaign(auth_client, api_client, db_cursor)
+        if not campaign_id:
+            pytest.skip("No campaign available")
+
+        unique = uuid.uuid4().hex[:6]
+        resp = auth_client.post(
+            f"/api/v1/campaigns/{campaign_id}/templates",
+            json={
+                "weight": 11,
+                "reply_prompt": f"campaign-only legacy reply {unique}",
+            },
+        )
+        assert_response_success(resp)
+        data = extract_data(resp.json())
+        template_id = data["id"]
+
+        assert data["campaign_id"] == campaign_id
+        assert data["weight"] == 11
+        assert data["reply_prompt"] == f"campaign-only legacy reply {unique}"
+        assert data.get("library_template_id") in (None, 0)
+
+        db_cursor.execute(
+            """
+            SELECT campaign_id, weight, reply_prompt, library_template_id
+              FROM gm_campaign_templates
+             WHERE id = %s
+            """,
+            (template_id,),
+        )
+        row = db_cursor.fetchone()
+        assert row is not None, "template row must be persisted"
+        assert row["campaign_id"] == campaign_id
+        assert row["weight"] == 11
+        assert row["reply_prompt"] == f"campaign-only legacy reply {unique}"
+        assert row["library_template_id"] is None
+
+        db_connection.commit()
+
     def test_list_templates(self, auth_client, api_client, db_cursor):
         """Test listing campaign templates."""
         campaign_id = self._get_or_create_campaign(auth_client, api_client, db_cursor)
@@ -336,7 +756,86 @@ class TestCampaignTemplates:
         templates = data if isinstance(data, list) else data.get("list", [])
         print(f"  Template count: {len(templates)}")
 
-    def test_reusable_template_assignment_persists_agent_contract(
+    def test_create_library_backed_campaign_template_over_cap_returns_client_error(
+        self, auth_client, api_client, db_cursor, db_connection
+    ):
+        campaign_id = self._create_fresh_campaign(auth_client, api_client, uuid.uuid4().hex[:8])
+        capped_ids = self._fill_campaign_reply_template_ids_to_cap(
+            auth_client, db_cursor, db_connection, campaign_id
+        )
+        reusable, _payload = self._create_reusable_template(auth_client)
+
+        create_resp = auth_client.post(
+            f"/api/v1/campaigns/{campaign_id}/templates",
+            json={"library_template_id": reusable["id"], "weight": 12},
+        )
+        assert create_resp.status_code == 400, create_resp.text
+        assert "reply_template_ids" in create_resp.text
+
+        db_connection.commit()
+        db_cursor.execute(
+            """
+            SELECT reply_template_ids
+            FROM gm_campaigns
+            WHERE id = %s
+            """,
+            (campaign_id,),
+        )
+        assert db_cursor.fetchone()["reply_template_ids"] == capped_ids
+        db_cursor.execute(
+            """
+            SELECT COUNT(*) AS row_count
+            FROM gm_campaign_templates
+            WHERE campaign_id = %s
+              AND library_template_id = %s
+            """,
+            (campaign_id, reusable["id"]),
+        )
+        assert db_cursor.fetchone()["row_count"] == 0
+
+    def test_update_campaign_template_to_library_over_cap_returns_client_error(
+        self, auth_client, api_client, db_cursor, db_connection
+    ):
+        campaign_id = self._create_fresh_campaign(auth_client, api_client, uuid.uuid4().hex[:8])
+        capped_ids = self._fill_campaign_reply_template_ids_to_cap(
+            auth_client, db_cursor, db_connection, campaign_id
+        )
+        reusable, _payload = self._create_reusable_template(auth_client)
+        campaign_only_resp = auth_client.post(
+            f"/api/v1/campaigns/{campaign_id}/templates",
+            json={"reply_prompt": "campaign-only over-cap update", "weight": 9},
+        )
+        assert_response_success(campaign_only_resp)
+        campaign_only = extract_data(campaign_only_resp.json())
+
+        update_resp = auth_client.put(
+            f"/api/v1/templates/{campaign_only['id']}",
+            json={"library_template_id": reusable["id"]},
+        )
+        assert update_resp.status_code == 400, update_resp.text
+        assert "reply_template_ids" in update_resp.text
+
+        db_connection.commit()
+        db_cursor.execute(
+            """
+            SELECT reply_template_ids
+            FROM gm_campaigns
+            WHERE id = %s
+            """,
+            (campaign_id,),
+        )
+        assert db_cursor.fetchone()["reply_template_ids"] == capped_ids
+        db_cursor.execute(
+            """
+            SELECT library_template_id
+            FROM gm_campaign_templates
+            WHERE id = %s
+            """,
+            (campaign_only["id"],),
+        )
+        assert db_cursor.fetchone()["library_template_id"] is None
+
+    def test_assign_reusable_template_appends_campaign_reply_template_id_once(
         self, auth_client, api_client, db_cursor, db_connection
     ):
         """Reusable template assignment should persist the DB shape consumed by agent_rs."""
@@ -416,6 +915,12 @@ class TestCampaignTemplates:
         assert row["binding_count"] == 1
 
         db_cursor.execute(
+            "SELECT reply_template_ids FROM gm_campaigns WHERE id = %s",
+            (campaign_id,),
+        )
+        assert db_cursor.fetchone()["reply_template_ids"] == [reusable["id"]]
+
+        db_cursor.execute(
             """
             SELECT COUNT(*) AS row_count
             FROM gm_campaign_templates
@@ -424,6 +929,20 @@ class TestCampaignTemplates:
             (campaign_id, reusable["id"]),
         )
         assert db_cursor.fetchone()["row_count"] == 1
+
+        db_cursor.execute(
+            """
+            SELECT
+                reply_template_ids,
+                cardinality(reply_template_ids) AS reply_template_id_count
+            FROM gm_campaigns
+            WHERE id = %s
+            """,
+            (campaign_id,),
+        )
+        campaign_row = db_cursor.fetchone()
+        assert campaign_row["reply_template_ids"] == [reusable["id"]]
+        assert campaign_row["reply_template_id_count"] == 1
 
         reusable_list_resp = auth_client.get("/api/v1/reply-template-library?page=1&page_size=10")
         assert_response_success(reusable_list_resp)
@@ -499,7 +1018,7 @@ class TestCampaignTemplates:
         assert resolved["dm_prompt"] is None
         assert resolved["reply_post_prompt"] == library_payload["reply_post_prompt"]
 
-    def test_reusable_template_assignment_is_idempotent_under_concurrency(
+    def test_assign_reusable_template_concurrent_calls_do_not_duplicate_campaign_ids(
         self, auth_client, api_client, db_cursor, db_connection
     ):
         """Concurrent assignment should converge to one campaign binding and one usage."""
@@ -541,6 +1060,16 @@ class TestCampaignTemplates:
 
         db_cursor.execute(
             """
+            SELECT reply_template_ids
+            FROM gm_campaigns
+            WHERE id = %s
+            """,
+            (campaign_id,),
+        )
+        assert db_cursor.fetchone()["reply_template_ids"] == [reusable["id"]]
+
+        db_cursor.execute(
+            """
             SELECT reply_prompt, dm_prompt, reply_post_prompt
             FROM gm_resolved_campaign_templates
             WHERE campaign_id = %s AND library_template_id = %s
@@ -552,7 +1081,33 @@ class TestCampaignTemplates:
         assert resolved["dm_prompt"] == payload["dm_prompt"]
         assert resolved["reply_post_prompt"] == payload["reply_post_prompt"]
 
-    def test_reusable_template_usage_counts_distinct_campaign_bindings(
+    def test_reusable_template_assignment_over_cap_returns_client_error(
+        self, auth_client, api_client, db_cursor, db_connection
+    ):
+        campaign_id = self._create_fresh_campaign(auth_client, api_client, uuid.uuid4().hex[:8])
+        over_cap_reusable, _payload = self._create_reusable_template(auth_client)
+        capped_ids = self._fill_campaign_reply_template_ids_to_cap(
+            auth_client, db_cursor, db_connection, campaign_id
+        )
+
+        assign_resp = auth_client.post(
+            f"/api/v1/reply-template-library/{over_cap_reusable['id']}/assign",
+            json={"campaign_id": campaign_id},
+        )
+        assert assign_resp.status_code == 400, assign_resp.text
+        assert "reply_template_ids" in assign_resp.text
+
+        db_cursor.execute(
+            """
+            SELECT reply_template_ids
+            FROM gm_campaigns
+            WHERE id = %s
+            """,
+            (campaign_id,),
+        )
+        assert db_cursor.fetchone()["reply_template_ids"] == capped_ids
+
+    def test_reusable_template_usage_counts_distinct_campaigns_from_new_field_and_legacy_table(
         self, auth_client, api_client, db_cursor, db_connection
     ):
         """usage_count should reflect distinct campaign assignments, not click count."""
@@ -591,6 +1146,119 @@ class TestCampaignTemplates:
         counts = db_cursor.fetchone()
         assert counts["row_count"] == len(campaign_ids)
         assert counts["campaign_count"] == len(campaign_ids)
+
+        new_field_only_campaign_id = self._create_fresh_campaign(
+            auth_client, api_client, f"new-field-only-{uuid.uuid4().hex[:8]}"
+        )
+        db_cursor.execute(
+            """
+            UPDATE gm_campaigns
+            SET reply_template_ids = ARRAY[%s]::INTEGER[]
+            WHERE id = %s
+            """,
+            (reusable["id"], new_field_only_campaign_id),
+        )
+        db_cursor.execute(
+            """
+            UPDATE gm_campaigns
+            SET reply_template_ids = array_append(reply_template_ids, %s)
+            WHERE id = %s
+            """,
+            (reusable["id"], campaign_ids[0]),
+        )
+        db_connection.commit()
+
+        detail_resp = auth_client.get(f"/api/v1/reply-template-library/{reusable['id']}")
+        assert_response_success(detail_resp)
+        assert extract_data(detail_resp.json())["usage_count"] == len(campaign_ids) + 1
+
+    def test_delete_campaign_template_removes_reusable_id_but_keeps_campaign_only_templates(
+        self, auth_client, api_client, db_cursor, db_connection
+    ):
+        campaign_id = self._create_fresh_campaign(auth_client, api_client, uuid.uuid4().hex[:8])
+        reusable, _payload = self._create_reusable_template(auth_client)
+
+        assign_resp = auth_client.post(
+            f"/api/v1/reply-template-library/{reusable['id']}/assign",
+            json={"campaign_id": campaign_id},
+        )
+        assert_response_success(assign_resp)
+        assignment = extract_data(assign_resp.json())
+
+        campaign_only_resp = auth_client.post(
+            f"/api/v1/campaigns/{campaign_id}/templates",
+            json={"reply_prompt": "campaign-only reply", "weight": 9},
+        )
+        assert_response_success(campaign_only_resp)
+        campaign_only = extract_data(campaign_only_resp.json())
+
+        delete_resp = auth_client.delete(f"/api/v1/templates/{assignment['id']}")
+        assert_response_success(delete_resp)
+
+        db_connection.commit()
+        db_cursor.execute(
+            "SELECT reply_template_ids FROM gm_campaigns WHERE id = %s",
+            (campaign_id,),
+        )
+        assert db_cursor.fetchone()["reply_template_ids"] == []
+
+        db_cursor.execute(
+            """
+            SELECT id, library_template_id
+            FROM gm_campaign_templates
+            WHERE id = %s
+            """,
+            (campaign_only["id"],),
+        )
+        row = db_cursor.fetchone()
+        assert row is not None
+        assert row["library_template_id"] is None
+
+    def test_delete_reusable_template_removes_id_from_all_user_campaigns(
+        self, auth_client, api_client, db_cursor, db_connection
+    ):
+        reusable, _payload = self._create_reusable_template(auth_client)
+        campaign_ids = [
+            self._create_fresh_campaign(auth_client, api_client, f"{uuid.uuid4().hex[:8]}-{index}")
+            for index in range(2)
+        ]
+
+        assignment_ids = []
+        for campaign_id in campaign_ids:
+            assign_resp = auth_client.post(
+                f"/api/v1/reply-template-library/{reusable['id']}/assign",
+                json={"campaign_id": campaign_id},
+            )
+            assert_response_success(assign_resp)
+            assignment_ids.append(extract_data(assign_resp.json())["id"])
+
+        delete_resp = auth_client.delete(f"/api/v1/reply-template-library/{reusable['id']}")
+        assert_response_success(delete_resp)
+
+        db_connection.commit()
+        db_cursor.execute(
+            """
+            SELECT id, reply_template_ids
+            FROM gm_campaigns
+            WHERE id = ANY(%s)
+            ORDER BY id
+            """,
+            (campaign_ids,),
+        )
+        assert [row["reply_template_ids"] for row in db_cursor.fetchall()] == [[], []]
+
+        db_cursor.execute(
+            """
+            SELECT id, library_template_id
+            FROM gm_campaign_templates
+            WHERE id = ANY(%s)
+            ORDER BY id
+            """,
+            (assignment_ids,),
+        )
+        legacy_rows = db_cursor.fetchall()
+        assert len(legacy_rows) == len(assignment_ids)
+        assert all(row["library_template_id"] is None for row in legacy_rows)
 
     def test_reusable_template_cleared_prompts_resolve_to_null_not_snapshot_fallback(
         self, auth_client, api_client, db_cursor, db_connection

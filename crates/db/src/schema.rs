@@ -744,6 +744,7 @@ diesel::table! {
         auto_reply_comments -> Bool,
         auto_reply_post -> Bool,
         completed_reason -> Nullable<Text>,
+        reply_template_ids -> Array<Int4>,
     }
 }
 

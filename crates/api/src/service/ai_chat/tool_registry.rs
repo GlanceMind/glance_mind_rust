@@ -1924,7 +1924,7 @@ impl ToolRegistry {
                     .ok_or_else(|| ApiError::BadRequest("campaign_id required".into()))?
                     as i32;
                 let dto = crate::dto::template_dto::TemplateCreateDto {
-                    campaign_id,
+                    campaign_id: Some(campaign_id),
                     library_template_id: params
                         .get("library_template_id")
                         .and_then(|v| v.as_i64())
