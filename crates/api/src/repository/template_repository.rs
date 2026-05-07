@@ -1,7 +1,7 @@
 use crate::config::database::DBPool;
 use diesel::prelude::*;
 use diesel::result::Error as DieselError;
-use diesel::sql_types::{BigInt, Integer, Nullable, Text, Timestamptz};
+use diesel::sql_types::{Array, BigInt, Integer, Nullable, Text, Timestamptz};
 use glance_mind_db::entity::template::{
     AssignedCampaignTemplate, CampaignTemplate, NewCampaignTemplate, NewReusableReplyTemplate,
     ResolvedCampaignTemplate, ReusableReplyTemplate,
@@ -50,6 +50,12 @@ struct ReusableTemplateRow {
     updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+#[derive(Debug, QueryableByName)]
+struct DeletedReusableTemplateRow {
+    #[diesel(sql_type = Integer)]
+    id: i32,
+}
+
 impl From<ReusableTemplateRow> for ReusableReplyTemplate {
     fn from(row: ReusableTemplateRow) -> Self {
         Self {
@@ -71,6 +77,37 @@ impl From<ReusableTemplateRow> for ReusableReplyTemplate {
 #[derive(Clone)]
 pub struct TemplateRepository {
     pool: DBPool,
+}
+
+#[derive(Debug)]
+pub enum AssignReusableTemplateError {
+    CampaignNotFound,
+    TemplateNotFound,
+    Diesel(DieselError),
+    ReplyTemplateIdsFull,
+}
+
+impl From<DieselError> for AssignReusableTemplateError {
+    fn from(error: DieselError) -> Self {
+        Self::Diesel(error)
+    }
+}
+
+#[derive(Debug)]
+pub enum CampaignTemplateWriteError {
+    Diesel(DieselError),
+    ReplyTemplateIdsFull,
+}
+
+impl From<DieselError> for CampaignTemplateWriteError {
+    fn from(error: DieselError) -> Self {
+        Self::Diesel(error)
+    }
+}
+
+enum ReplyTemplateAppendResult {
+    Appended,
+    AlreadyPresent,
 }
 
 pub struct CampaignTemplateInsert {
@@ -122,7 +159,7 @@ impl TemplateRepository {
     pub async fn create(
         &self,
         input: CampaignTemplateInsert,
-    ) -> Result<CampaignTemplate, DieselError> {
+    ) -> Result<CampaignTemplate, CampaignTemplateWriteError> {
         let mut conn = self.pool.get().expect("Connection error");
         let new_template = NewCampaignTemplate {
             campaign_id: input.campaign_id,
@@ -136,10 +173,18 @@ impl TemplateRepository {
             name: input.name,
         };
 
-        diesel::insert_into(campaign_templates::table)
-            .values(&new_template)
-            .returning(CampaignTemplate::as_returning())
-            .get_result(&mut conn)
+        conn.transaction(|conn| {
+            let template = diesel::insert_into(campaign_templates::table)
+                .values(&new_template)
+                .returning(CampaignTemplate::as_returning())
+                .get_result::<CampaignTemplate>(conn)?;
+
+            if let Some(library_template_id) = template.library_template_id {
+                Self::append_reply_template_id(conn, template.campaign_id, library_template_id)?;
+            }
+
+            Ok(template)
+        })
     }
 
     pub async fn find_all_by_campaign(
@@ -288,38 +333,53 @@ impl TemplateRepository {
     pub async fn update(
         &self,
         input: CampaignTemplatePatch,
-    ) -> Result<CampaignTemplate, DieselError> {
+    ) -> Result<CampaignTemplate, CampaignTemplateWriteError> {
         let mut conn = self.pool.get().expect("Connection error");
 
-        let target = campaign_templates::table
-            .find(input.id)
-            .select(CampaignTemplate::as_select());
-        let mut template = target.first::<CampaignTemplate>(&mut conn)?;
+        conn.transaction(|conn| {
+            let target = campaign_templates::table
+                .find(input.id)
+                .for_update()
+                .select(CampaignTemplate::as_select());
+            let mut template = target.first::<CampaignTemplate>(conn)?;
+            let previous_library_template_id = template.library_template_id;
 
-        if let Some(library_id) = input.library_template_id {
-            template.library_template_id = library_id;
-        }
-        if let Some(n) = input.name {
-            template.name = n;
-        }
-        if let Some(w) = input.weight {
-            template.weight = w;
-        }
-        if let Some(dm) = input.dm_prompt {
-            template.dm_prompt = dm;
-        }
-        if let Some(rp) = input.reply_prompt {
-            template.reply_prompt = rp;
-        }
-        if let Some(rpp) = input.reply_post_prompt {
-            template.reply_post_prompt = rpp;
-        }
-        template.updated_at = Some(chrono::Utc::now());
+            if let Some(library_id) = input.library_template_id {
+                template.library_template_id = library_id;
+            }
+            if let Some(n) = input.name {
+                template.name = n;
+            }
+            if let Some(w) = input.weight {
+                template.weight = w;
+            }
+            if let Some(dm) = input.dm_prompt {
+                template.dm_prompt = dm;
+            }
+            if let Some(rp) = input.reply_prompt {
+                template.reply_prompt = rp;
+            }
+            if let Some(rpp) = input.reply_post_prompt {
+                template.reply_post_prompt = rpp;
+            }
+            template.updated_at = Some(chrono::Utc::now());
 
-        diesel::update(campaign_templates::table.find(input.id))
-            .set(&template)
-            .returning(CampaignTemplate::as_returning())
-            .get_result(&mut conn)
+            let updated = diesel::update(campaign_templates::table.find(input.id))
+                .set(&template)
+                .returning(CampaignTemplate::as_returning())
+                .get_result::<CampaignTemplate>(conn)?;
+
+            if previous_library_template_id != updated.library_template_id {
+                if let Some(previous_id) = previous_library_template_id {
+                    Self::remove_reply_template_id(conn, updated.campaign_id, previous_id)?;
+                }
+                if let Some(updated_id) = updated.library_template_id {
+                    Self::append_reply_template_id(conn, updated.campaign_id, updated_id)?;
+                }
+            }
+
+            Ok(updated)
+        })
     }
 
     pub async fn delete(&self, id: i32) -> Result<usize, DieselError> {
@@ -373,9 +433,22 @@ impl TemplateRepository {
                 library.updated_at
             FROM gm_reply_template_library library
             LEFT JOIN (
-                SELECT library_template_id, COUNT(*) AS usage_count
-                FROM gm_campaign_templates
-                WHERE library_template_id IS NOT NULL
+                WITH bindings AS (
+                    SELECT campaign.id AS campaign_id, template_ids.template_id AS library_template_id
+                    FROM gm_campaigns campaign
+                    CROSS JOIN LATERAL UNNEST(campaign.reply_template_ids) AS template_ids(template_id)
+                    WHERE campaign.user_id = $2
+
+                    UNION
+
+                    SELECT campaign_template.campaign_id, campaign_template.library_template_id
+                    FROM gm_campaign_templates campaign_template
+                    JOIN gm_campaigns campaign ON campaign.id = campaign_template.campaign_id
+                    WHERE campaign.user_id = $2
+                      AND campaign_template.library_template_id IS NOT NULL
+                )
+                SELECT library_template_id, COUNT(DISTINCT campaign_id) AS usage_count
+                FROM bindings
                 GROUP BY library_template_id
             ) bindings ON bindings.library_template_id = library.id
             WHERE library.id = $1 AND library.user_id = $2
@@ -417,9 +490,22 @@ impl TemplateRepository {
                 library.updated_at
             FROM gm_reply_template_library library
             LEFT JOIN (
-                SELECT library_template_id, COUNT(*) AS usage_count
-                FROM gm_campaign_templates
-                WHERE library_template_id IS NOT NULL
+                WITH bindings AS (
+                    SELECT campaign.id AS campaign_id, template_ids.template_id AS library_template_id
+                    FROM gm_campaigns campaign
+                    CROSS JOIN LATERAL UNNEST(campaign.reply_template_ids) AS template_ids(template_id)
+                    WHERE campaign.user_id = $1
+
+                    UNION
+
+                    SELECT campaign_template.campaign_id, campaign_template.library_template_id
+                    FROM gm_campaign_templates campaign_template
+                    JOIN gm_campaigns campaign ON campaign.id = campaign_template.campaign_id
+                    WHERE campaign.user_id = $1
+                      AND campaign_template.library_template_id IS NOT NULL
+                )
+                SELECT library_template_id, COUNT(DISTINCT campaign_id) AS usage_count
+                FROM bindings
                 GROUP BY library_template_id
             ) bindings ON bindings.library_template_id = library.id
             WHERE library.user_id = $1
@@ -479,12 +565,39 @@ impl TemplateRepository {
 
     pub async fn delete_reusable(&self, id: i32, user_id: i32) -> Result<usize, DieselError> {
         let mut conn = self.pool.get().expect("Connection error");
-        diesel::delete(
-            template_library::table
-                .filter(template_library::id.eq(id))
-                .filter(template_library::user_id.eq(user_id)),
-        )
-        .execute(&mut conn)
+        conn.transaction(|conn| {
+            let deleted = diesel::sql_query(
+                r#"
+                DELETE FROM gm_reply_template_library
+                WHERE id = $1
+                  AND user_id = $2
+                RETURNING id
+                "#,
+            )
+            .bind::<Integer, _>(id)
+            .bind::<Integer, _>(user_id)
+            .get_result::<DeletedReusableTemplateRow>(conn)
+            .optional()?;
+
+            let Some(deleted) = deleted else {
+                return Ok(0);
+            };
+            let _deleted_id = deleted.id;
+
+            diesel::sql_query(
+                r#"
+                UPDATE gm_campaigns
+                SET reply_template_ids = array_remove(reply_template_ids, $1)
+                WHERE user_id = $2
+                  AND $1 = ANY(reply_template_ids)
+                "#,
+            )
+            .bind::<Integer, _>(id)
+            .bind::<Integer, _>(user_id)
+            .execute(conn)?;
+
+            Ok(1)
+        })
     }
 
     pub async fn find_reusable_by_ids_and_user(
@@ -505,13 +618,28 @@ impl TemplateRepository {
 
         let usage_rows = diesel::sql_query(
             r#"
-            SELECT library_template_id AS id, COUNT(*) AS usage_count
-            FROM gm_campaign_templates
-            WHERE library_template_id = ANY($1)
+            WITH bindings AS (
+                SELECT campaign.id AS campaign_id, template_ids.template_id AS library_template_id
+                FROM gm_campaigns campaign
+                CROSS JOIN LATERAL UNNEST(campaign.reply_template_ids) AS template_ids(template_id)
+                WHERE campaign.user_id = $2
+                  AND template_ids.template_id = ANY($1)
+
+                UNION
+
+                SELECT campaign_template.campaign_id, campaign_template.library_template_id
+                FROM gm_campaign_templates campaign_template
+                JOIN gm_campaigns campaign ON campaign.id = campaign_template.campaign_id
+                WHERE campaign.user_id = $2
+                  AND campaign_template.library_template_id = ANY($1)
+            )
+            SELECT library_template_id AS id, COUNT(DISTINCT campaign_id) AS usage_count
+            FROM bindings
             GROUP BY library_template_id
             "#,
         )
-        .bind::<diesel::sql_types::Array<Integer>, _>(ids)
+        .bind::<Array<Integer>, _>(ids)
+        .bind::<Integer, _>(user_id)
         .load::<ReusableUsageRow>(&mut conn)?;
 
         let usage_by_id: HashMap<i32, i32> = usage_rows
@@ -534,49 +662,173 @@ impl TemplateRepository {
         library_template_id: i32,
         weight_override: Option<i32>,
         user_id: i32,
-    ) -> Result<CampaignTemplate, DieselError> {
+    ) -> Result<CampaignTemplate, AssignReusableTemplateError> {
         let mut conn = self.pool.get().expect("Connection error");
-        diesel::sql_query(
-            r#"
-            INSERT INTO gm_campaign_templates (
-                campaign_id,
-                library_template_id,
-                name,
-                weight,
-                dm_prompt,
-                reply_prompt,
-                reply_post_prompt,
-                created_at,
-                updated_at
+        conn.transaction(|conn| {
+            let campaign_locked = diesel::sql_query(
+                r#"
+                SELECT id
+                FROM gm_campaigns
+                WHERE id = $1
+                  AND user_id = $2
+                FOR UPDATE
+                "#,
             )
-            SELECT
-                $1,
-                id,
-                name,
-                COALESCE($3, weight),
-                dm_prompt,
-                reply_prompt,
-                reply_post_prompt,
-                NOW(),
-                NULL
-            FROM gm_reply_template_library
-            WHERE id = $2 AND user_id = $4
-            ON CONFLICT (campaign_id, library_template_id) WHERE library_template_id IS NOT NULL
-            DO UPDATE SET
-                name = EXCLUDED.name,
-                weight = EXCLUDED.weight,
-                dm_prompt = EXCLUDED.dm_prompt,
-                reply_prompt = EXCLUDED.reply_prompt,
-                reply_post_prompt = EXCLUDED.reply_post_prompt,
-                updated_at = NOW()
-            RETURNING *
+            .bind::<Integer, _>(campaign_id)
+            .bind::<Integer, _>(user_id)
+            .load::<DeletedReusableTemplateRow>(conn)?;
+            if campaign_locked.is_empty() {
+                return Err(AssignReusableTemplateError::CampaignNotFound);
+            }
+
+            let template_locked = diesel::sql_query(
+                r#"
+                SELECT id
+                FROM gm_reply_template_library
+                WHERE id = $1
+                  AND user_id = $2
+                FOR KEY SHARE
+                "#,
+            )
+            .bind::<Integer, _>(library_template_id)
+            .bind::<Integer, _>(user_id)
+            .load::<DeletedReusableTemplateRow>(conn)?;
+            if template_locked.is_empty() {
+                return Err(AssignReusableTemplateError::TemplateNotFound);
+            }
+
+            let assigned = diesel::sql_query(
+                r#"
+                INSERT INTO gm_campaign_templates (
+                    campaign_id,
+                    library_template_id,
+                    name,
+                    weight,
+                    dm_prompt,
+                    reply_prompt,
+                    reply_post_prompt,
+                    created_at,
+                    updated_at
+                )
+                SELECT
+                    campaigns.id,
+                    library.id,
+                    library.name,
+                    COALESCE($3, library.weight),
+                    library.dm_prompt,
+                    library.reply_prompt,
+                    library.reply_post_prompt,
+                    NOW(),
+                    NULL
+                FROM gm_campaigns campaigns
+                JOIN gm_reply_template_library library
+                  ON library.id = $2
+                 AND library.user_id = $4
+                WHERE campaigns.id = $1
+                  AND campaigns.user_id = $4
+                ON CONFLICT (campaign_id, library_template_id) WHERE library_template_id IS NOT NULL
+                DO UPDATE SET
+                    name = EXCLUDED.name,
+                    weight = EXCLUDED.weight,
+                    dm_prompt = EXCLUDED.dm_prompt,
+                    reply_prompt = EXCLUDED.reply_prompt,
+                    reply_post_prompt = EXCLUDED.reply_post_prompt,
+                    updated_at = NOW()
+                RETURNING *
+                "#,
+            )
+            .bind::<Integer, _>(campaign_id)
+            .bind::<Integer, _>(library_template_id)
+            .bind::<Nullable<Integer>, _>(weight_override)
+            .bind::<Integer, _>(user_id)
+            .get_result::<AssignedCampaignTemplate>(conn)?;
+
+            Self::append_reply_template_id(conn, campaign_id, library_template_id).map_err(
+                |error| match error {
+                    CampaignTemplateWriteError::ReplyTemplateIdsFull => {
+                        AssignReusableTemplateError::ReplyTemplateIdsFull
+                    }
+                    CampaignTemplateWriteError::Diesel(error) => {
+                        AssignReusableTemplateError::Diesel(error)
+                    }
+                },
+            )?;
+
+            Ok(CampaignTemplate::from(assigned))
+        })
+    }
+
+    pub async fn delete_and_sync(&self, id: i32) -> Result<usize, DieselError> {
+        let mut conn = self.pool.get().expect("Connection error");
+        conn.transaction(|conn| {
+            let template = campaign_templates::table
+                .find(id)
+                .select(CampaignTemplate::as_select())
+                .first::<CampaignTemplate>(conn)?;
+            let deleted = diesel::delete(campaign_templates::table.find(id)).execute(conn)?;
+            if let Some(library_template_id) = template.library_template_id {
+                Self::remove_reply_template_id(conn, template.campaign_id, library_template_id)?;
+            }
+            Ok(deleted)
+        })
+    }
+
+    fn append_reply_template_id(
+        conn: &mut PgConnection,
+        campaign_id: i32,
+        library_template_id: i32,
+    ) -> Result<ReplyTemplateAppendResult, CampaignTemplateWriteError> {
+        let appended = diesel::sql_query(
+            r#"
+            UPDATE gm_campaigns
+            SET reply_template_ids = array_append(reply_template_ids, $1)
+            WHERE id = $2
+              AND NOT ($1 = ANY(reply_template_ids))
+              AND cardinality(reply_template_ids) < 100
+            "#,
+        )
+        .bind::<Integer, _>(library_template_id)
+        .bind::<Integer, _>(campaign_id)
+        .execute(conn)?;
+
+        if appended > 0 {
+            return Ok(ReplyTemplateAppendResult::Appended);
+        }
+
+        let already_present_count = diesel::sql_query(
+            r#"
+            SELECT COUNT(*) AS total
+            FROM gm_campaigns
+            WHERE id = $1
+              AND $2 = ANY(reply_template_ids)
             "#,
         )
         .bind::<Integer, _>(campaign_id)
         .bind::<Integer, _>(library_template_id)
-        .bind::<Nullable<Integer>, _>(weight_override)
-        .bind::<Integer, _>(user_id)
-        .get_result::<AssignedCampaignTemplate>(&mut conn)
-        .map(Into::into)
+        .get_result::<CountRow>(conn)?
+        .total;
+
+        if already_present_count > 0 {
+            Ok(ReplyTemplateAppendResult::AlreadyPresent)
+        } else {
+            Err(CampaignTemplateWriteError::ReplyTemplateIdsFull)
+        }
+    }
+
+    fn remove_reply_template_id(
+        conn: &mut PgConnection,
+        campaign_id: i32,
+        library_template_id: i32,
+    ) -> Result<usize, DieselError> {
+        diesel::sql_query(
+            r#"
+            UPDATE gm_campaigns
+            SET reply_template_ids = array_remove(reply_template_ids, $1)
+            WHERE id = $2
+            "#,
+        )
+        .bind::<Integer, _>(library_template_id)
+        .bind::<Integer, _>(campaign_id)
+        .execute(conn)
     }
 }

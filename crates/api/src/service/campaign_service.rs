@@ -3,12 +3,15 @@ use crate::dto::campaign_dto::{
     CampaignCreateDto, CampaignLogDto, CampaignReadDto, CampaignStatus, CampaignUpdateDto,
 };
 use crate::dto::campaign_lead_metrics_dto::CampaignLeadMetricsDto;
+use crate::error::db_error::DbError;
 use crate::error::{api_error::ApiError, business_error::BusinessError};
 use crate::repository::campaign_repository::CampaignRepository;
+use crate::repository::template_repository::TemplateRepository;
 use crate::repository::wallet_repository::WalletRepository;
 use chrono::Utc;
 use diesel::result::Error as DieselError;
 use glance_mind_db::entity::campaign::{Campaign, NewCampaign};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use bigdecimal::BigDecimal;
@@ -18,6 +21,7 @@ pub struct CampaignService {
     repo: CampaignRepository,
     pool: DBPool,
     wallet_repo: WalletRepository,
+    template_repo: TemplateRepository,
 }
 
 impl CampaignService {
@@ -26,6 +30,7 @@ impl CampaignService {
             repo: CampaignRepository::new(db.pool.clone()),
             pool: db.pool.clone(),
             wallet_repo: WalletRepository::new(db.pool.clone()),
+            template_repo: TemplateRepository::new(db.pool.clone()),
         }
     }
 
@@ -82,6 +87,10 @@ impl CampaignService {
             return Err(ApiError::InsufficientBalance);
         }
 
+        let reply_template_ids = normalize_reply_template_ids(dto.reply_template_ids)?;
+        self.validate_reply_template_ownership(user_id, &reply_template_ids)
+            .await?;
+
         // Create campaign in DRAFT status (budget not frozen yet)
         let new_campaign = NewCampaign {
             user_id,
@@ -110,12 +119,20 @@ impl CampaignService {
             auto_reply_comments: dto.auto_reply_comments,
             auto_reply_post: dto.auto_reply_post,
             search_options: dto.search_options,
+            reply_template_ids: reply_template_ids.clone(),
         };
 
-        let campaign = self.repo.create(new_campaign).await.map_err(|e| {
-            tracing::error!("Failed to create campaign: {:?}", e);
-            ApiError::InternalServerError("Failed to create campaign".to_string())
-        })?;
+        let campaign = self
+            .repo
+            .create_with_reply_template_ids(new_campaign, &reply_template_ids)
+            .await
+            .map_err(|e| match e {
+                DieselError::NotFound => ApiError::BusinessError(BusinessError::TemplateNotFound),
+                e => {
+                    tracing::error!("Failed to create campaign: {:?}", e);
+                    ApiError::InternalServerError("Failed to create campaign".to_string())
+                }
+            })?;
 
         Ok(self.to_dto(campaign))
     }
@@ -264,6 +281,16 @@ impl CampaignService {
         }
 
         // Build changeset
+        let should_replace_reply_template_ids = dto.reply_template_ids.is_some();
+        let reply_template_ids = if let Some(raw_ids) = dto.reply_template_ids {
+            let ids = normalize_reply_template_ids(Some(raw_ids))?;
+            self.validate_reply_template_ownership(user_id, &ids)
+                .await?;
+            ids
+        } else {
+            existing.reply_template_ids.clone()
+        };
+
         let changeset = NewCampaign {
             user_id: existing.user_id,
             name: dto.name.unwrap_or(existing.name),
@@ -293,16 +320,20 @@ impl CampaignService {
                 .or(Some(existing.auto_reply_comments)),
             auto_reply_post: dto.auto_reply_post.or(Some(existing.auto_reply_post)),
             search_options: dto.search_options.or(existing.search_options),
+            reply_template_ids: reply_template_ids.clone(),
         };
 
-        let updated = self
-            .repo
-            .update(id, user_id, &changeset)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to update campaign: {:?}", e);
-                ApiError::InternalServerError("Failed to update campaign".to_string())
-            })?;
+        let updated = if should_replace_reply_template_ids {
+            self.repo
+                .update_with_reply_template_ids(id, user_id, &changeset, &reply_template_ids)
+                .await
+        } else {
+            self.repo.update(id, user_id, &changeset).await
+        }
+        .map_err(|e| {
+            tracing::error!("Failed to update campaign: {:?}", e);
+            ApiError::InternalServerError("Failed to update campaign".to_string())
+        })?;
 
         Ok(self.to_dto(updated))
     }
@@ -513,7 +544,29 @@ impl CampaignService {
             auto_reply_comments: campaign.auto_reply_comments,
             auto_reply_post: campaign.auto_reply_post,
             search_options: campaign.search_options,
+            reply_template_ids: campaign.reply_template_ids,
         }
+    }
+
+    async fn validate_reply_template_ownership(
+        &self,
+        user_id: i32,
+        reply_template_ids: &[i32],
+    ) -> Result<(), ApiError> {
+        if reply_template_ids.is_empty() {
+            return Ok(());
+        }
+
+        let found = self
+            .template_repo
+            .find_reusable_by_ids_and_user(reply_template_ids, user_id)
+            .await
+            .map_err(|e| ApiError::from(DbError::SomethingWentWrong(e.to_string())))?;
+        if found.len() != reply_template_ids.len() {
+            return Err(ApiError::BusinessError(BusinessError::TemplateNotFound));
+        }
+
+        Ok(())
     }
 
     async fn calculate_min_cost(
@@ -556,6 +609,29 @@ impl CampaignService {
             }
         }
     }
+}
+
+fn normalize_reply_template_ids(input: Option<Vec<i32>>) -> Result<Vec<i32>, ApiError> {
+    let mut seen = HashSet::new();
+    let mut normalized = Vec::new();
+
+    for id in input.unwrap_or_default() {
+        if id <= 0 {
+            return Err(ApiError::BadRequest(
+                "reply_template_ids must contain only positive IDs".to_string(),
+            ));
+        }
+        if seen.insert(id) {
+            normalized.push(id);
+            if normalized.len() > 100 {
+                return Err(ApiError::BadRequest(
+                    "reply_template_ids cannot contain more than 100 unique IDs".to_string(),
+                ));
+            }
+        }
+    }
+
+    Ok(normalized)
 }
 
 #[derive(diesel::QueryableByName)]

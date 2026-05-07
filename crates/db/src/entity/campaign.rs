@@ -43,6 +43,7 @@ pub struct Campaign {
     pub auto_reply_comments: bool,
     pub auto_reply_post: bool,
     pub completed_reason: Option<String>,
+    pub reply_template_ids: Vec<i32>,
 }
 
 #[derive(Insertable, AsChangeset)]
@@ -74,4 +75,5 @@ pub struct NewCampaign {
     pub auto_reply_comments: Option<bool>,
     pub auto_reply_post: Option<bool>,
     pub search_options: Option<JsonValue>,
+    pub reply_template_ids: Vec<i32>,
 }

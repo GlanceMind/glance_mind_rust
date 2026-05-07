@@ -8,8 +8,8 @@ use crate::error::db_error::DbError;
 use crate::error::{api_error::ApiError, business_error::BusinessError};
 use crate::repository::campaign_repository::CampaignRepository;
 use crate::repository::template_repository::{
-    CampaignTemplateInsert, CampaignTemplatePatch, ReusableTemplateInsert, ReusableTemplatePatch,
-    TemplateRepository,
+    AssignReusableTemplateError, CampaignTemplateInsert, CampaignTemplatePatch,
+    CampaignTemplateWriteError, ReusableTemplateInsert, ReusableTemplatePatch, TemplateRepository,
 };
 use crate::service::ai_service::AiService;
 use diesel::result::Error as DieselError;
@@ -50,6 +50,17 @@ impl TemplateService {
             page: req.page.max(1),
             page_size: req.page_size.clamp(1, 100),
             group_id: req.group_id,
+        }
+    }
+
+    fn map_campaign_template_write_error(error: CampaignTemplateWriteError) -> ApiError {
+        match error {
+            CampaignTemplateWriteError::ReplyTemplateIdsFull => ApiError::BadRequest(
+                "reply_template_ids cannot contain more than 100 unique IDs".to_string(),
+            ),
+            CampaignTemplateWriteError::Diesel(error) => {
+                ApiError::from(DbError::SomethingWentWrong(error.to_string()))
+            }
         }
     }
 
@@ -164,7 +175,7 @@ impl TemplateService {
                 }),
             })
             .await
-            .map_err(|e| ApiError::from(DbError::SomethingWentWrong(e.to_string())))?;
+            .map_err(Self::map_campaign_template_write_error)?;
 
         self.hydrate_template_for_user(user_id, TemplateReadDto::from(template))
             .await
@@ -313,7 +324,7 @@ impl TemplateService {
                 },
             })
             .await
-            .map_err(|e| ApiError::from(DbError::SomethingWentWrong(e.to_string())))?;
+            .map_err(Self::map_campaign_template_write_error)?;
 
         self.hydrate_template_for_user(user_id, TemplateReadDto::from(updated))
             .await
@@ -334,7 +345,7 @@ impl TemplateService {
             .await?;
 
         self.template_repo
-            .delete(template_id)
+            .delete_and_sync(template_id)
             .await
             .map_err(|e| ApiError::from(DbError::SomethingWentWrong(e.to_string())))?;
 
@@ -454,17 +465,27 @@ impl TemplateService {
         library_template_id: i32,
         dto: AssignReusableTemplateDto,
     ) -> Result<TemplateReadDto, ApiError> {
-        self.check_campaign_ownership(dto.campaign_id, user_id)
-            .await?;
-
         let assigned_template = self
             .template_repo
             .assign_reusable_to_campaign(dto.campaign_id, library_template_id, dto.weight, user_id)
             .await;
 
         let template = assigned_template.map_err(|e| match e {
-            DieselError::NotFound => ApiError::BusinessError(BusinessError::TemplateNotFound),
-            _ => ApiError::from(DbError::SomethingWentWrong(e.to_string())),
+            AssignReusableTemplateError::ReplyTemplateIdsFull => ApiError::BadRequest(
+                "reply_template_ids cannot contain more than 100 unique IDs".to_string(),
+            ),
+            AssignReusableTemplateError::CampaignNotFound => {
+                ApiError::BusinessError(BusinessError::TemplatePermissionDenied)
+            }
+            AssignReusableTemplateError::TemplateNotFound => {
+                ApiError::BusinessError(BusinessError::TemplateNotFound)
+            }
+            AssignReusableTemplateError::Diesel(DieselError::NotFound) => {
+                ApiError::BusinessError(BusinessError::TemplateNotFound)
+            }
+            AssignReusableTemplateError::Diesel(e) => {
+                ApiError::from(DbError::SomethingWentWrong(e.to_string()))
+            }
         })?;
 
         let reusable = self
