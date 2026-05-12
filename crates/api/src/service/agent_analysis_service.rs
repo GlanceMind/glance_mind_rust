@@ -14,6 +14,10 @@ use rig::client::CompletionClient;
 use rig::completion::Prompt;
 use rig::providers::openai;
 use serde_json;
+use std::time::Duration;
+use tokio::time;
+
+const DEFAULT_AGENT_ANALYSIS_AI_TIMEOUT_SECS: u64 = 80;
 
 static AI_MODEL: Lazy<String> =
     Lazy::new(|| std::env::var("AI_CHAT_MODEL").unwrap_or_else(|_| "glm-5".to_string()));
@@ -31,6 +35,18 @@ static CLIENT: Lazy<openai::CompletionsClient> = Lazy::new(|| {
 
     client_responses.completions_api()
 });
+
+fn parse_agent_analysis_ai_timeout_secs(value: Option<&str>) -> u64 {
+    value
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+        .unwrap_or(DEFAULT_AGENT_ANALYSIS_AI_TIMEOUT_SECS)
+}
+
+fn agent_analysis_ai_timeout() -> Duration {
+    let env_value = std::env::var("AGENT_ANALYSIS_AI_TIMEOUT_SECS").ok();
+    Duration::from_secs(parse_agent_analysis_ai_timeout_secs(env_value.as_deref()))
+}
 
 #[derive(Clone)]
 pub struct AgentAnalysisService {
@@ -351,12 +367,27 @@ Generate the analysis results in strict JSON format."#,
     /// Call AI
     async fn call_ai(&self, system_prompt: &str, user_prompt: &str) -> Result<String, ApiError> {
         let agent = CLIENT.agent(&*AI_MODEL).preamble(system_prompt).build();
+        let timeout_budget = agent_analysis_ai_timeout();
 
-        let response = agent.prompt(user_prompt).await.map_err(|e| {
-            ApiError::InfrastructureError(InfrastructureError::ExternalApiRequestFailed(
-                e.to_string(),
-            ))
-        })?;
+        let response = time::timeout(timeout_budget, agent.prompt(user_prompt))
+            .await
+            .map_err(|_| {
+                tracing::warn!(
+                    timeout_secs = timeout_budget.as_secs(),
+                    "agent analysis AI request timed out"
+                );
+                ApiError::InfrastructureError(InfrastructureError::ExternalApiRequestFailed(
+                    format!(
+                        "AI analysis timed out after {} seconds; please reduce the input size or retry later",
+                        timeout_budget.as_secs()
+                    ),
+                ))
+            })?
+            .map_err(|e| {
+                ApiError::InfrastructureError(InfrastructureError::ExternalApiRequestFailed(
+                    e.to_string(),
+                ))
+            })?;
 
         Ok(response)
     }
@@ -475,5 +506,13 @@ mod tests {
             err,
             ApiError::BusinessError(BusinessError::InvalidInput(_))
         ));
+    }
+
+    #[test]
+    fn parses_agent_analysis_ai_timeout_secs() {
+        assert_eq!(parse_agent_analysis_ai_timeout_secs(None), 80);
+        assert_eq!(parse_agent_analysis_ai_timeout_secs(Some("15")), 15);
+        assert_eq!(parse_agent_analysis_ai_timeout_secs(Some("0")), 80);
+        assert_eq!(parse_agent_analysis_ai_timeout_secs(Some("abc")), 80);
     }
 }
