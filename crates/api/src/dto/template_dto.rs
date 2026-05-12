@@ -12,7 +12,8 @@ where
 
 #[derive(Debug, Serialize, Deserialize, Clone, Validate)]
 pub struct TemplateCreateDto {
-    pub campaign_id: i32,
+    #[serde(default)]
+    pub campaign_id: Option<i32>,
     pub library_template_id: Option<i32>,
     pub name: Option<String>,
     pub weight: i32,
@@ -183,9 +184,31 @@ mod tests {
 
         let dto: TemplateCreateDto = serde_json::from_str(payload).expect("valid template payload");
 
-        assert_eq!(dto.campaign_id, 42);
+        assert_eq!(dto.campaign_id, Some(42));
         assert_eq!(dto.library_template_id, Some(7));
         assert_eq!(dto.weight, 80);
+    }
+
+    #[test]
+    fn template_create_allows_campaign_scoped_body_without_campaign_id() {
+        // POST /campaigns/:id/templates carries the campaign id in the path,
+        // so the body must not require it. Only body fields we still need are
+        // the weight and the content fields.
+        let payload = r#"{
+            "weight": 8,
+            "reply_prompt": "campaign-only legacy reply prompt"
+        }"#;
+
+        let dto: TemplateCreateDto =
+            serde_json::from_str(payload).expect("valid campaign-scoped payload");
+
+        assert!(dto.campaign_id.is_none());
+        assert!(dto.library_template_id.is_none());
+        assert_eq!(dto.weight, 8);
+        assert_eq!(
+            dto.reply_prompt.as_deref(),
+            Some("campaign-only legacy reply prompt")
+        );
     }
 
     #[test]

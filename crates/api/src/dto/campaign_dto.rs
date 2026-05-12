@@ -132,6 +132,8 @@ pub struct CampaignCreateDto {
     pub auto_reply_post: Option<bool>,
     #[serde(default)]
     pub search_options: Option<JsonValue>,
+    #[serde(default)]
+    pub reply_template_ids: Option<Vec<i32>>,
 }
 
 #[derive(Debug, Deserialize, Validate)]
@@ -174,6 +176,8 @@ pub struct CampaignUpdateDto {
     pub auto_reply_post: Option<bool>,
     #[serde(default)]
     pub search_options: Option<JsonValue>,
+    #[serde(default)]
+    pub reply_template_ids: Option<Vec<i32>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -221,6 +225,7 @@ pub struct CampaignReadDto {
     pub auto_reply_comments: bool,
     pub auto_reply_post: bool,
     pub search_options: Option<JsonValue>,
+    pub reply_template_ids: Vec<i32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
