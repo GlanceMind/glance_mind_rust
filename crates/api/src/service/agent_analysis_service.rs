@@ -8,7 +8,7 @@ use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::result::Error as DieselError;
 use glance_mind_db::entity::campaign::Campaign;
-use glance_mind_db::entity::template::CampaignTemplate;
+use glance_mind_db::entity::template::{CampaignTemplate, ReusableReplyTemplate};
 use once_cell::sync::Lazy;
 use rig::client::CompletionClient;
 use rig::completion::Prompt;
@@ -38,6 +38,34 @@ pub struct AgentAnalysisService {
     template_repo: TemplateRepository,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TemplateAnalysisSource {
+    CampaignTemplate(i32),
+    ReusableTemplate {
+        campaign_id: i32,
+        library_template_id: i32,
+    },
+}
+
+fn resolve_template_analysis_source(
+    req: &AgentAnalysisRequest,
+) -> Result<TemplateAnalysisSource, ApiError> {
+    match (req.template_id, req.campaign_id, req.library_template_id) {
+        (Some(template_id), None, None) => {
+            Ok(TemplateAnalysisSource::CampaignTemplate(template_id))
+        }
+        (None, Some(campaign_id), Some(library_template_id)) => {
+            Ok(TemplateAnalysisSource::ReusableTemplate {
+                campaign_id,
+                library_template_id,
+            })
+        }
+        _ => Err(ApiError::BusinessError(BusinessError::InvalidInput(
+            "provide either template_id or both campaign_id and library_template_id".to_string(),
+        ))),
+    }
+}
+
 impl AgentAnalysisService {
     pub fn new(db_pool: Pool<ConnectionManager<PgConnection>>) -> Self {
         Self {
@@ -52,40 +80,8 @@ impl AgentAnalysisService {
         user_id: i32,
         req: AgentAnalysisRequest,
     ) -> Result<AgentAnalysisResponse, ApiError> {
-        // 1. Get template information
-        let template = self
-            .template_repo
-            .find_by_id(req.template_id)
-            .await
-            .map_err(|e| match e {
-                DieselError::NotFound => ApiError::BusinessError(BusinessError::TemplateNotFound),
-                _ => ApiError::InfrastructureError(InfrastructureError::DatabaseOperationFailed(
-                    e.to_string(),
-                )),
-            })?;
-
-        // 2. Get campaign information via template
-        let campaign = self
-            .campaign_repo
-            .find_by_id(template.campaign_id)
-            .await
-            .map_err(|e| match e {
-                DieselError::NotFound => ApiError::BusinessError(BusinessError::CampaignNotFound),
-                _ => ApiError::InfrastructureError(InfrastructureError::DatabaseOperationFailed(
-                    e.to_string(),
-                )),
-            })?;
-
-        // Verify permissions
-        if campaign.user_id != user_id {
-            return Err(ApiError::BusinessError(
-                BusinessError::CampaignPermissionDenied,
-            ));
-        }
-
-        let template = self
-            .resolve_reusable_template_for_prompt(template, user_id)
-            .await?;
+        let source = resolve_template_analysis_source(&req)?;
+        let (campaign, template) = self.resolve_campaign_and_template(user_id, source).await?;
 
         // 3. Build system prompt (similar to Python agent logic)
         let system_prompt =
@@ -108,6 +104,103 @@ impl AgentAnalysisService {
     }
 
     // Removed fetch_comments_from_db, no longer needed
+
+    async fn resolve_campaign_and_template(
+        &self,
+        user_id: i32,
+        source: TemplateAnalysisSource,
+    ) -> Result<(Campaign, CampaignTemplate), ApiError> {
+        match source {
+            TemplateAnalysisSource::CampaignTemplate(template_id) => {
+                let template =
+                    self.template_repo
+                        .find_by_id(template_id)
+                        .await
+                        .map_err(|e| match e {
+                            DieselError::NotFound => {
+                                ApiError::BusinessError(BusinessError::TemplateNotFound)
+                            }
+                            _ => ApiError::InfrastructureError(
+                                InfrastructureError::DatabaseOperationFailed(e.to_string()),
+                            ),
+                        })?;
+
+                let campaign = self
+                    .load_owned_campaign(template.campaign_id, user_id)
+                    .await?;
+                let template = self
+                    .resolve_reusable_template_for_prompt(template, user_id)
+                    .await?;
+
+                Ok((campaign, template))
+            }
+            TemplateAnalysisSource::ReusableTemplate {
+                campaign_id,
+                library_template_id,
+            } => {
+                let campaign = self.load_owned_campaign(campaign_id, user_id).await?;
+                let reusable = self
+                    .template_repo
+                    .find_reusable_by_id_and_user(library_template_id, user_id)
+                    .await
+                    .map_err(|e| match e {
+                        DieselError::NotFound => {
+                            ApiError::BusinessError(BusinessError::TemplateNotFound)
+                        }
+                        _ => ApiError::InfrastructureError(
+                            InfrastructureError::DatabaseOperationFailed(e.to_string()),
+                        ),
+                    })?;
+                let template = self.build_template_from_reusable(campaign_id, reusable);
+
+                Ok((campaign, template))
+            }
+        }
+    }
+
+    async fn load_owned_campaign(
+        &self,
+        campaign_id: i32,
+        user_id: i32,
+    ) -> Result<Campaign, ApiError> {
+        let campaign = self
+            .campaign_repo
+            .find_by_id(campaign_id)
+            .await
+            .map_err(|e| match e {
+                DieselError::NotFound => ApiError::BusinessError(BusinessError::CampaignNotFound),
+                _ => ApiError::InfrastructureError(InfrastructureError::DatabaseOperationFailed(
+                    e.to_string(),
+                )),
+            })?;
+
+        if campaign.user_id != user_id {
+            return Err(ApiError::BusinessError(
+                BusinessError::CampaignPermissionDenied,
+            ));
+        }
+
+        Ok(campaign)
+    }
+
+    fn build_template_from_reusable(
+        &self,
+        campaign_id: i32,
+        reusable: ReusableReplyTemplate,
+    ) -> CampaignTemplate {
+        CampaignTemplate {
+            id: reusable.id,
+            campaign_id,
+            library_template_id: Some(reusable.id),
+            weight: reusable.weight,
+            reply_prompt: reusable.reply_prompt,
+            created_at: reusable.created_at,
+            updated_at: reusable.updated_at,
+            dm_prompt: reusable.dm_prompt,
+            reply_post_prompt: reusable.reply_post_prompt,
+            name: Some(reusable.name),
+        }
+    }
 
     async fn resolve_reusable_template_for_prompt(
         &self,
@@ -320,12 +413,67 @@ Generate the analysis results in strict JSON format."#,
     fn build_template_info(&self, template: &CampaignTemplate) -> TemplateInfo {
         TemplateInfo {
             id: template.id,
-            name: format!("Template {}", template.id), // Template has no name field
-            persona_prompt: None,                      // Template has no persona_prompt field
-            target_audience: None,                     // Template has no target_audience field
+            name: template
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("Template {}", template.id)),
+            persona_prompt: None,  // Template has no persona_prompt field
+            target_audience: None, // Template has no target_audience field
             reply_strategy_prompt: template.reply_prompt.clone(),
             dm_prompt: template.dm_prompt.clone(),
             reply_post_prompt: template.reply_post_prompt.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(
+        template_id: Option<i32>,
+        campaign_id: Option<i32>,
+        library_template_id: Option<i32>,
+    ) -> AgentAnalysisRequest {
+        AgentAnalysisRequest {
+            template_id,
+            campaign_id,
+            library_template_id,
+            data_context: "Post: demo\nComment: interested".to_string(),
+            user_instruction: None,
+        }
+    }
+
+    #[test]
+    fn resolves_campaign_template_source_from_template_id() {
+        let source = resolve_template_analysis_source(&request(Some(11), None, None))
+            .expect("template_id source should resolve");
+
+        assert_eq!(source, TemplateAnalysisSource::CampaignTemplate(11));
+    }
+
+    #[test]
+    fn resolves_reusable_template_source_from_campaign_and_library_ids() {
+        let source = resolve_template_analysis_source(&request(None, Some(22), Some(33)))
+            .expect("reusable template source should resolve");
+
+        assert_eq!(
+            source,
+            TemplateAnalysisSource::ReusableTemplate {
+                campaign_id: 22,
+                library_template_id: 33,
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_partial_reusable_template_source() {
+        let err = resolve_template_analysis_source(&request(None, Some(22), None))
+            .expect_err("partial source should fail");
+
+        assert!(matches!(
+            err,
+            ApiError::BusinessError(BusinessError::InvalidInput(_))
+        ));
     }
 }
