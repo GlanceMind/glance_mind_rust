@@ -1,3 +1,4 @@
+use crate::service::deepseek_config;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -71,10 +72,7 @@ const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 120;
 
 impl LlmClient {
     pub fn new() -> Self {
-        let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set in environment");
-        let base_url =
-            env::var("OPENAI_BASE_URL").unwrap_or_else(|_| "https://timicc.com/v1".into());
-        let model = env::var("AI_CHAT_MODEL").unwrap_or_else(|_| "glm-5".into());
+        let config = deepseek_config::from_env();
         let connect_timeout_secs =
             parse_env_u64("AI_CHAT_CONNECT_TIMEOUT_SECS", DEFAULT_CONNECT_TIMEOUT_SECS);
         let request_timeout_secs =
@@ -87,11 +85,36 @@ impl LlmClient {
 
         Self {
             client,
-            api_key,
-            base_url,
-            model,
+            api_key: config.api_key,
+            base_url: config.base_url,
+            model: config.model,
             request_timeout_secs,
         }
+    }
+
+    fn build_chat_body(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[Value],
+        stream: bool,
+        _ignored_model_override: Option<&str>,
+    ) -> Value {
+        let mut body = serde_json::json!({
+            "model": self.model,
+            "messages": messages,
+        });
+
+        if stream {
+            body["stream"] = Value::Bool(true);
+            body["stream_options"] = serde_json::json!({ "include_usage": true });
+        }
+
+        if !tools.is_empty() {
+            body["tools"] = Value::Array(tools.to_vec());
+            body["tool_choice"] = Value::String("auto".into());
+        }
+
+        body
     }
 
     /// Unified streaming call that handles both text and tool_calls in a single stream.
@@ -104,19 +127,7 @@ impl LlmClient {
         model_override: Option<&str>,
     ) -> Result<Option<Vec<ToolCall>>, String> {
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        let model = model_override.unwrap_or(&self.model);
-
-        let mut body = serde_json::json!({
-            "model": model,
-            "messages": messages,
-            "stream": true,
-            "stream_options": { "include_usage": true },
-        });
-
-        if !tools.is_empty() {
-            body["tools"] = Value::Array(tools.to_vec());
-            body["tool_choice"] = Value::String("auto".into());
-        }
+        let body = self.build_chat_body(messages, tools, true, model_override);
 
         let response = self
             .client
@@ -131,7 +142,7 @@ impl LlmClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(format!("LLM API error {}: {}", status, body));
+            return Err(Self::format_provider_error(status, &body));
         }
 
         let mut stream = response.bytes_stream();
@@ -311,17 +322,7 @@ impl LlmClient {
         model_override: Option<&str>,
     ) -> Result<(ChatMessage, LlmUsage), String> {
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        let model = model_override.unwrap_or(&self.model);
-
-        let mut body = serde_json::json!({
-            "model": model,
-            "messages": messages,
-        });
-
-        if !tools.is_empty() {
-            body["tools"] = Value::Array(tools.to_vec());
-            body["tool_choice"] = Value::String("auto".into());
-        }
+        let body = self.build_chat_body(messages, tools, false, model_override);
 
         let response = self
             .client
@@ -336,7 +337,7 @@ impl LlmClient {
         if !response.status().is_success() {
             let status = response.status();
             let body_text = response.text().await.unwrap_or_default();
-            return Err(format!("LLM API error {}: {}", status, body_text));
+            return Err(Self::format_provider_error(status, &body_text));
         }
 
         let result: Value = response
@@ -372,6 +373,14 @@ impl LlmClient {
         };
 
         Ok((msg, usage))
+    }
+
+    fn format_provider_error(status: reqwest::StatusCode, body: &str) -> String {
+        if body.trim().is_empty() {
+            return format!("LLM API error {status}");
+        }
+
+        format!("LLM API error {status}: provider returned an error")
     }
 
     fn format_request_error(&self, context: &str, error: &reqwest::Error) -> String {
@@ -412,6 +421,110 @@ mod tests {
             model: "test-model".into(),
             request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
         }
+    }
+
+    #[tokio::test]
+    async fn chat_completion_posts_to_deepseek_config_with_forced_model() {
+        use hyper::service::{make_service_fn, service_fn};
+        use hyper::{Body, Request, Response, Server};
+        use std::convert::Infallible;
+        use std::net::SocketAddr;
+        use std::sync::{Arc, Mutex};
+
+        let captured = Arc::new(Mutex::new(None::<(String, Option<String>, Value)>));
+        let captured_for_service = captured.clone();
+        let make_svc = make_service_fn(move |_| {
+            let captured = captured_for_service.clone();
+            async move {
+                Ok::<_, Infallible>(service_fn(move |req: Request<Body>| {
+                    let captured = captured.clone();
+                    async move {
+                        let path = req.uri().path().to_string();
+                        let auth = req
+                            .headers()
+                            .get("authorization")
+                            .and_then(|value| value.to_str().ok())
+                            .map(ToOwned::to_owned);
+                        let bytes = hyper::body::to_bytes(req.into_body()).await.unwrap();
+                        let body: Value = serde_json::from_slice(&bytes).unwrap();
+                        *captured.lock().unwrap() = Some((path, auth, body));
+
+                        Ok::<_, Infallible>(Response::new(Body::from(
+                            r#"{"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}"#,
+                        )))
+                    }
+                }))
+            }
+        });
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let server = Server::bind(&addr).serve(make_svc);
+        let base_url = format!("http://{}", server.local_addr());
+        let server_handle = tokio::spawn(server);
+
+        let config = deepseek_config::from_values(
+            Some("deepseek-test-key"),
+            Some(&base_url),
+            Some("deepseek-forced-model"),
+        )
+        .expect("test DeepSeek config should resolve");
+        let client = LlmClient {
+            client: Client::new(),
+            api_key: config.api_key,
+            base_url: config.base_url,
+            model: config.model,
+            request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
+        };
+
+        let (message, usage) = client
+            .chat_completion(&[], &[], Some("client-selected-model"))
+            .await
+            .expect("mock completion should succeed");
+        server_handle.abort();
+
+        assert_eq!(message.content.as_deref(), Some("ok"));
+        assert_eq!(usage.total_tokens, 3);
+        let (path, auth, body) = captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("request should be captured");
+        assert_eq!(path, "/v1/chat/completions");
+        assert_eq!(auth.as_deref(), Some("Bearer deepseek-test-key"));
+        assert_eq!(body["model"], "deepseek-forced-model");
+        assert_ne!(body["model"], "client-selected-model");
+    }
+
+    #[test]
+    fn builds_chat_body_with_deepseek_model_even_when_override_is_supplied() {
+        let client = stub_client();
+        let body = client.build_chat_body(&[], &[], true, Some("client-selected-model"));
+
+        assert_eq!(body["model"], "test-model");
+        assert_eq!(body["stream"], true);
+    }
+
+    #[test]
+    fn builds_completion_body_with_deepseek_model_even_when_override_is_supplied() {
+        let client = stub_client();
+        let body = client.build_chat_body(&[], &[], false, Some("client-selected-model"));
+
+        assert_eq!(body["model"], "test-model");
+        assert!(body.get("stream").is_none());
+    }
+
+    #[test]
+    fn provider_error_redacts_response_body() {
+        let formatted = LlmClient::format_provider_error(
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            r#"{"error":{"message":"No available accounts for sk-secret-token"}}"#,
+        );
+
+        assert_eq!(
+            formatted,
+            "LLM API error 503 Service Unavailable: provider returned an error"
+        );
+        assert!(!formatted.contains("sk-secret-token"));
+        assert!(!formatted.contains("No available accounts"));
     }
 
     #[test]

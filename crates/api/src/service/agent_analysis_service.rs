@@ -4,6 +4,7 @@ use crate::error::{
 };
 use crate::repository::campaign_repository::CampaignRepository;
 use crate::repository::template_repository::TemplateRepository;
+use crate::service::deepseek_config;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::result::Error as DieselError;
@@ -19,22 +20,10 @@ use tokio::time;
 
 const DEFAULT_AGENT_ANALYSIS_AI_TIMEOUT_SECS: u64 = 80;
 
-static AI_MODEL: Lazy<String> =
-    Lazy::new(|| std::env::var("AI_CHAT_MODEL").unwrap_or_else(|_| "glm-5".to_string()));
-
-static CLIENT: Lazy<openai::CompletionsClient> = Lazy::new(|| {
-    let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set in environment");
-    let base_url =
-        std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| "https://timicc.com/v1".to_string());
-
-    let client_responses: openai::Client = openai::Client::builder()
-        .base_url(&base_url)
-        .api_key(&api_key)
-        .build()
-        .expect("Failed to build AI client");
-
-    client_responses.completions_api()
-});
+static DEEPSEEK_CONFIG: Lazy<deepseek_config::DeepSeekConfig> =
+    Lazy::new(deepseek_config::from_env);
+static CLIENT: Lazy<openai::CompletionsClient> =
+    Lazy::new(|| deepseek_config::completions_client(&DEEPSEEK_CONFIG));
 
 fn parse_agent_analysis_ai_timeout_secs(value: Option<&str>) -> u64 {
     value
@@ -366,7 +355,10 @@ Generate the analysis results in strict JSON format."#,
 
     /// Call AI
     async fn call_ai(&self, system_prompt: &str, user_prompt: &str) -> Result<String, ApiError> {
-        let agent = CLIENT.agent(&*AI_MODEL).preamble(system_prompt).build();
+        let agent = CLIENT
+            .agent(&DEEPSEEK_CONFIG.model)
+            .preamble(system_prompt)
+            .build();
         let timeout_budget = agent_analysis_ai_timeout();
 
         let response = time::timeout(timeout_budget, agent.prompt(user_prompt))
@@ -383,9 +375,9 @@ Generate the analysis results in strict JSON format."#,
                     ),
                 ))
             })?
-            .map_err(|e| {
+            .map_err(|_| {
                 ApiError::InfrastructureError(InfrastructureError::ExternalApiRequestFailed(
-                    e.to_string(),
+                    deepseek_config::safe_provider_error("AI Provider Error"),
                 ))
             })?;
 

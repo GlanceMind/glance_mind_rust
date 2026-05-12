@@ -4,6 +4,7 @@ use crate::error::api_error::ApiError;
 use crate::service::ai_chat::*;
 use crate::state::user_state::UserState;
 use glance_mind_db::entity::ai_chat::*;
+use glance_mind_db::entity::ai_model::AiModel;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
@@ -95,8 +96,6 @@ const GENERIC_WRITING_CUES: &[&str] = &[
     "网红笔记",
 ];
 
-const DEFAULT_CHAT_MODEL_KEY: &str = "glm-5";
-
 fn infer_forced_knowledge_query(content: &str) -> Option<String> {
     let trimmed = content.trim();
     if trimmed.is_empty() {
@@ -133,10 +132,6 @@ fn looks_like_generic_writing_request(lower: &str) -> bool {
     GENERIC_WRITING_CUES.iter().any(|cue| lower.contains(cue))
 }
 
-fn default_chat_model_key() -> String {
-    std::env::var("AI_CHAT_MODEL").unwrap_or_else(|_| DEFAULT_CHAT_MODEL_KEY.to_string())
-}
-
 fn is_retryable_model_provider_error(error: &str) -> bool {
     let lower = error.to_lowercase();
     lower.contains("503")
@@ -156,6 +151,22 @@ fn friendly_ai_chat_error_message(error: &str) -> String {
     } else {
         error.to_string()
     }
+}
+
+fn validate_requested_chat_model(model: &AiModel) -> Result<(), ApiError> {
+    if !model.is_active {
+        return Err(ApiError::BadRequest(format!(
+            "AI model '{}' is not active",
+            model.name
+        )));
+    }
+    if model.model_type != "chat" {
+        return Err(ApiError::BadRequest(format!(
+            "AI model '{}' is not a chat model",
+            model.name
+        )));
+    }
+    Ok(())
 }
 
 fn build_forced_tool_call(
@@ -485,39 +496,6 @@ impl AiChatService {
         Ok(())
     }
 
-    async fn build_chat_model_attempts(
-        &self,
-        preferred_model_key: Option<&str>,
-        state: &UserState,
-    ) -> Result<Vec<String>, ApiError> {
-        let mut attempts = Vec::new();
-        let preferred = preferred_model_key
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(default_chat_model_key);
-        attempts.push(preferred.clone());
-
-        let fallback_models = state
-            .config_service
-            .get_ai_models_by_type("chat")
-            .await
-            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
-
-        for model in fallback_models {
-            let key = model.model_key.trim();
-            if key.is_empty() {
-                continue;
-            }
-            if attempts.iter().any(|existing| existing == key) {
-                continue;
-            }
-            attempts.push(key.to_string());
-        }
-
-        Ok(attempts)
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub async fn send_message(
         &self,
@@ -537,34 +515,20 @@ impl AiChatService {
             )));
         }
 
-        let preferred_model_key: Option<String> = if let Some(mid) = model_id {
+        if let Some(mid) = model_id {
             let model = state
                 .config_service
                 .get_ai_model_by_id(mid)
                 .await
                 .map_err(|e| ApiError::DatabaseError(e.to_string()))?
                 .ok_or_else(|| ApiError::BadRequest(format!("AI model id={} not found", mid)))?;
-            if !model.is_active {
-                return Err(ApiError::BadRequest(format!(
-                    "AI model '{}' is not active",
-                    model.name
-                )));
-            }
-            if model.model_type != "chat" {
-                return Err(ApiError::BadRequest(format!(
-                    "AI model '{}' is not a chat model",
-                    model.name
-                )));
-            }
+            validate_requested_chat_model(&model)?;
             tracing::info!(
-                "AI Chat using model override: {} (id={})",
-                model.model_key,
-                mid
+                model_id = mid,
+                "AI Chat model override accepted for request validation; runtime provider remains DeepSeek"
             );
-            Some(model.model_key)
         } else {
-            tracing::info!("AI Chat using default model (no override)");
-            None
+            tracing::info!("AI Chat using DeepSeek runtime model (no request model override)");
         };
 
         self.repo
@@ -639,7 +603,6 @@ impl AiChatService {
         let mut tool_call_count = 0;
         let mut total_usage = llm_client::LlmUsage::default();
         let mut empty_response_retry_count = 0usize;
-        let mut active_model_key = preferred_model_key.clone();
 
         if questionnaire_submission.is_none() {
             if let Some(query) = infer_forced_knowledge_query(content) {
@@ -675,91 +638,40 @@ impl AiChatService {
         }
 
         loop {
-            let model_attempts = self
-                .build_chat_model_attempts(active_model_key.as_deref(), state)
-                .await?;
-
             let mut text_content = String::new();
-            let mut assembled_tool_calls: Option<Vec<llm_client::ToolCall>> = None;
-            let mut successful_model_key: Option<String> = None;
-            let mut last_retryable_error: Option<String> = None;
 
-            for attempt_model_key in model_attempts {
-                let (stream_tx, mut stream_rx) = mpsc::channel::<llm_client::LlmStreamEvent>(64);
-                let llm = self.llm.clone();
-                let msgs_clone = messages.clone();
-                let tools_clone = tools.clone();
-                let model_override = Some(attempt_model_key.clone());
+            let (stream_tx, mut stream_rx) = mpsc::channel::<llm_client::LlmStreamEvent>(64);
+            let llm = self.llm.clone();
+            let msgs_clone = messages.clone();
+            let tools_clone = tools.clone();
 
-                let stream_handle = tokio::spawn(async move {
-                    llm.chat_stream(
-                        &msgs_clone,
-                        &tools_clone,
-                        stream_tx,
-                        model_override.as_deref(),
-                    )
+            let stream_handle = tokio::spawn(async move {
+                llm.chat_stream(&msgs_clone, &tools_clone, stream_tx, None)
                     .await
-                });
+            });
 
-                text_content.clear();
-
-                while let Some(evt) = stream_rx.recv().await {
-                    match evt {
-                        llm_client::LlmStreamEvent::TextDelta(delta) => {
-                            text_content.push_str(&delta);
-                            let _ = tx.send(SseEvent::TextDelta { delta }).await;
-                        }
-                        llm_client::LlmStreamEvent::Usage(u) => {
-                            total_usage.prompt_tokens += u.prompt_tokens;
-                            total_usage.completion_tokens += u.completion_tokens;
-                            total_usage.total_tokens += u.total_tokens;
-                        }
-                        llm_client::LlmStreamEvent::ToolCallDelta { .. } => {
-                            // Deltas are accumulated inside chat_stream; we just wait for Done
-                        }
-                        llm_client::LlmStreamEvent::Done => break,
+            while let Some(evt) = stream_rx.recv().await {
+                match evt {
+                    llm_client::LlmStreamEvent::TextDelta(delta) => {
+                        text_content.push_str(&delta);
+                        let _ = tx.send(SseEvent::TextDelta { delta }).await;
                     }
-                }
-
-                let stream_result = stream_handle
-                    .await
-                    .map_err(|e| ApiError::AiServiceError(format!("Stream task failed: {}", e)))?;
-
-                match stream_result {
-                    Ok(tool_calls) => {
-                        assembled_tool_calls = tool_calls;
-                        successful_model_key = Some(attempt_model_key);
-                        break;
+                    llm_client::LlmStreamEvent::Usage(u) => {
+                        total_usage.prompt_tokens += u.prompt_tokens;
+                        total_usage.completion_tokens += u.completion_tokens;
+                        total_usage.total_tokens += u.total_tokens;
                     }
-                    Err(err)
-                        if text_content.trim().is_empty()
-                            && is_retryable_model_provider_error(&err) =>
-                    {
-                        tracing::warn!(
-                            conv_id = conv_id,
-                            user_id = user_id,
-                            model = %attempt_model_key,
-                            error = %err,
-                            "AI Chat model unavailable, trying fallback model"
-                        );
-                        last_retryable_error = Some(err);
-                        continue;
+                    llm_client::LlmStreamEvent::ToolCallDelta { .. } => {
+                        // Deltas are accumulated inside chat_stream; we just wait for Done
                     }
-                    Err(err) => {
-                        return Err(ApiError::AiServiceError(friendly_ai_chat_error_message(
-                            &err,
-                        )));
-                    }
+                    llm_client::LlmStreamEvent::Done => break,
                 }
             }
 
-            if let Some(model_key) = successful_model_key {
-                active_model_key = Some(model_key);
-            } else if let Some(err) = last_retryable_error {
-                return Err(ApiError::AiServiceError(friendly_ai_chat_error_message(
-                    &err,
-                )));
-            }
+            let assembled_tool_calls = stream_handle
+                .await
+                .map_err(|e| ApiError::AiServiceError(format!("Stream task failed: {}", e)))?
+                .map_err(|err| ApiError::AiServiceError(friendly_ai_chat_error_message(&err)))?;
 
             if let Some(ref tool_calls) = assembled_tool_calls {
                 if !tool_calls.is_empty() {
@@ -1250,7 +1162,9 @@ mod tests {
     use super::{
         client_safe_tool_result, display_hint_for_tool, friendly_ai_chat_error_message,
         infer_forced_knowledge_query, is_retryable_model_provider_error,
+        validate_requested_chat_model,
     };
+    use glance_mind_db::entity::ai_model::AiModel;
     use serde_json::json;
 
     #[test]
@@ -1299,6 +1213,44 @@ mod tests {
         assert_eq!(safe["count"], json!(1));
         assert_eq!(safe["sources"][0]["title"], json!("配置回复模板"));
         assert!(safe["sources"][0].get("content").is_none());
+    }
+
+    #[test]
+    fn request_model_validation_accepts_active_chat_model_without_runtime_key() {
+        let model = AiModel {
+            id: 7,
+            name: "Client Visible Chat".to_string(),
+            provider: "client-visible".to_string(),
+            model_key: "client-selected-model".to_string(),
+            cost_multiplier: bigdecimal::BigDecimal::from(0),
+            is_active: true,
+            created_at: chrono::Utc::now().naive_utc(),
+            updated_at: None,
+            model_type: "chat".to_string(),
+        };
+
+        assert!(validate_requested_chat_model(&model).is_ok());
+    }
+
+    #[test]
+    fn request_model_validation_rejects_inactive_model() {
+        let mut model = AiModel {
+            id: 7,
+            name: "Inactive Chat".to_string(),
+            provider: "client-visible".to_string(),
+            model_key: "client-selected-model".to_string(),
+            cost_multiplier: bigdecimal::BigDecimal::from(0),
+            is_active: false,
+            created_at: chrono::Utc::now().naive_utc(),
+            updated_at: None,
+            model_type: "chat".to_string(),
+        };
+
+        assert!(validate_requested_chat_model(&model).is_err());
+
+        model.is_active = true;
+        model.model_type = "image".to_string();
+        assert!(validate_requested_chat_model(&model).is_err());
     }
 
     #[test]

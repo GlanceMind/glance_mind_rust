@@ -1,40 +1,36 @@
 use crate::dto::ai_dto::{AiGenerateRequest, AiGenerateResponse};
+use crate::service::deepseek_config;
 use once_cell::sync::Lazy;
 use rig::client::CompletionClient;
 use rig::completion::Prompt;
 use rig::providers::openai;
 
-static AI_MODEL: Lazy<String> =
-    Lazy::new(|| std::env::var("AI_CHAT_MODEL").unwrap_or_else(|_| "glm-5".to_string()));
-
-static CLIENT: Lazy<openai::CompletionsClient> = Lazy::new(|| {
-    let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set in environment");
-
-    let base_url =
-        std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| "https://timicc.com/v1".to_string());
-
-    let client_responses: openai::Client = openai::Client::builder()
-        .base_url(&base_url)
-        .api_key(&api_key)
-        .build()
-        .expect("Failed to build AI client");
-
-    client_responses.completions_api()
-});
+static DEEPSEEK_CONFIG: Lazy<deepseek_config::DeepSeekConfig> =
+    Lazy::new(deepseek_config::from_env);
+static CLIENT: Lazy<openai::CompletionsClient> =
+    Lazy::new(|| deepseek_config::completions_client(&DEEPSEEK_CONFIG));
 
 pub struct AiService;
 
 impl AiService {
     pub async fn generate(req: AiGenerateRequest) -> Result<AiGenerateResponse, String> {
+        Self::generate_with_client(req, &CLIENT, &DEEPSEEK_CONFIG.model).await
+    }
+
+    async fn generate_with_client(
+        req: AiGenerateRequest,
+        client: &openai::CompletionsClient,
+        model: &str,
+    ) -> Result<AiGenerateResponse, String> {
         let system_prompt = Self::build_system_prompt(&req);
         let user_prompt = Self::build_user_prompt(&req);
 
-        let agent = CLIENT.agent(&*AI_MODEL).preamble(&system_prompt).build();
+        let agent = client.agent(model).preamble(&system_prompt).build();
 
         let response = agent
             .prompt(&user_prompt)
             .await
-            .map_err(|e| format!("AI Provider Error: {}", e))?;
+            .map_err(|_| deepseek_config::safe_provider_error("AI Provider Error"))?;
 
         Ok(AiGenerateResponse { content: response })
     }
@@ -168,5 +164,99 @@ Output Rules:
             "KEYWORD" => "Generate the search keywords.".to_string(),
             _ => format!("Generate content for: {}", req.product_description),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hyper::service::{make_service_fn, service_fn};
+    use hyper::{Body, Request, Response, Server};
+    use serde_json::{json, Value};
+    use std::convert::Infallible;
+    use std::net::SocketAddr;
+    use std::sync::{Arc, Mutex};
+
+    #[tokio::test]
+    async fn ai_service_generate_uses_deepseek_provider_config_for_reply_generation() {
+        let captured = Arc::new(Mutex::new(None::<(String, Option<String>, Value)>));
+        let captured_for_service = captured.clone();
+        let make_svc = make_service_fn(move |_| {
+            let captured = captured_for_service.clone();
+            async move {
+                Ok::<_, Infallible>(service_fn(move |req: Request<Body>| {
+                    let captured = captured.clone();
+                    async move {
+                        let path = req.uri().path().to_string();
+                        let auth = req
+                            .headers()
+                            .get("authorization")
+                            .and_then(|value| value.to_str().ok())
+                            .map(ToOwned::to_owned);
+                        let bytes = hyper::body::to_bytes(req.into_body()).await.unwrap();
+                        let body: Value = serde_json::from_slice(&bytes).unwrap();
+                        *captured.lock().unwrap() = Some((path, auth, body));
+
+                        Ok::<_, Infallible>(Response::new(Body::from(
+                            json!({
+                                "id": "chatcmpl-test",
+                                "object": "chat.completion",
+                                "created": 1,
+                                "model": "deepseek-reply-model",
+                                "choices": [{
+                                    "index": 0,
+                                    "message": {
+                                        "role": "assistant",
+                                        "content": "[{\"name\":\"DeepSeek Reply\"}]"
+                                    },
+                                    "finish_reason": "stop"
+                                }],
+                                "usage": {
+                                    "prompt_tokens": 1,
+                                    "completion_tokens": 2,
+                                    "total_tokens": 3
+                                }
+                            })
+                            .to_string(),
+                        )))
+                    }
+                }))
+            }
+        });
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let server = Server::bind(&addr).serve(make_svc);
+        let base_url = format!("http://{}", server.local_addr());
+        let server_handle = tokio::spawn(server);
+
+        let config = deepseek_config::from_values(
+            Some("deepseek-reply-test-key"),
+            Some(&base_url),
+            Some("deepseek-reply-model"),
+        )
+        .expect("test DeepSeek config should resolve");
+        let client = deepseek_config::completions_client(&config);
+        let req = AiGenerateRequest {
+            platform: "social media".to_string(),
+            region: "global".to_string(),
+            product_description: "test product".to_string(),
+            target_audience: Some("test audience".to_string()),
+            generation_type: "REPLY".to_string(),
+            reply_requirements: Some("reply template test".to_string()),
+        };
+
+        let response = AiService::generate_with_client(req, &client, &config.model)
+            .await
+            .expect("mock reply generation should succeed");
+        server_handle.abort();
+
+        assert!(response.content.contains("DeepSeek Reply"));
+        let (path, auth, body) = captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("request should be captured");
+        assert_eq!(path, "/v1/chat/completions");
+        assert_eq!(auth.as_deref(), Some("Bearer deepseek-reply-test-key"));
+        assert_eq!(body["model"], "deepseek-reply-model");
     }
 }
