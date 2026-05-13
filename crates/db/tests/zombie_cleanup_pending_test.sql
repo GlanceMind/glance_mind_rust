@@ -71,7 +71,8 @@ ON CONFLICT (id) DO UPDATE SET
     created_at = NOW() - INTERVAL '1 hour',
     reserved_amount = 200,
     actual_consumption = 0,
-    settled_at = NULL;
+    settled_at = NULL,
+    terminal_reason = NULL;
 
 -- Fresh pending task: 1 minute old, must be untouched by default 30-min
 -- threshold; reserved 50 of the 250.
@@ -88,7 +89,8 @@ ON CONFLICT (id) DO UPDATE SET
     created_at = NOW() - INTERVAL '1 minute',
     reserved_amount = 50,
     actual_consumption = 0,
-    settled_at = NULL;
+    settled_at = NULL,
+    terminal_reason = NULL;
 
 -- ============================================================================
 -- Act
@@ -104,10 +106,13 @@ DO $$
 DECLARE
     v_stale_status TEXT;
     v_stale_settled_at TIMESTAMPTZ;
+    v_stale_terminal_reason TEXT;
     v_fresh_status TEXT;
+    v_fresh_terminal_reason TEXT;
     v_pending NUMERIC;
 BEGIN
-    SELECT status, settled_at INTO v_stale_status, v_stale_settled_at
+    SELECT status, settled_at, terminal_reason
+    INTO v_stale_status, v_stale_settled_at, v_stale_terminal_reason
     FROM gm_crawler_tasks WHERE id = 99000099;
     IF v_stale_status <> 'failed' THEN
         RAISE EXCEPTION 'expected stale task 99000099 status=failed, got %', v_stale_status;
@@ -115,11 +120,17 @@ BEGIN
     IF v_stale_settled_at IS NULL THEN
         RAISE EXCEPTION 'expected stale task 99000099 to have settled_at set after cleanup';
     END IF;
+    IF v_stale_terminal_reason <> 'ZOMBIE_CLEANUP: Pending task timed out before processing and was cleaned up' THEN
+        RAISE EXCEPTION 'expected stale task 99000099 terminal_reason to describe pending cleanup, got %', v_stale_terminal_reason;
+    END IF;
 
-    SELECT status INTO v_fresh_status
+    SELECT status, terminal_reason INTO v_fresh_status, v_fresh_terminal_reason
     FROM gm_crawler_tasks WHERE id = 99000100;
     IF v_fresh_status <> 'pending' THEN
         RAISE EXCEPTION 'expected fresh task 99000100 status=pending (untouched), got %', v_fresh_status;
+    END IF;
+    IF v_fresh_terminal_reason IS NOT NULL THEN
+        RAISE EXCEPTION 'expected fresh task 99000100 terminal_reason to remain null, got %', v_fresh_terminal_reason;
     END IF;
 
     -- Campaign started with pending_consumption=250, stale task reserved=200.
@@ -130,7 +141,7 @@ BEGIN
         RAISE EXCEPTION 'expected campaign 99000001 pending_consumption=50 after stale cleanup, got %', v_pending;
     END IF;
 
-    RAISE NOTICE 'zombie_cleanup_pending_test: PASS (stale task settled, fresh task untouched, refund=200)';
+    RAISE NOTICE 'zombie_cleanup_pending_test: PASS (stale task settled with terminal_reason, fresh task untouched, refund=200)';
 END $$;
 
 ROLLBACK;

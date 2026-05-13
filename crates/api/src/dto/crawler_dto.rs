@@ -9,6 +9,7 @@ pub struct CrawlerTaskDto {
     pub max_count: i32,
     pub process_count: i32,
     pub status: String,
+    pub terminal_reason: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: Option<DateTime<Utc>>,
 }

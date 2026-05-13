@@ -296,6 +296,9 @@ BEGIN
     IF v_task.settled_at IS NULL THEN
         RAISE EXCEPTION 'TEST 5 FAILED: Expected settled_at not null';
     END IF;
+    IF v_task.terminal_reason IS NOT NULL THEN
+        RAISE EXCEPTION 'TEST 5 FAILED: Expected legacy fn_complete_task call to leave terminal_reason null, got %', v_task.terminal_reason;
+    END IF;
     
     -- Check SETTLE transaction created
     SELECT COUNT(*) INTO v_tx_count FROM gm_wallet_transactions 
@@ -311,6 +314,72 @@ BEGIN
     END IF;
     
     RAISE NOTICE 'TEST 5 PASSED: Task completed and settled, campaign_status=%', v_result.campaign_status;
+END;
+$$;
+
+-- ============================================================================
+-- TEST 5B: fn_complete_task stores terminal_reason and normalizes blank values
+-- ============================================================================
+DO $$
+DECLARE
+    v_test_user_id INT := 99999;
+    v_campaign_id INT;
+    v_reason_task_id INT;
+    v_blank_task_id INT;
+    v_reason_result RECORD;
+    v_blank_result RECORD;
+    v_reason_task RECORD;
+    v_blank_task RECORD;
+    v_terminal_reason TEXT := 'COMPLETED: Task completed successfully';
+BEGIN
+    RAISE NOTICE '';
+    RAISE NOTICE '=== TEST 5B: fn_complete_task - terminal_reason ===';
+
+    INSERT INTO gm_campaigns (
+        user_id, name, platform_id, region_id, ai_model_id,
+        budget_cap, product_prompt, schedule_type,
+        status, pending_consumption, actual_consumption,
+        is_frozen, total_scanned, created_at, auto_reply_comments
+    ) VALUES (
+        v_test_user_id, 'Terminal Reason Test Campaign', 99, 99, 99,
+        100, 'Test', 'CONTINUOUS',
+        'DRAFT', 25, 0, FALSE, 0, NOW(), TRUE
+    ) RETURNING id INTO v_campaign_id;
+
+    INSERT INTO gm_crawler_tasks (
+        campaign_id, max_count, process_count, status, search_offset, search_limit,
+        reserved_amount, actual_consumption, terminal_reason, created_at
+    ) VALUES (
+        v_campaign_id, 10, 5, 'processing', 0, 20, 10, 0, NULL, NOW()
+    ) RETURNING id INTO v_reason_task_id;
+
+    INSERT INTO gm_crawler_tasks (
+        campaign_id, max_count, process_count, status, search_offset, search_limit,
+        reserved_amount, actual_consumption, terminal_reason, created_at
+    ) VALUES (
+        v_campaign_id, 10, 5, 'processing', 0, 20, 15, 0, 'STALE', NOW()
+    ) RETURNING id INTO v_blank_task_id;
+
+    SELECT * INTO v_reason_result
+    FROM fn_complete_task(v_reason_task_id, 'completed', v_terminal_reason);
+    SELECT * INTO v_blank_result
+    FROM fn_complete_task(v_blank_task_id, 'completed', '   ');
+
+    IF NOT v_reason_result.success OR NOT v_blank_result.success THEN
+        RAISE EXCEPTION 'TEST 5B FAILED: Expected both terminal reason calls to succeed';
+    END IF;
+
+    SELECT * INTO v_reason_task FROM gm_crawler_tasks WHERE id = v_reason_task_id;
+    SELECT * INTO v_blank_task FROM gm_crawler_tasks WHERE id = v_blank_task_id;
+
+    IF v_reason_task.terminal_reason <> v_terminal_reason THEN
+        RAISE EXCEPTION 'TEST 5B FAILED: Expected terminal_reason=%, got %', v_terminal_reason, v_reason_task.terminal_reason;
+    END IF;
+    IF v_blank_task.terminal_reason IS NOT NULL THEN
+        RAISE EXCEPTION 'TEST 5B FAILED: Expected blank terminal_reason to normalize to null, got %', v_blank_task.terminal_reason;
+    END IF;
+
+    RAISE NOTICE 'TEST 5B PASSED: terminal_reason persisted and blank values normalize to null';
 END;
 $$;
 
@@ -559,8 +628,11 @@ BEGIN
     IF v_task.settled_at IS NULL THEN
         RAISE EXCEPTION 'TEST 9 FAILED: Expected zombie task to be settled';
     END IF;
+    IF v_task.terminal_reason <> 'ZOMBIE_CLEANUP: Processing task timed out and was cleaned up' THEN
+        RAISE EXCEPTION 'TEST 9 FAILED: Expected zombie terminal_reason to describe processing cleanup, got %', v_task.terminal_reason;
+    END IF;
     
-    RAISE NOTICE 'TEST 9 PASSED: Zombie tasks cleaned up, count=%', v_result.cleaned_count;
+    RAISE NOTICE 'TEST 9 PASSED: Zombie tasks cleaned up with terminal_reason, count=%', v_result.cleaned_count;
 END;
 $$;
 
