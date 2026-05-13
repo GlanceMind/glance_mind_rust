@@ -63,6 +63,10 @@ mod tests {
 
     #[tokio::test]
     async fn enqueue_round_trip_if_redis_available() {
+        if std::env::var("RUN_REDIS_INTEGRATION_TESTS").as_deref() != Ok("1") {
+            return;
+        }
+
         let redis_url =
             std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".into());
         let client = match Client::open(redis_url.as_str()) {
