@@ -16,6 +16,7 @@ pub struct CrawlerTask {
     pub status: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: Option<DateTime<Utc>>,
+    pub terminal_reason: Option<String>,
 }
 
 #[derive(Queryable, Selectable, Identifiable, Serialize, Deserialize, Debug, Clone)]

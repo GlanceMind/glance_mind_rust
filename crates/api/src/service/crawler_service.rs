@@ -254,6 +254,7 @@ impl CrawlerService {
             max_count: task.max_count,
             process_count: task.process_count,
             status: task.status,
+            terminal_reason: task.terminal_reason,
             created_at: task.created_at,
             updated_at: task.updated_at,
         }

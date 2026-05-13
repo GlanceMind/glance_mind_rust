@@ -1371,10 +1371,68 @@ class TestCampaignPlatformRouting:
                 "ai_model_id": ai_model_id,
                 "schedule_type": "ONCE",
                 "product_prompt": f"Cross platform routing test {suffix}",
+                "max_scan_count": 1,
             },
         )
         assert_response_success(resp)
         return extract_data(resp.json())["id"]
+
+    def test_campaign_crawler_task_terminal_reason_in_response(
+        self, auth_client, db_cursor, db_connection
+    ):
+        suffix = uuid.uuid4().hex[:8]
+        campaign_id = self._create_owned_campaign(auth_client, db_cursor, PLATFORM_TIKTOK, suffix)
+        reason = f"NO_MORE_POSSIBLE_DATA: No more possible data for keyword search ({suffix})"
+
+        db_cursor.execute(
+            """
+            INSERT INTO gm_crawler_tasks (
+                campaign_id, keywords, max_count, process_count, status,
+                search_offset, search_limit, terminal_reason
+            )
+            VALUES (%s, ARRAY[%s], 50, 0, 'completed', 0, 20, %s)
+            RETURNING id
+            """,
+            (campaign_id, f"terminal-reason-{suffix}", reason),
+        )
+        task_id = db_cursor.fetchone()["id"]
+        db_connection.commit()
+
+        resp = auth_client.get(f"/api/v1/campaigns/{campaign_id}/crawler-tasks")
+        assert_response_success(resp)
+        payload = extract_data(resp.json())
+        task = next(item for item in payload["list"] if item["id"] == task_id)
+
+        assert task["status"] == "completed"
+        assert task["terminal_reason"] == reason
+
+    def test_campaign_crawler_task_terminal_reason_null_in_response(
+        self, auth_client, db_cursor, db_connection
+    ):
+        suffix = uuid.uuid4().hex[:8]
+        campaign_id = self._create_owned_campaign(auth_client, db_cursor, PLATFORM_TIKTOK, suffix)
+
+        db_cursor.execute(
+            """
+            INSERT INTO gm_crawler_tasks (
+                campaign_id, keywords, max_count, process_count, status,
+                search_offset, search_limit, terminal_reason
+            )
+            VALUES (%s, ARRAY[%s], 50, 0, 'processing', 0, 20, NULL)
+            RETURNING id
+            """,
+            (campaign_id, f"terminal-reason-null-{suffix}"),
+        )
+        task_id = db_cursor.fetchone()["id"]
+        db_connection.commit()
+
+        resp = auth_client.get(f"/api/v1/campaigns/{campaign_id}/crawler-tasks")
+        assert_response_success(resp)
+        payload = extract_data(resp.json())
+        task = next(item for item in payload["list"] if item["id"] == task_id)
+
+        assert "terminal_reason" in task
+        assert task["terminal_reason"] is None
 
     def _seed_platform_data(self, db_cursor, db_connection, campaign_id, platform_id, suffix):
         db_cursor.execute(
