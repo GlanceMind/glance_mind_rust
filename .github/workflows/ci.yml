@@ -52,7 +52,7 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Run Tests
-        run: cargo test --workspace --verbose
+        run: cargo test --workspace --verbose --jobs 1
         env:
           DATABASE_URL: postgres://aihub_user:aihub_password@localhost:15432/aihub_db
           RUST_BACKTRACE: 1
