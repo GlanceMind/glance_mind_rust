@@ -1,16 +1,19 @@
 //! OAuth 2.0 endpoints:
-//!   POST /oauth/token   — authorization_code + refresh_token grants
-//!   POST /oauth/revoke  — RFC 7009 token revocation (idempotent + family-aware)
-//!   POST /ota/config    — set oauth.enabled flag (bearer-token auth, R023)
+//!   POST /oauth/token            — authorization_code + refresh_token grants
+//!   POST /oauth/revoke           — RFC 7009 token revocation (idempotent + family-aware)
+//!   POST /oauth/authorize/grant  — consent-page: issue authorization code (JWT-authenticated)
+//!   POST /ota/config             — set oauth.enabled flag (bearer-token auth, R023)
 //!   GET  /ota/config/oauth.enabled — public read of the OTA flag
 
 use crate::error::api_error::ApiError;
+use crate::repository::user_repository::UserRepositoryTrait;
 use crate::service::oauth_metrics;
+use crate::service::oauth_service::AuthorizeGrantParams;
 use crate::state::oauth_state::OauthState;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use axum::Form;
+use axum::{Form, Json};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use subtle::ConstantTimeEq;
@@ -283,6 +286,88 @@ pub async fn get_ota_config(
     let value = row.map(|r| r.value).unwrap_or_else(|| "false".to_string());
 
     Ok(oauth_json(StatusCode::OK, json!({"oauth.enabled": value})))
+}
+
+// ---------------------------------------------------------------------------
+// POST /oauth/authorize/grant  (JWT-authenticated user consent)
+// ---------------------------------------------------------------------------
+
+/// JSON body for the consent-page grant endpoint.
+#[derive(Debug, Deserialize)]
+pub struct GrantRequest {
+    pub client_id: Option<String>,
+    pub redirect_uri: Option<String>,
+    pub scope: Option<String>,
+    pub state: Option<String>,
+    pub code_challenge: Option<String>,
+    pub code_challenge_method: Option<String>,
+}
+
+/// Issue an authorization code after the user has consented on the web consent page.
+///
+/// Authentication: JWT Bearer token in `Authorization` header (same JWT as /auth/login).
+/// The user is resolved from the token inline — no separate UserState is needed because
+/// `OauthState` embeds an `OauthService` that already holds a `UserService`.
+pub async fn authorize_grant(
+    State(state): State<OauthState>,
+    headers: HeaderMap,
+    Json(body): Json<GrantRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    // --- JWT auth (mirrors middleware/auth.rs logic) ---
+    let token = extract_bearer_token(&headers).ok_or_else(|| {
+        ApiError::Unauthorized("missing or invalid Authorization header".to_string())
+    })?;
+
+    let token_data = state
+        .oauth_service
+        .user_service
+        .retrieve_token_claims(&token)
+        .map_err(|e| {
+            use jsonwebtoken::errors::ErrorKind;
+            match e.kind() {
+                ErrorKind::ExpiredSignature => ApiError::Unauthorized("token expired".to_string()),
+                _ => ApiError::Unauthorized("invalid token".to_string()),
+            }
+        })?;
+
+    let user = state
+        .oauth_service
+        .user_service
+        .user_repo
+        .find_by_identifier(token_data.claims.identifier)
+        .await
+        .ok_or_else(|| ApiError::Unauthorized("user not found".to_string()))?;
+
+    // --- Extract IP / UA for audit log ---
+    let ip = extract_ip(&headers);
+    let ua = extract_ua(&headers);
+
+    // --- Validate required fields ---
+    let client_id = require_field(&body.client_id, "client_id")?;
+    let redirect_uri = require_field(&body.redirect_uri, "redirect_uri")?;
+    let scope = require_field(&body.scope, "scope")?;
+    let state_param = require_field(&body.state, "state")?;
+    let code_challenge = require_field(&body.code_challenge, "code_challenge")?;
+    let code_challenge_method =
+        require_field(&body.code_challenge_method, "code_challenge_method")?;
+
+    // --- Delegate to service ---
+    let code = state
+        .oauth_service
+        .issue_authorization_code(AuthorizeGrantParams {
+            user_id: user.id as i64,
+            client_id,
+            redirect_uri,
+            scope,
+            state: state_param,
+            code_challenge,
+            code_challenge_method,
+            ip,
+            user_agent: ua,
+        })
+        .await?;
+
+    Ok(oauth_json(StatusCode::OK, json!({ "code": code })))
 }
 
 // ---------------------------------------------------------------------------

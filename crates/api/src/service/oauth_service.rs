@@ -13,7 +13,7 @@ use crate::repository::user_repository::{UserRepository, UserRepositoryTrait};
 use crate::service::user_service::UserService;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{Duration, Utc};
-use glance_mind_db::entity::oauth::{NewOauthAuditLog, NewOauthRefreshToken};
+use glance_mind_db::entity::oauth::{NewOauthAuditLog, NewOauthCode, NewOauthRefreshToken};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -25,6 +25,17 @@ use uuid::Uuid;
 // Allowed OAuth clients
 // ---------------------------------------------------------------------------
 const ALLOWED_CLIENTS: &[&str] = &["desktop", "web"];
+
+// ---------------------------------------------------------------------------
+// Registered redirect URIs per client_id (exact-match, RFC 6749 §3.1.2)
+// ---------------------------------------------------------------------------
+fn registered_redirect_uri(client_id: &str) -> Option<&'static str> {
+    match client_id {
+        "desktop" => Some("glancemind://oauth-callback"),
+        "web" => Some("glancemind://oauth-callback"),
+        _ => None,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Rate limiter: sliding-window per IP, 10 grants / 60 seconds
@@ -72,6 +83,24 @@ impl IpRateLimiter {
 }
 
 // ---------------------------------------------------------------------------
+// Parameters for issue_authorization_code
+// ---------------------------------------------------------------------------
+
+/// All parameters required to issue an OAuth authorization code.
+/// Grouped into a struct to avoid the clippy `too_many_arguments` lint.
+pub struct AuthorizeGrantParams {
+    pub user_id: i64,
+    pub client_id: String,
+    pub redirect_uri: String,
+    pub scope: String,
+    pub state: String,
+    pub code_challenge: String,
+    pub code_challenge_method: String,
+    pub ip: Option<String>,
+    pub user_agent: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
 // OAuth token response DTO
 // ---------------------------------------------------------------------------
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -110,6 +139,114 @@ impl OauthService {
     // -----------------------------------------------------------------------
     pub fn validate_client_id(&self, client_id: &str) -> bool {
         ALLOWED_CLIENTS.contains(&client_id)
+    }
+
+    // -----------------------------------------------------------------------
+    // Issue authorization code (POST /oauth/authorize/grant)
+    // -----------------------------------------------------------------------
+    /// Validate consent-page grant parameters and insert a short-lived
+    /// authorization code into `oauth_codes`.
+    ///
+    /// Returns the raw hex code string on success.
+    pub async fn issue_authorization_code(
+        &self,
+        params: AuthorizeGrantParams,
+    ) -> Result<String, ApiError> {
+        let AuthorizeGrantParams {
+            user_id,
+            client_id,
+            redirect_uri,
+            scope,
+            state,
+            code_challenge,
+            code_challenge_method,
+            ip,
+            user_agent,
+        } = params;
+        // 1. Validate client_id allow-list
+        if !self.validate_client_id(&client_id) {
+            return Err(ApiError::BadRequest(
+                r#"{"error":"invalid_request","error_description":"unknown client_id"}"#
+                    .to_string(),
+            ));
+        }
+
+        // 2. Exact-match redirect_uri against registered URI for this client
+        let registered = registered_redirect_uri(&client_id).ok_or_else(|| {
+            ApiError::BadRequest(
+                r#"{"error":"invalid_request","error_description":"unknown client_id"}"#
+                    .to_string(),
+            )
+        })?;
+        if redirect_uri != registered {
+            return Err(ApiError::BadRequest(
+                r#"{"error":"invalid_request","error_description":"redirect_uri mismatch"}"#
+                    .to_string(),
+            ));
+        }
+
+        // 3. Validate PKCE parameters
+        if code_challenge.is_empty() {
+            return Err(ApiError::BadRequest(
+                r#"{"error":"invalid_request","error_description":"code_challenge required"}"#
+                    .to_string(),
+            ));
+        }
+        if code_challenge_method != "S256" {
+            return Err(ApiError::BadRequest(
+                r#"{"error":"invalid_request","error_description":"code_challenge_method must be S256"}"#.to_string(),
+            ));
+        }
+
+        // 4. Validate scope non-empty
+        if scope.is_empty() {
+            return Err(ApiError::BadRequest(
+                r#"{"error":"invalid_request","error_description":"scope required"}"#.to_string(),
+            ));
+        }
+
+        // 5. Generate random 32-byte hex code
+        let code = {
+            use rand::Rng;
+            let bytes: [u8; 32] = rand::rng().random();
+            bytes.iter().fold(String::new(), |mut s, b| {
+                s.push_str(&format!("{:02x}", b));
+                s
+            })
+        };
+
+        // 6. Insert into oauth_codes with 60-second TTL
+        let expires_at = Utc::now() + Duration::seconds(60);
+        let new_code = NewOauthCode {
+            code: code.clone(),
+            user_id,
+            client_id: client_id.clone(),
+            redirect_uri,
+            code_challenge,
+            code_challenge_method,
+            scope: scope.clone(),
+            state,
+            expires_at,
+        };
+        self.oauth_repo
+            .create_code(new_code)
+            .await
+            .map_err(|e| ApiError::InternalServerError(format!("DB error: {}", e)))?;
+
+        // 7. Write audit log
+        let _ = self
+            .oauth_repo
+            .write_audit(NewOauthAuditLog {
+                event_type: "code_issued".to_string(),
+                client_id: client_id.clone(),
+                user_id: Some(user_id),
+                ip,
+                user_agent,
+                metadata: Some(json!({ "scope": &scope })),
+            })
+            .await;
+
+        Ok(code)
     }
 
     // -----------------------------------------------------------------------

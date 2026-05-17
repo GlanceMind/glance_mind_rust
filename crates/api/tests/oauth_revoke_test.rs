@@ -14,10 +14,7 @@
 fn test_r016_revoke_requires_client_id() {
     // Simulates the handler logic for client_id validation
     fn validate_client(client_id: Option<&str>) -> bool {
-        match client_id {
-            Some(c) if !c.is_empty() && ["desktop", "web"].contains(&c) => true,
-            _ => false,
-        }
+        matches!(client_id, Some(c) if !c.is_empty() && ["desktop", "web"].contains(&c))
     }
 
     // Missing → reject
