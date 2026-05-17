@@ -5,12 +5,14 @@ use axum::{
     Router,
 };
 
-/// OAuth 2.0 token + revoke routes
+/// OAuth 2.0 token + revoke routes, plus the consent-page authorize/grant endpoint.
 /// Mounted at /oauth by root router
 pub fn oauth_routes() -> Router<OauthState> {
     Router::new()
         .route("/token", post(oauth_handler::token))
         .route("/revoke", post(oauth_handler::revoke))
+        // POST /oauth/authorize/grant — requires JWT bearer; issues authorization code
+        .route("/authorize/grant", post(oauth_handler::authorize_grant))
 }
 
 /// OTA config routes
