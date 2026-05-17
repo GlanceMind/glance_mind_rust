@@ -2,7 +2,7 @@ use crate::config::database::DBPool;
 use chrono::Utc;
 use diesel::prelude::*;
 use glance_mind_db::entity::oauth::{
-    NewOauthAuditLog, NewOauthCode, NewOauthRefreshToken, OauthAuditLog, OauthCode,
+    NewOauthAuditLog, NewOauthCode, NewOauthRefreshToken, NewOtaConfig, OauthAuditLog, OauthCode,
     OauthRefreshToken, OtaConfig, OtaConfigUpdate,
 };
 use glance_mind_db::schema::{oauth_audit_log, oauth_codes, oauth_refresh_tokens, ota_config};
@@ -60,17 +60,31 @@ impl OauthRepository {
         .map_err(|_| diesel::result::Error::RollbackTransaction)?
     }
 
-    /// Mark a code as redeemed. Returns an error if it was already redeemed (or missing).
-    pub async fn mark_code_redeemed(&self, code: String) -> Result<(), diesel::result::Error> {
+    /// Atomically mark a code as redeemed only if it is currently unredeemed and not expired.
+    ///
+    /// Returns `Ok(Some(row))` if THIS caller "won" the race (code was not yet redeemed and not
+    /// expired). Returns `Ok(None)` if the code was already redeemed OR has expired — the caller
+    /// must treat both as `invalid_grant` (code single-use TOCTOU is eliminated).
+    pub async fn mark_code_redeemed(
+        &self,
+        code: String,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Option<OauthCode>, diesel::result::Error> {
         let pool = self.pool.clone();
         task::spawn_blocking(move || {
             let mut conn = pool
                 .get()
                 .map_err(|_| diesel::result::Error::RollbackTransaction)?;
-            diesel::update(oauth_codes::table.find(code))
-                .set(oauth_codes::redeemed_at.eq(Utc::now()))
-                .execute(&mut conn)
-                .map(|_| ())
+            diesel::update(
+                oauth_codes::table
+                    .find(&code)
+                    .filter(oauth_codes::redeemed_at.is_null())
+                    .filter(oauth_codes::expires_at.gt(now)),
+            )
+            .set(oauth_codes::redeemed_at.eq(Utc::now()))
+            .returning(OauthCode::as_returning())
+            .get_result::<OauthCode>(&mut conn)
+            .optional()
         })
         .await
         .map_err(|_| diesel::result::Error::RollbackTransaction)?
@@ -135,6 +149,38 @@ impl OauthRepository {
                 ))
                 .execute(&mut conn)
                 .map(|_| ())
+        })
+        .await
+        .map_err(|_| diesel::result::Error::RollbackTransaction)?
+    }
+
+    /// Atomically revoke a refresh token only if it is currently unrevoked (WHERE revoked_at IS NULL).
+    ///
+    /// Returns `Ok(Some(row))` if THIS caller "won" (token was active and is now revoked).
+    /// Returns `Ok(None)` if the token was already revoked — concurrent refresh detected; the
+    /// caller must trigger family revocation and return `invalid_grant`.
+    pub async fn revoke_refresh_token_atomic(
+        &self,
+        id: i64,
+        replaced_by_id: Option<i64>,
+    ) -> Result<Option<OauthRefreshToken>, diesel::result::Error> {
+        let pool = self.pool.clone();
+        task::spawn_blocking(move || {
+            let mut conn = pool
+                .get()
+                .map_err(|_| diesel::result::Error::RollbackTransaction)?;
+            diesel::update(
+                oauth_refresh_tokens::table
+                    .find(id)
+                    .filter(oauth_refresh_tokens::revoked_at.is_null()),
+            )
+            .set((
+                oauth_refresh_tokens::revoked_at.eq(Utc::now()),
+                oauth_refresh_tokens::replaced_by_id.eq(replaced_by_id),
+            ))
+            .returning(OauthRefreshToken::as_returning())
+            .get_result::<OauthRefreshToken>(&mut conn)
+            .optional()
         })
         .await
         .map_err(|_| diesel::result::Error::RollbackTransaction)?
@@ -215,13 +261,21 @@ impl OauthRepository {
             let mut conn = pool
                 .get()
                 .map_err(|_| diesel::result::Error::RollbackTransaction)?;
-            let update = OtaConfigUpdate {
-                value,
-                updated_at: Utc::now(),
-                updated_by,
+            let new_row = NewOtaConfig {
+                key: key.clone(),
+                value: value.clone(),
+                updated_by: updated_by.clone(),
             };
-            diesel::update(ota_config::table.find(key))
-                .set(&update)
+            // INSERT … ON CONFLICT (key) DO UPDATE — recovers if the seed row is missing
+            diesel::insert_into(ota_config::table)
+                .values(&new_row)
+                .on_conflict(ota_config::key)
+                .do_update()
+                .set(&OtaConfigUpdate {
+                    value,
+                    updated_at: Utc::now(),
+                    updated_by,
+                })
                 .returning(OtaConfig::as_returning())
                 .get_result(&mut conn)
         })

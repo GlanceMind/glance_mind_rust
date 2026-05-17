@@ -13,7 +13,6 @@ use axum::response::IntoResponse;
 use axum::Form;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::env;
 use subtle::ConstantTimeEq;
 
 // ---------------------------------------------------------------------------
@@ -77,10 +76,10 @@ pub async fn token(
             {
                 Ok(resp) => {
                     oauth_metrics::inc_token(&client_id, "authorization_code");
-                    Ok(oauth_json(
-                        StatusCode::OK,
-                        serde_json::to_value(resp).unwrap(),
-                    ))
+                    let body = serde_json::to_value(resp).map_err(|e| {
+                        ApiError::InternalServerError(format!("Serialization error: {}", e))
+                    })?;
+                    Ok(oauth_json(StatusCode::OK, body))
                 }
                 Err(ApiError::BadRequest(msg))
                     if msg.contains("invalid_grant") || msg.contains("unauthorized_client") =>
@@ -113,10 +112,10 @@ pub async fn token(
             {
                 Ok(resp) => {
                     oauth_metrics::inc_token(&client_id, "refresh_token");
-                    Ok(oauth_json(
-                        StatusCode::OK,
-                        serde_json::to_value(resp).unwrap(),
-                    ))
+                    let body = serde_json::to_value(resp).map_err(|e| {
+                        ApiError::InternalServerError(format!("Serialization error: {}", e))
+                    })?;
+                    Ok(oauth_json(StatusCode::OK, body))
                 }
                 Err(ApiError::BadRequest(msg))
                     if msg.contains("invalid_grant") || msg.contains("unauthorized_client") =>
@@ -181,10 +180,12 @@ pub async fn revoke(
     let token = match form.token.as_deref() {
         Some(t) if !t.is_empty() => t.to_string(),
         _ => {
-            // RFC 7009 §2.1 — missing token param → invalid_request, but RFC 7009 §2.2
-            // says server MUST respond 200 if token is not found. Missing field is
-            // treated as unknown token → 200 (idempotent).
-            return Ok(oauth_json(StatusCode::OK, json!({})));
+            // RFC 7009 §2.1 — the "token" parameter is REQUIRED.
+            // A missing or empty token field is invalid_request (400), not a silent 200.
+            return Ok(oauth_json(
+                StatusCode::BAD_REQUEST,
+                json!({"error": "invalid_request", "error_description": "missing parameter: token"}),
+            ));
         }
     };
 
@@ -218,8 +219,9 @@ pub async fn set_ota_config(
     headers: HeaderMap,
     Form(form): Form<OtaConfigForm>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // Authenticate: compare Bearer token to OTA_AUTH_TOKEN (constant-time)
-    let expected = env::var("OTA_AUTH_TOKEN").unwrap_or_default();
+    // Authenticate: compare Bearer token to OTA_AUTH_TOKEN (constant-time).
+    // Token is read once at service startup and stored in OauthState (P1 #1 fix).
+    let expected = &state.ota_auth_token;
     if expected.is_empty() {
         return Ok(oauth_json(
             StatusCode::INTERNAL_SERVER_ERROR,

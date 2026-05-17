@@ -45,7 +45,7 @@ impl IpRateLimiter {
 
     /// Returns `true` if the request is allowed, `false` if rate-limited.
     pub fn check_and_record(&self, ip: &str) -> bool {
-        let mut map = self.state.lock().expect("rate limiter poisoned");
+        let mut map = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let window = StdDuration::from_secs(RATE_LIMIT_WINDOW_SECS);
         let now = Instant::now();
 
@@ -173,62 +173,62 @@ impl OauthService {
             ));
         }
 
-        // 2. Look up the code
-        let oauth_code = self
+        // 2. Atomically claim the code (marks redeemed if currently unredeemed AND not expired).
+        //    A None result means the code is unknown, already redeemed, or expired — all map to
+        //    invalid_grant (RFC 6749 §5.2).  This single UPDATE-RETURNING eliminates the
+        //    TOCTOU race between a SELECT + separate UPDATE (P0 #1).
+        let now = Utc::now();
+        let oauth_code = match self
             .oauth_repo
-            .find_code(code.clone())
+            .mark_code_redeemed(code.clone(), now)
             .await
             .map_err(|e| ApiError::InternalServerError(format!("DB error: {}", e)))?
-            .ok_or_else(|| ApiError::BadRequest(r#"{"error":"invalid_grant"}"#.to_string()))?;
+        {
+            Some(row) => row,
+            None => {
+                // Could be unknown, already redeemed (reuse), or expired.
+                // Audit as code_reused (covers reuse detection — R012).
+                let _ = self
+                    .oauth_repo
+                    .write_audit(NewOauthAuditLog {
+                        event_type: "code_reused".to_string(),
+                        client_id: client_id.clone(),
+                        user_id: None,
+                        ip: ip.clone(),
+                        user_agent: user_agent.clone(),
+                        metadata: Some(json!({ "code_prefix": &code[..8.min(code.len())] })),
+                    })
+                    .await;
+                return Err(ApiError::BadRequest(
+                    r#"{"error":"invalid_grant"}"#.to_string(),
+                ));
+            }
+        };
 
-        // 3. Code reuse detection (R012)
-        if oauth_code.redeemed_at.is_some() {
-            // Log the reuse attempt
-            let _ = self
-                .oauth_repo
-                .write_audit(NewOauthAuditLog {
-                    event_type: "code_reused".to_string(),
-                    client_id: client_id.clone(),
-                    user_id: Some(oauth_code.user_id),
-                    ip: ip.clone(),
-                    user_agent: user_agent.clone(),
-                    metadata: Some(json!({ "code_prefix": &code[..8.min(code.len())] })),
-                })
-                .await;
-            return Err(ApiError::BadRequest(
-                r#"{"error":"invalid_grant"}"#.to_string(),
-            ));
-        }
-
-        // 4. Expiry check (INV-RB06 — codes 60s)
-        if oauth_code.expires_at < Utc::now() {
-            return Err(ApiError::BadRequest(
-                r#"{"error":"invalid_grant"}"#.to_string(),
-            ));
-        }
-
-        // 5. redirect_uri must match exactly
+        // 3. redirect_uri must match exactly (checked after atomic claim — code is consumed either way)
         if oauth_code.redirect_uri != redirect_uri {
             return Err(ApiError::BadRequest(
                 r#"{"error":"invalid_grant"}"#.to_string(),
             ));
         }
 
-        // 6. client_id must match what was used to issue the code
+        // 4. client_id must match what was used to issue the code
         if oauth_code.client_id != client_id {
             return Err(ApiError::BadRequest(
                 r#"{"error":"invalid_grant"}"#.to_string(),
             ));
         }
 
-        // 7. PKCE verification (R011 — constant time)
+        // 5. PKCE verification (R011 — constant time).
+        //    PKCE failure after atomic claim: code is consumed; user must restart flow.
+        //    This is RFC-compliant — codes are one-shot regardless of reason for rejection.
         if !self.verify_pkce(&code_verifier, &oauth_code.code_challenge) {
             return Err(ApiError::BadRequest(
                 r#"{"error":"invalid_grant"}"#.to_string(),
             ));
         }
 
-        // 8. Look up user
+        // 6. Look up user
         let user = self
             .user_service
             .user_repo
@@ -236,19 +236,13 @@ impl OauthService {
             .await
             .map_err(|_| ApiError::BadRequest(r#"{"error":"invalid_grant"}"#.to_string()))?;
 
-        // 9. Mark code redeemed
-        self.oauth_repo
-            .mark_code_redeemed(code.clone())
-            .await
-            .map_err(|e| ApiError::InternalServerError(format!("DB error: {}", e)))?;
-
-        // 10. Issue access_token via same signer as /auth/login (R013 parity)
+        // 7. Issue access_token via same signer as /auth/login (R013 parity)
         let token_data = self
             .user_service
             .generate_token(user)
             .map_err(|e| ApiError::InternalServerError(format!("Token error: {}", e)))?;
 
-        // 11. Issue refresh token
+        // 8. Issue refresh token
         let (raw_refresh, refresh_row) = self
             .create_refresh_token(
                 oauth_code.user_id,
@@ -259,7 +253,7 @@ impl OauthService {
             )
             .await?;
 
-        // 12. Audit log
+        // 9. Audit log
         let _ = self
             .oauth_repo
             .write_audit(NewOauthAuditLog {
@@ -302,7 +296,8 @@ impl OauthService {
             ));
         }
 
-        // 2. Hash and look up
+        // 2. Hash and look up the token (read-only; needed to get family_id for family revocation
+        //    if the token is already revoked, and to do validity checks before issuing a new token).
         let hash = self.hash_refresh_token(&raw_refresh_token);
         let row = self
             .oauth_repo
@@ -311,40 +306,21 @@ impl OauthService {
             .map_err(|e| ApiError::InternalServerError(format!("DB error: {}", e)))?
             .ok_or_else(|| ApiError::BadRequest(r#"{"error":"invalid_grant"}"#.to_string()))?;
 
-        // 3. Family revocation: if this token is already revoked, revoke entire family
-        if row.revoked_at.is_some() {
-            let _ = self.oauth_repo.revoke_family(row.family_id).await;
-            let _ = self
-                .oauth_repo
-                .write_audit(NewOauthAuditLog {
-                    event_type: "family_revoked".to_string(),
-                    client_id: client_id.clone(),
-                    user_id: Some(row.user_id),
-                    ip: ip.clone(),
-                    user_agent: user_agent.clone(),
-                    metadata: Some(json!({ "family_id": row.family_id.to_string() })),
-                })
-                .await;
-            return Err(ApiError::BadRequest(
-                r#"{"error":"invalid_grant"}"#.to_string(),
-            ));
-        }
-
-        // 4. Expiry check
+        // 3. Expiry check (before atomic revoke — expired tokens are always invalid_grant).
         if row.expires_at < Utc::now() {
             return Err(ApiError::BadRequest(
                 r#"{"error":"invalid_grant"}"#.to_string(),
             ));
         }
 
-        // 5. client_id must match
+        // 4. client_id must match
         if row.client_id != client_id {
             return Err(ApiError::BadRequest(
                 r#"{"error":"invalid_grant"}"#.to_string(),
             ));
         }
 
-        // 6. Look up user
+        // 5. Look up user (before issuing — fail fast if user is gone)
         let user = self
             .user_service
             .user_repo
@@ -352,13 +328,14 @@ impl OauthService {
             .await
             .map_err(|_| ApiError::BadRequest(r#"{"error":"invalid_grant"}"#.to_string()))?;
 
-        // 7. Issue new access_token (same signer — R013 parity)
+        // 6. Issue new access_token (same signer — R013 parity)
         let token_data = self
             .user_service
             .generate_token(user)
             .map_err(|e| ApiError::InternalServerError(format!("Token error: {}", e)))?;
 
-        // 8. Issue new refresh token (same family)
+        // 7. Issue new refresh token (same family).  Inserted BEFORE the old token is revoked
+        //    so that we have the new id available for the replaced_by_id link.
         let scope = row.scope.clone();
         let (raw_refresh, new_row) = self
             .create_refresh_token(
@@ -370,13 +347,39 @@ impl OauthService {
             )
             .await?;
 
-        // 9. Revoke old refresh token, linking to its replacement
-        self.oauth_repo
-            .revoke_refresh_token(row.id, Some(new_row.id))
+        // 8. Atomically revoke the old refresh token (WHERE revoked_at IS NULL RETURNING *).
+        //    If 0 rows are updated, a concurrent request already revoked this token — trigger
+        //    family revocation and return invalid_grant (P0 #2 race fix).
+        match self
+            .oauth_repo
+            .revoke_refresh_token_atomic(row.id, Some(new_row.id))
             .await
-            .map_err(|e| ApiError::InternalServerError(format!("DB error: {}", e)))?;
+            .map_err(|e| ApiError::InternalServerError(format!("DB error: {}", e)))?
+        {
+            Some(_) => {
+                // We won the race; the old token is now revoked.
+            }
+            None => {
+                // Token was already revoked by a concurrent request — family revocation.
+                let _ = self.oauth_repo.revoke_family(row.family_id).await;
+                let _ = self
+                    .oauth_repo
+                    .write_audit(NewOauthAuditLog {
+                        event_type: "family_revoked".to_string(),
+                        client_id: client_id.clone(),
+                        user_id: Some(row.user_id),
+                        ip: ip.clone(),
+                        user_agent: user_agent.clone(),
+                        metadata: Some(json!({ "family_id": row.family_id.to_string() })),
+                    })
+                    .await;
+                return Err(ApiError::BadRequest(
+                    r#"{"error":"invalid_grant"}"#.to_string(),
+                ));
+            }
+        }
 
-        // 10. Audit log
+        // 9. Audit log
         let _ = self
             .oauth_repo
             .write_audit(NewOauthAuditLog {

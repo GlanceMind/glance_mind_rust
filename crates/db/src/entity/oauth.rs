@@ -129,3 +129,11 @@ pub struct OtaConfigUpdate {
     pub updated_at: DateTime<Utc>,
     pub updated_by: String,
 }
+
+#[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
+#[diesel(table_name = ota_config)]
+pub struct NewOtaConfig {
+    pub key: String,
+    pub value: String,
+    pub updated_by: String,
+}
