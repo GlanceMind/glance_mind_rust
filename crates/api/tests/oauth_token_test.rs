@@ -8,8 +8,6 @@
 //!       or:  cargo test --test oauth_token_test  (unit-level, no DB)
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use glance_mind_api::service::oauth_metrics;
-use glance_mind_api::service::oauth_service::OauthService;
 use sha2::{Digest, Sha256};
 
 // ---------------------------------------------------------------------------
