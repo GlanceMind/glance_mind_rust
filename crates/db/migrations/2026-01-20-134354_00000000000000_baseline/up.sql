@@ -3106,3 +3106,9 @@ ALTER TABLE ONLY public.gm_wallet_transactions
 -- PostgreSQL database dump complete
 --
 
+-- Restore search_path so Diesel's __diesel_schema_migrations tracking works
+-- after this migration runs. The pg_dump header resets search_path to '' for
+-- schema-qualified output; we restore it here so connection reuse does not
+-- break Diesel's internal bookkeeping.
+SET search_path TO public;
+

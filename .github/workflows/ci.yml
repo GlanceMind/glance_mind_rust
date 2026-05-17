@@ -43,7 +43,49 @@ jobs:
       - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libssl-dev protobuf-compiler libpq-dev
+          sudo apt-get install -y build-essential pkg-config libssl-dev protobuf-compiler libpq-dev postgresql-client
+
+      - name: Apply database migrations
+        # Run each up.sql in sort order via psql (multi-pass to handle dependency ordering).
+        # This mirrors crates/db/docker/run-migrations.sh and is used instead of
+        # `diesel migration run` because some historical migrations reset search_path
+        # in ways that break Diesel's own __diesel_schema_migrations tracking table.
+        run: |
+          set -uo pipefail
+          export PGPASSWORD=aihub_password
+
+          mapfile -t pending < <(find crates/db/migrations -name "up.sql" | sort)
+
+          pass=1
+          while [ ${#pending[@]} -gt 0 ]; do
+            echo "--- Migration pass ${pass} (${#pending[@]} files) ---"
+            progress=0
+            next_pending=()
+            for migration in "${pending[@]}"; do
+              name=$(basename "$(dirname "$migration")")
+              if psql -v ON_ERROR_STOP=1 -1 -h localhost -p 15432 -U aihub_user -d aihub_db -f "$migration" > /dev/null 2>&1; then
+                echo "  OK: $name"
+                progress=$((progress + 1))
+              else
+                next_pending+=("$migration")
+              fi
+            done
+            if [ ${#next_pending[@]} -eq 0 ]; then break; fi
+            if [ "$progress" -eq 0 ]; then
+              echo "ERROR: No progress in pass ${pass}. Remaining:"
+              for m in "${next_pending[@]}"; do echo "  $(basename "$(dirname "$m")")"; done
+              exit 1
+            fi
+            pending=("${next_pending[@]}")
+            pass=$((pass + 1))
+          done
+
+          echo "All migrations applied."
+
+          # Seed test data (users with id=1 etc. required by FK constraints in tests)
+          psql -h localhost -p 15432 -U aihub_user -d aihub_db \
+            -f crates/db/docker/init-test-data.sql > /dev/null
+          echo "Test seed data applied."
 
       - name: Check Formatting
         run: cargo fmt --all -- --check
