@@ -3,11 +3,12 @@ use crate::config::database::Database;
 use crate::middleware::auth as auth_middleware;
 use crate::middleware::charging;
 use crate::middleware::permission;
-use crate::routes::{register, user};
+use crate::routes::{oauth as oauth_routes, register, user};
 #[allow(unused_imports)]
 use crate::service::nats_dm_service::NatsDmService;
 use crate::service::redis_service::RedisService;
 use crate::state::auth_state::AuthState;
+use crate::state::oauth_state::OauthState;
 // use crate::state::token_state::TokenState;
 use crate::state::user_state::UserState;
 use axum::http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
@@ -23,6 +24,7 @@ pub fn routes(
     nats_dm_service: Option<NatsDmService>,
     redis_service: Option<RedisService>,
 ) -> Router {
+    let oauth_state = OauthState::new(&db_conn);
     let merged_router = {
         let auth_state = AuthState::new(&db_conn);
         let mut user_state = UserState::new(&db_conn);
@@ -476,6 +478,13 @@ pub fn routes(
     Router::new()
         .route("/health", get(|| async { "Healthy..." }))
         .nest("/api/v1", merged_router)
+        // OAuth 2.0 token + revoke endpoints (additive — do NOT touch /auth/*)
+        .nest(
+            "/oauth",
+            oauth_routes::oauth_routes().with_state(oauth_state.clone()),
+        )
+        // OTA feature-flag config endpoints
+        .nest("/ota", oauth_routes::ota_routes().with_state(oauth_state))
         .layer(TraceLayer::new_for_http())
         .layer(
             CorsLayer::new()

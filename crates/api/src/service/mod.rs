@@ -38,6 +38,8 @@ pub mod drama_worker_dispatcher;
 pub mod nats_dm_service;
 pub mod novel_service;
 pub mod novel_worker_dispatcher;
+pub mod oauth_metrics;
+pub mod oauth_service;
 pub mod redis_service;
 pub mod upload_task_service;
 pub mod user_service;
