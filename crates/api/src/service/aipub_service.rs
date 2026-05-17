@@ -310,23 +310,51 @@ impl AipubService {
                     }
                 }
                 Some(PlanType::BatchText) => {
-                    // N chats (one content variation per account)
+                    // N chats (one content variation per account) +
+                    // optional N * sum(image_generations[].count) images when
+                    // the plan carries a V2 image spec (multi-image carousel
+                    // posts for FB/IG/Reddit). Without image_generations[],
+                    // billing stays at N chats + 0 images.
                     let account_ids = self
                         .repo
                         .get_group_account_ids(plan.group_id.unwrap_or(0))
                         .await
                         .unwrap_or_default();
                     let n = account_ids.len() as i32;
+
+                    let v2_per_account = plan
+                        .ai_input
+                        .as_ref()
+                        .and_then(|ai| ai.get("image_generations"))
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .map(|spec| {
+                                    let c = spec.get("count").and_then(|v| v.as_u64()).unwrap_or(1)
+                                        as i32;
+                                    c.max(1)
+                                })
+                                .sum::<i32>()
+                                .max(1)
+                        });
+
+                    let image_count = v2_per_account.map(|per_acct| per_acct * n).unwrap_or(0);
+                    let image_model_id = if image_count > 0 {
+                        plan.image_ai_model_id
+                    } else {
+                        None
+                    };
+
                     if n > 0 {
                         Some(
                             self.repo
                                 .freeze_budget(
                                     user_id,
                                     n,
-                                    0,
+                                    image_count,
                                     0,
                                     plan.chat_ai_model_id,
-                                    None,
+                                    image_model_id,
                                     None,
                                     "aipub_plan",
                                     plan.id,
