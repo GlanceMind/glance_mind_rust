@@ -446,27 +446,6 @@ pub fn routes(
                     .layer(axum::Extension(drama_stream_hub.clone()))
                     .with_state(user_state.clone()),
             )
-            // DM auto-reply internal API (INTERNAL_SERVICE_TOKEN auth)
-            .nest(
-                "/internal",
-                crate::routes::internal::dm::routes()
-                    .layer(axum::Extension(user_state.clone()))
-                    .with_state(user_state.clone()),
-            )
-            // DM auto-reply admin surface (user JWT; TODO: replace with dedicated admin middleware once one exists)
-            .nest(
-                "/admin",
-                crate::routes::internal::dm::admin_routes()
-                    .layer(
-                        ServiceBuilder::new()
-                            .layer(middleware::from_fn_with_state(
-                                user_state.clone(),
-                                auth_middleware::auth,
-                            ))
-                            .layer(axum::Extension(user_state.clone())),
-                    )
-                    .with_state(user_state.clone()),
-            )
             // Novel Engine Internal Callback (no user auth, internal network only)
             .nest(
                 "/internal/novel",
