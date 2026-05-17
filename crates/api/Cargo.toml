@@ -53,6 +53,8 @@ jsonwebtoken = "8.3.0"
 bcrypt = "0.14.0"
 rand = "0.9.2"
 base64 = "0.21"
+subtle = "2.5"   # constant-time comparisons (PKCE, OTA token)
+prometheus = { version = "0.13", features = ["process"] }  # R025 metrics
 
 # Validation
 validator = { version = "0.16.1", features = ["derive"] }

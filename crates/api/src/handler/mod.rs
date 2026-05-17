@@ -18,6 +18,7 @@ pub mod material_folder_handler;
 pub mod material_handler;
 pub mod notification_handler;
 pub mod novel_handler;
+pub mod oauth_handler;
 pub mod oss_handler;
 pub mod patrol_handler;
 pub(crate) mod promo_code_handler;

@@ -1772,6 +1772,94 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    gm_auto_reply_config (id) {
+        id -> Int4,
+        social_account_id -> Int4,
+        enabled -> Bool,
+        blacklist_keywords -> Array<Nullable<Text>>,
+        rate_limit_per_day -> Int4,
+        confidence_threshold -> Float4,
+        rag_threshold -> Float4,
+        #[max_length = 32]
+        fallback_strategy -> Varchar,
+        #[max_length = 128]
+        brand_name -> Varchar,
+        last_modified_by -> Nullable<Int4>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+        last_modified_by_admin_user_id -> Nullable<Int4>,
+    }
+}
+
+diesel::table! {
+    gm_dm_reply_log (id) {
+        id -> Int8,
+        #[max_length = 128]
+        inbound_msg_id -> Varchar,
+        #[max_length = 128]
+        conv_id -> Varchar,
+        social_account_id -> Int4,
+        campaign_id -> Nullable<Int4>,
+        #[max_length = 128]
+        user_ref -> Varchar,
+        #[max_length = 128]
+        user_handle -> Nullable<Varchar>,
+        #[max_length = 32]
+        platform -> Varchar,
+        inbound_text -> Text,
+        inbound_received_at -> Timestamptz,
+        #[max_length = 16]
+        status -> Varchar,
+        #[max_length = 64]
+        skip_reason -> Nullable<Varchar>,
+        rag_score -> Nullable<Float4>,
+        llm_confidence -> Nullable<Float4>,
+        #[max_length = 64]
+        llm_model -> Nullable<Varchar>,
+        latency_ms -> Int4,
+        reply_text -> Nullable<Text>,
+        #[max_length = 128]
+        escalate_reason -> Nullable<Varchar>,
+        resolved_at -> Nullable<Timestamptz>,
+        resolved_by -> Nullable<Int4>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_product_faq (id) {
+        id -> Int4,
+        campaign_id -> Int4,
+        question -> Text,
+        answer -> Text,
+        #[max_length = 32]
+        chunk_type -> Varchar,
+        #[max_length = 128]
+        dify_kb_id -> Nullable<Varchar>,
+        #[max_length = 128]
+        dify_doc_id -> Nullable<Varchar>,
+        #[max_length = 16]
+        sync_status -> Varchar,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_dm_conversation_review (conv_id) {
+        #[max_length = 128]
+        conv_id -> Varchar,
+        needs_human_review -> Bool,
+        #[max_length = 128]
+        human_review_reason -> Nullable<Varchar>,
+        resolved_at -> Nullable<Timestamptz>,
+        resolved_by -> Nullable<Int4>,
+        updated_at -> Timestamptz,
+    }
+}
+
 // drama tables use Int8 user_id vs gm_users Int4 id - cannot use joinable!
 diesel::joinable!(gm_agent_comments -> gm_agent_videos (video_db_id));
 diesel::joinable!(gm_agent_comments -> gm_campaigns (campaign_id));
@@ -1878,6 +1966,68 @@ diesel::joinable!(hb_novel_provider_request_logs -> gm_novel_jobs (job_id));
 diesel::joinable!(hb_novel_vector_operations -> gm_novel_knowledge_imports (knowledge_import_id));
 diesel::joinable!(hb_novel_worker_attempts -> hb_novel_worker_tasks (worker_task_id));
 diesel::joinable!(hb_novel_worker_tasks -> gm_novel_jobs (job_id));
+diesel::joinable!(gm_auto_reply_config -> gm_social_accounts (social_account_id));
+diesel::joinable!(gm_auto_reply_config -> gm_users (last_modified_by));
+diesel::joinable!(gm_auto_reply_config -> gm_admin_users (last_modified_by_admin_user_id));
+diesel::joinable!(gm_dm_reply_log -> gm_social_accounts (social_account_id));
+diesel::joinable!(gm_dm_reply_log -> gm_campaigns (campaign_id));
+diesel::joinable!(gm_dm_reply_log -> gm_users (resolved_by));
+diesel::joinable!(gm_product_faq -> gm_campaigns (campaign_id));
+diesel::joinable!(gm_dm_conversation_review -> gm_users (resolved_by));
+// oauth tables — user_id is Int8 vs gm_users Int4, so no joinable! macros
+// (matches the drama tables pattern used elsewhere in this file)
+
+diesel::table! {
+    oauth_codes (code) {
+        code -> Text,
+        user_id -> Int8,
+        client_id -> Text,
+        redirect_uri -> Text,
+        code_challenge -> Text,
+        code_challenge_method -> Text,
+        scope -> Text,
+        state -> Text,
+        expires_at -> Timestamptz,
+        redeemed_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    oauth_refresh_tokens (id) {
+        id -> Int8,
+        token_hash -> Text,
+        family_id -> Uuid,
+        user_id -> Int8,
+        client_id -> Text,
+        scope -> Text,
+        issued_at -> Timestamptz,
+        expires_at -> Timestamptz,
+        revoked_at -> Nullable<Timestamptz>,
+        replaced_by_id -> Nullable<Int8>,
+    }
+}
+
+diesel::table! {
+    oauth_audit_log (id) {
+        id -> Int8,
+        event_type -> Text,
+        client_id -> Text,
+        user_id -> Nullable<Int8>,
+        ip -> Nullable<Text>,
+        user_agent -> Nullable<Text>,
+        metadata -> Nullable<Jsonb>,
+        occurred_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    ota_config (key) {
+        key -> Text,
+        value -> Text,
+        updated_at -> Timestamptz,
+        updated_by -> Text,
+    }
+}
 
 diesel::allow_tables_to_appear_in_same_query!(
     drama_chapter_scene_asset_links,
@@ -1909,12 +2059,15 @@ diesel::allow_tables_to_appear_in_same_query!(
     gm_aipub_ai_tasks,
     gm_aipub_plans,
     gm_aipub_tasks,
+    gm_auto_reply_config,
     gm_campaign_accounts,
     gm_campaign_templates,
     gm_campaigns,
     gm_crawler_results,
     gm_crawler_tasks,
     gm_data_video_cases,
+    gm_dm_conversation_review,
+    gm_dm_reply_log,
     gm_drama_callback_events,
     gm_drama_cost_events,
     gm_drama_project_projections,
@@ -1945,6 +2098,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     gm_patrol_reports,
     gm_platforms,
     gm_pricing_rules,
+    gm_product_faq,
     gm_promo_codes,
     gm_referral_earnings,
     gm_referrals,
@@ -1964,4 +2118,8 @@ diesel::allow_tables_to_appear_in_same_query!(
     hb_novel_vector_operations,
     hb_novel_worker_attempts,
     hb_novel_worker_tasks,
+    oauth_audit_log,
+    oauth_codes,
+    oauth_refresh_tokens,
+    ota_config,
 );
