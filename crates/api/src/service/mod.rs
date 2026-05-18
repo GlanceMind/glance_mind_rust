@@ -28,6 +28,7 @@ pub mod social_account_service;
 pub mod social_group_service;
 pub mod template_service;
 // pub mod tikhub_client; // Replaced by laozhang_client
+pub mod dm_auto_reply_service;
 pub mod drama_billing;
 pub mod drama_facade;
 pub mod drama_private_assets_service;
