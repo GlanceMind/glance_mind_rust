@@ -535,6 +535,26 @@ pub fn routes(
                     ))
                     .with_state(user_state.clone()),
             )
+            // DM Auto-Reply Internal Routes (requires INTERNAL_SERVICE_TOKEN — for gm_customer_service)
+            .nest(
+                "/internal",
+                crate::routes::internal::dm::routes()
+                    .with_state(user_state.clone()),
+            )
+            // DM Auto-Reply Admin Routes (clear_review — requires user JWT auth)
+            .nest(
+                "/admin",
+                crate::routes::internal::dm::admin_routes()
+                    .layer(
+                        ServiceBuilder::new()
+                            .layer(middleware::from_fn_with_state(
+                                user_state.clone(),
+                                auth_middleware::auth,
+                            ))
+                            .layer(axum::Extension(user_state.clone())),
+                    )
+                    .with_state(user_state.clone()),
+            )
             // Novel Engine Routes (requires auth)
             .nest(
                 "/novel",

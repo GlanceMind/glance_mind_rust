@@ -10,6 +10,7 @@ pub mod ai_task_template_draft;
 pub mod aipub;
 pub mod campaign;
 pub mod crawler;
+pub mod dm_auto_reply;
 pub mod email_verification;
 pub mod login_log;
 pub mod material;

@@ -9,6 +9,7 @@ pub mod campaign_dto;
 pub mod campaign_lead_metrics_dto;
 pub mod common;
 pub mod crawler_dto;
+pub mod dm_auto_reply_dto;
 pub mod dm_dto;
 pub mod drama_dto;
 pub mod email_verification_dto;
