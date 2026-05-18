@@ -459,6 +459,7 @@ pub fn routes(
             .nest(
                 "/internal",
                 crate::routes::internal::dm::routes()
+                    .layer(axum::Extension(user_state.clone()))
                     .with_state(user_state.clone()),
             )
             // DM Auto-Reply Admin Routes (clear_review — requires user JWT auth)
