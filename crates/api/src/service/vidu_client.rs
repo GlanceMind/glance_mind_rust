@@ -13,7 +13,7 @@ const DEFAULT_BASE_URL: &str = "https://api.vidu.cn";
 
 /// Check if a model_key belongs to Vidu
 pub fn is_vidu_model(model_key: &str) -> bool {
-    model_key.starts_with("vidu-")
+    model_key == "vidu" || model_key.starts_with("vidu-")
 }
 
 #[derive(Clone)]
@@ -475,6 +475,17 @@ pub fn detect_generation_mode(model_key: &str) -> &str {
         "vidu-general-film" => "general_film",
         "vidu-ad-film" => "ad_film",
         _ => "text_to_video",
+    }
+}
+
+#[cfg(test)]
+mod is_vidu_model_tests {
+    use super::is_vidu_model;
+    #[test]
+    fn matches_unified_and_legacy_keys() {
+        assert!(is_vidu_model("vidu"));
+        assert!(is_vidu_model("vidu-i2v"));
+        assert!(!is_vidu_model("seedance"));
     }
 }
 
