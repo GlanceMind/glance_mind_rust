@@ -71,6 +71,14 @@ fn main() -> Result<()> {
         "VideoGenerationSpec",
         "UnifiedAiPubInput",
         "AccountMediaOverride",
+        // agent_task.proto
+        "AgentTaskEnvelope",
+        "AgentDomainRef",
+        "AgentTextOutput",
+        "AgentImageOutput",
+        "AgentVideoOutput",
+        "AgentTaskResult",
+        "AgentTaskEvent",
     ];
     for m in messages {
         config.type_attribute(
@@ -182,6 +190,7 @@ fn main() -> Result<()> {
             "../../proto/dm.proto",
             "../../proto/aipub.proto",
             "../../proto/patrol.proto",
+            "../../proto/agent_task.proto",
         ],
         &["../../proto/"],
     )?;
