@@ -62,11 +62,15 @@ pub fn validate_vidu_config(ai_input: &JsonValue) -> Result<ViduValidated, ApiEr
             .and_then(|c| c.get("duration"))
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
-        // v1 cap: Vidu supports 1-180s, but until one-click pricing is confirmed we bound worst-case
-        // spend with VIDU_ONECLICK_MAX_DURATION_SECONDS = 60 (easy to raise later).
+        // Vidu one-click enforces duration 10-180s (verified against the LIVE API:
+        // it returns 400 "duration must be between 10 and 180"; the public doc's
+        // "1-180" is wrong). We additionally v1-cap the max at 60s until one-click
+        // pricing is confirmed.
+        const VIDU_ONECLICK_MIN_DURATION_SECONDS: i64 = 10;
         const VIDU_ONECLICK_MAX_DURATION_SECONDS: i64 = 60;
-        if !(1..=VIDU_ONECLICK_MAX_DURATION_SECONDS).contains(&dur) {
-            return Err(invalid("oneclick duration must be 1-60 seconds (v1 cap)"));
+        if !(VIDU_ONECLICK_MIN_DURATION_SECONDS..=VIDU_ONECLICK_MAX_DURATION_SECONDS).contains(&dur)
+        {
+            return Err(invalid("oneclick duration must be 10-60 seconds"));
         }
     }
     Ok(ViduValidated {
@@ -94,9 +98,18 @@ mod tests {
     }
     #[test]
     fn rejects_oneclick_duration_out_of_range() {
+        // too long
         let ai = json!({"vidu_config": {"mode":"oneclick"}, "video_config": {"duration": 999},
                         "reference_image_urls":["https://x/1.png"]});
         assert!(validate_vidu_config(&ai).is_err());
+        // too short — Vidu's real minimum is 10s (live API rejects < 10)
+        let ai = json!({"vidu_config": {"mode":"oneclick"}, "video_config": {"duration": 5},
+                        "reference_image_urls":["https://x/1.png"]});
+        assert!(validate_vidu_config(&ai).is_err());
+        // boundary 10 accepted
+        let ai = json!({"vidu_config": {"mode":"oneclick"}, "video_config": {"duration": 10},
+                        "reference_image_urls":["https://x/1.png"]});
+        assert!(validate_vidu_config(&ai).is_ok());
     }
     #[test]
     fn rejects_oneclick_too_many_images() {
