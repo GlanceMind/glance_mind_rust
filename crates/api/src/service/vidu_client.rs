@@ -462,6 +462,21 @@ pub fn detect_default_duration(model_key: &str) -> i32 {
     }
 }
 
+/// Maps the canonical frontend mode token (stored in vidu_config.mode / multipart vidu_mode)
+/// to the internal generation-mode string used for client routing.
+pub fn vidu_token_to_internal(token: &str) -> Option<&'static str> {
+    Some(match token {
+        "text2video" => "text_to_video",
+        "image2video" => "image_to_video",
+        "start_end_frame" => "start_end_to_video",
+        "reference_video" => "reference_to_video",
+        "multi_frame" => "multi_frame",
+        "ad_film" => "ad_film",
+        "oneclick" => "oneclick",
+        _ => return None,
+    })
+}
+
 /// Detect generation mode from model_key.
 pub fn detect_generation_mode(model_key: &str) -> &str {
     match model_key {
@@ -475,6 +490,31 @@ pub fn detect_generation_mode(model_key: &str) -> &str {
         "vidu-general-film" => "general_film",
         "vidu-ad-film" => "ad_film",
         _ => "text_to_video",
+    }
+}
+
+#[cfg(test)]
+mod vidu_token_tests {
+    use super::vidu_token_to_internal;
+    #[test]
+    fn maps_all_seven_tokens() {
+        assert_eq!(vidu_token_to_internal("text2video"), Some("text_to_video"));
+        assert_eq!(
+            vidu_token_to_internal("image2video"),
+            Some("image_to_video")
+        );
+        assert_eq!(
+            vidu_token_to_internal("start_end_frame"),
+            Some("start_end_to_video")
+        );
+        assert_eq!(
+            vidu_token_to_internal("reference_video"),
+            Some("reference_to_video")
+        );
+        assert_eq!(vidu_token_to_internal("multi_frame"), Some("multi_frame"));
+        assert_eq!(vidu_token_to_internal("ad_film"), Some("ad_film"));
+        assert_eq!(vidu_token_to_internal("oneclick"), Some("oneclick"));
+        assert_eq!(vidu_token_to_internal("bogus"), None);
     }
 }
 
