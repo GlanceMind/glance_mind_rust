@@ -10,7 +10,7 @@ use crate::error::db_error::DbError;
 use crate::repository::aipub_repository::AipubRepository;
 use crate::service::{
     behavior_validation, image_generation_validation, reddit_validation, schedule_validation,
-    seedance_validation,
+    seedance_validation, vidu_validation,
 };
 use chrono::Utc;
 use diesel::result::Error as DieselError;
@@ -117,6 +117,12 @@ impl AipubService {
                 if seedance_validation::is_seedance_plan(&dto.ai_input) {
                     if let Some(ref ai_input) = dto.ai_input {
                         seedance_validation::validate_seedance_config(ai_input)?;
+                    }
+                }
+                // Vidu-specific validation when vidu_config is present
+                if vidu_validation::is_vidu_plan(&dto.ai_input) {
+                    if let Some(ref ai_input) = dto.ai_input {
+                        vidu_validation::validate_vidu_config(ai_input)?;
                     }
                 }
             }
