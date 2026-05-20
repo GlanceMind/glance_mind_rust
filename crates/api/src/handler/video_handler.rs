@@ -47,6 +47,9 @@ pub async fn create_video(
     let mut reference_images: Vec<Vec<u8>> = Vec::new();
     // Per-keyframe transition prompts (multi-frame only, JSON-encoded string[])
     let mut keyframe_prompts: Option<Vec<String>> = None;
+    // Vidu unified mode fields
+    let mut vidu_mode: Option<String> = None;
+    let mut vidu_quality: Option<String> = None;
 
     while let Some(field) = multipart
         .next_field()
@@ -143,6 +146,20 @@ pub async fn create_video(
                 })?;
                 keyframe_prompts = serde_json::from_str::<Vec<String>>(&text).ok();
             }
+            "vidu_mode" => {
+                vidu_mode = Some(field.text().await.map_err(|_| {
+                    ApiError::BusinessError(BusinessError::InvalidFormField(
+                        "vidu_mode".to_string(),
+                    ))
+                })?);
+            }
+            "vidu_quality" => {
+                vidu_quality = Some(field.text().await.map_err(|_| {
+                    ApiError::BusinessError(BusinessError::InvalidFormField(
+                        "vidu_quality".to_string(),
+                    ))
+                })?);
+            }
             _ => {}
         }
     }
@@ -181,6 +198,8 @@ pub async fn create_video(
         orientation: orientation.unwrap_or_default(),
         seconds,
         size,
+        vidu_mode,
+        vidu_quality,
     };
 
     // Validate parameters

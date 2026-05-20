@@ -2050,6 +2050,8 @@ impl ToolRegistry {
                     orientation,
                     seconds,
                     size,
+                    vidu_mode: None,
+                    vidu_quality: None,
                 };
                 let result = state
                     .video_service
