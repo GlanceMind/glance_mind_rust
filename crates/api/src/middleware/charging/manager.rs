@@ -27,6 +27,18 @@ fn calculate_final_cost(base_cost: &BigDecimal, cost_multiplier: &BigDecimal) ->
     base_cost * cost_multiplier
 }
 
+/// Fold an optional per-request extra multiplier into the model-row multiplier.
+/// When `extra` is `None` (all non-Vidu callers), returns `model_multiplier` unchanged.
+pub(crate) fn fold_multiplier(
+    model_multiplier: BigDecimal,
+    extra: Option<&BigDecimal>,
+) -> BigDecimal {
+    match extra {
+        Some(e) => model_multiplier * e,
+        None => model_multiplier,
+    }
+}
+
 fn points_to_rmb(points: &BigDecimal) -> BigDecimal {
     points / BigDecimal::from(100)
 }
@@ -44,13 +56,30 @@ impl ChargingManager {
         }
     }
 
-    /// Step 1: Calculate cost and check balance
+    /// Step 1: Calculate cost and check balance.
+    /// Delegates to `prepare_charging_with_multiplier` with no extra multiplier.
+    /// All existing call sites use this — behavior is unchanged for them.
     pub async fn prepare_charging(
         &self,
         user_id: i32,
         action_type: ActionType,
         ai_model_id: Option<i32>,
         platform_id: Option<i32>,
+    ) -> Result<ChargingContext, ApiError> {
+        self.prepare_charging_with_multiplier(user_id, action_type, ai_model_id, platform_id, None)
+            .await
+    }
+
+    /// Variant of `prepare_charging` that accepts an optional per-request extra multiplier.
+    /// The final cost_multiplier = fold_multiplier(model.cost_multiplier, extra_multiplier).
+    /// When `extra_multiplier` is `None` the result is identical to `prepare_charging`.
+    pub async fn prepare_charging_with_multiplier(
+        &self,
+        user_id: i32,
+        action_type: ActionType,
+        ai_model_id: Option<i32>,
+        platform_id: Option<i32>,
+        extra_multiplier: Option<BigDecimal>,
     ) -> Result<ChargingContext, ApiError> {
         // 1. Query pricing_rule - use different query logic based on action_type
         let pricing_rule = self
@@ -75,7 +104,7 @@ impl ChargingManager {
 
         let base_cost = pricing_rule.cost_points;
 
-        // 2. Query ai_model multiplier (if ai_model_id provided)
+        // 2. Query ai_model multiplier (if ai_model_id provided), then fold extra
         let cost_multiplier = if let Some(model_id) = ai_model_id {
             let model = self
                 .ai_model_repo
@@ -91,9 +120,9 @@ impl ChargingManager {
                 return Err(ApiError::BadRequest("AI model not active".to_string()));
             }
 
-            model.cost_multiplier
+            fold_multiplier(model.cost_multiplier, extra_multiplier.as_ref())
         } else {
-            BigDecimal::from(1)
+            fold_multiplier(BigDecimal::from(1), extra_multiplier.as_ref())
         };
 
         // 3. Calculate final cost: base_cost * cost_multiplier
@@ -199,12 +228,19 @@ impl ChargingManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{calculate_final_cost, points_to_rmb};
+    use super::{calculate_final_cost, fold_multiplier, points_to_rmb};
     use bigdecimal::BigDecimal;
     use std::str::FromStr;
 
     fn bd(value: &str) -> BigDecimal {
         BigDecimal::from_str(value).expect("valid decimal")
+    }
+
+    #[test]
+    fn fold_multiplier_applies_extra() {
+        assert_eq!(fold_multiplier(bd("1.0"), Some(&bd("2.0"))), bd("2.0"));
+        assert_eq!(fold_multiplier(bd("2.0"), Some(&bd("3.75"))), bd("7.50"));
+        assert_eq!(fold_multiplier(bd("2.0"), None), bd("2.0"));
     }
 
     #[test]

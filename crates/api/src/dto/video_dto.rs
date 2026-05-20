@@ -55,6 +55,12 @@ pub struct CreateVideoRequest {
     pub orientation: VideoOrientation,
     pub seconds: String, // "10" or "15"
     pub size: String,    // "1280x720" (landscape) or "720x1280" (portrait)
+    /// Explicit Vidu mode token (text2video|image2video|start_end_frame|reference_video|multi_frame|ad_film). oneclick is AIPub-only.
+    #[serde(default)]
+    pub vidu_mode: Option<String>,
+    /// Vidu quality tier (standard|fast). fast ⇒ viduq1/1080p.
+    #[serde(default)]
+    pub vidu_quality: Option<String>,
 }
 
 impl CreateVideoRequest {
@@ -139,6 +145,8 @@ mod tests {
             orientation: VideoOrientation::Portrait,
             seconds: seconds.to_string(),
             size: size.to_string(),
+            vidu_mode: None,
+            vidu_quality: None,
         }
     }
 

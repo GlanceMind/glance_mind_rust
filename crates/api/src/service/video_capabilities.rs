@@ -70,6 +70,21 @@ pub fn build_video_model_capabilities(model: &AiModel) -> VideoModelCapabilities
     }
 }
 
+/// Capabilities keyed by INTERNAL mode (the resolve_vidu_mode output). The existing
+/// model_key match remains as a fallback for legacy keys.
+pub fn vidu_capabilities_for_mode(internal_mode: &str) -> (String, bool, Option<i32>, i32, bool) {
+    match internal_mode {
+        "text_to_video" => ("none".to_string(), false, None, 0, false),
+        "image_to_video" => ("single".to_string(), true, None, 1, false),
+        "start_end_to_video" => ("start_end".to_string(), true, None, 2, false),
+        "reference_to_video" => ("reference_gallery".to_string(), true, None, 3, false),
+        "multi_frame" => ("multi_frame".to_string(), true, Some(3), 10, true),
+        "ad_film" => ("material_gallery".to_string(), true, None, 3, false),
+        "oneclick" => ("material_gallery".to_string(), true, Some(1), 7, false),
+        _ => ("none".to_string(), false, None, 0, false),
+    }
+}
+
 pub fn preferred_video_model(models: &[AiModel]) -> Option<&AiModel> {
     models
         .iter()
@@ -100,6 +115,43 @@ fn duration_option(value: &str, label: &str, description: Option<&str>) -> Video
 
 fn is_jimeng_model(key: &str, provider: &str) -> bool {
     key.starts_with("jimeng-") || provider.eq_ignore_ascii_case("jimeng")
+}
+
+#[cfg(test)]
+mod vidu_caps_by_mode_tests {
+    use super::vidu_capabilities_for_mode;
+    #[test]
+    fn caps_match_contract() {
+        // (image_input_mode, requires_image, min_images, max_images, supports_keyframe_prompts)
+        assert_eq!(
+            vidu_capabilities_for_mode("text_to_video"),
+            ("none".to_string(), false, None, 0, false)
+        );
+        assert_eq!(
+            vidu_capabilities_for_mode("image_to_video"),
+            ("single".to_string(), true, None, 1, false)
+        );
+        assert_eq!(
+            vidu_capabilities_for_mode("start_end_to_video"),
+            ("start_end".to_string(), true, None, 2, false)
+        );
+        assert_eq!(
+            vidu_capabilities_for_mode("reference_to_video"),
+            ("reference_gallery".to_string(), true, None, 3, false)
+        );
+        assert_eq!(
+            vidu_capabilities_for_mode("multi_frame"),
+            ("multi_frame".to_string(), true, Some(3), 10, true)
+        );
+        assert_eq!(
+            vidu_capabilities_for_mode("ad_film"),
+            ("material_gallery".to_string(), true, None, 3, false)
+        );
+        assert_eq!(
+            vidu_capabilities_for_mode("oneclick"),
+            ("material_gallery".to_string(), true, Some(1), 7, false)
+        );
+    }
 }
 
 #[cfg(test)]

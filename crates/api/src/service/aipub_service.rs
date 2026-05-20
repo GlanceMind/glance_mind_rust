@@ -10,7 +10,7 @@ use crate::error::db_error::DbError;
 use crate::repository::aipub_repository::AipubRepository;
 use crate::service::{
     behavior_validation, image_generation_validation, reddit_validation, schedule_validation,
-    seedance_validation,
+    seedance_validation, vidu_validation,
 };
 use chrono::Utc;
 use diesel::result::Error as DieselError;
@@ -117,6 +117,12 @@ impl AipubService {
                 if seedance_validation::is_seedance_plan(&dto.ai_input) {
                     if let Some(ref ai_input) = dto.ai_input {
                         seedance_validation::validate_seedance_config(ai_input)?;
+                    }
+                }
+                // Vidu-specific validation when vidu_config is present
+                if vidu_validation::is_vidu_plan(&dto.ai_input) {
+                    if let Some(ref ai_input) = dto.ai_input {
+                        vidu_validation::validate_vidu_config(ai_input)?;
                     }
                 }
             }
@@ -411,6 +417,63 @@ impl AipubService {
                             self.repo
                                 .freeze_budget_direct(user_id, total, "aipub_plan", plan.id)
                                 .await,
+                        )
+                    } else if vidu_validation::is_vidu_plan(&dto.ai_input) {
+                        use crate::service::vidu_pricing::{vidu_freeze_plan, ViduFreeze};
+                        let ai_ref = dto.ai_input.as_ref().unwrap();
+                        let validated = vidu_validation::validate_vidu_config(ai_ref)
+                            .expect("vidu_config already validated");
+                        let model_base = self
+                            .repo
+                            .get_model_cost_multiplier(plan.video_ai_model_id.unwrap())
+                            .map_err(|e| {
+                                ApiError::from(DbError::SomethingWentWrong(e.to_string()))
+                            })?;
+                        let quality = ai_ref
+                            .get("vidu_config")
+                            .and_then(|c| c.get("quality"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("standard");
+                        let duration = ai_ref
+                            .get("video_config")
+                            .and_then(|c| c.get("duration"))
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0);
+                        let chat_addon = if seedance_validation::has_content_prompt(&dto.ai_input) {
+                            plan.chat_ai_model_id
+                                .and_then(|id| self.repo.get_model_cost_multiplier(id).ok())
+                        } else {
+                            None
+                        };
+                        Some(
+                            match vidu_freeze_plan(
+                                &model_base,
+                                &validated.mode,
+                                quality,
+                                duration,
+                                chat_addon.as_ref(),
+                            ) {
+                                ViduFreeze::Legacy => {
+                                    self.repo
+                                        .freeze_budget(
+                                            user_id,
+                                            1,
+                                            0,
+                                            1,
+                                            plan.chat_ai_model_id,
+                                            None,
+                                            plan.video_ai_model_id,
+                                            "aipub_plan",
+                                            plan.id,
+                                        )
+                                        .await
+                                }
+                                ViduFreeze::Direct(total) => {
+                                    self.repo
+                                        .freeze_budget_direct(user_id, total, "aipub_plan", plan.id)
+                                        .await
+                                }
+                            },
                         )
                     } else {
                         // Existing LaoZhang/Vidu: 1 chat + 1 video

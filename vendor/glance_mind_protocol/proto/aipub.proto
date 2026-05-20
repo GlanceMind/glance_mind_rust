@@ -187,6 +187,10 @@ message ViduVideoConfig {
   string model_version = 4 [ json_name = "model_version" ];
   // Template name (for template2video mode)
   optional string template_name = 5 [ json_name = "template_name" ];
+  // Generation mode: "oneclick", "standard", etc. (mirrors SeedanceVideoConfig.mode)
+  string mode = 6 [ json_name = "mode" ];
+  // Quality preset: "fast", "quality", etc.
+  string quality = 7 [ json_name = "quality" ];
 }
 
 // Seedance 2.0 video generation configuration

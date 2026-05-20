@@ -425,9 +425,13 @@ impl VideoService {
             ApiError::InternalServerError("Vidu client not configured".to_string())
         })?;
 
-        let gen_mode = vidu_client::detect_generation_mode(model_key);
-        let model_version = vidu_client::detect_model_version(model_key).to_string();
-        let resolution = vidu_client::detect_resolution(model_key).to_string();
+        // Resolve mode: explicit token wins over legacy model_key derivation;
+        // reject AIPub-only modes (oneclick) on this direct path.
+        let gen_mode =
+            vidu_client::resolve_vidu_mode_for_direct(request.vidu_mode.as_deref(), model_key)?;
+        let quality = request.vidu_quality.as_deref().unwrap_or("standard");
+        let model_version = vidu_client::vidu_version_for(&gen_mode, quality).to_string();
+        let resolution = vidu_client::vidu_resolution_for(quality).to_string();
         let duration: i32 = request
             .seconds
             .parse()
@@ -438,7 +442,8 @@ impl VideoService {
             .as_ref()
             .map(|p| Self::strip_mention_tokens(p));
 
-        // For "fast" mode, auto-detect from input
+        // For legacy "vidu-fast" model (gen_mode == "fast"), auto-detect effective mode.
+        // The new explicit-mode path never produces "fast" — quality is now a separate field.
         let effective_mode = if gen_mode == "fast" {
             match (&image_data, &end_frame_data) {
                 (Some(_), Some(_)) => "start_end_to_video",
@@ -446,7 +451,7 @@ impl VideoService {
                 _ => "text_to_video",
             }
         } else {
-            gen_mode
+            gen_mode.as_str()
         };
 
         tracing::info!(

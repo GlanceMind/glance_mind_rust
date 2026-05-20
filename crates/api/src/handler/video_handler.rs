@@ -47,6 +47,9 @@ pub async fn create_video(
     let mut reference_images: Vec<Vec<u8>> = Vec::new();
     // Per-keyframe transition prompts (multi-frame only, JSON-encoded string[])
     let mut keyframe_prompts: Option<Vec<String>> = None;
+    // Vidu unified mode fields
+    let mut vidu_mode: Option<String> = None;
+    let mut vidu_quality: Option<String> = None;
 
     while let Some(field) = multipart
         .next_field()
@@ -143,6 +146,20 @@ pub async fn create_video(
                 })?;
                 keyframe_prompts = serde_json::from_str::<Vec<String>>(&text).ok();
             }
+            "vidu_mode" => {
+                vidu_mode = Some(field.text().await.map_err(|_| {
+                    ApiError::BusinessError(BusinessError::InvalidFormField(
+                        "vidu_mode".to_string(),
+                    ))
+                })?);
+            }
+            "vidu_quality" => {
+                vidu_quality = Some(field.text().await.map_err(|_| {
+                    ApiError::BusinessError(BusinessError::InvalidFormField(
+                        "vidu_quality".to_string(),
+                    ))
+                })?);
+            }
             _ => {}
         }
     }
@@ -181,6 +198,8 @@ pub async fn create_video(
         orientation: orientation.unwrap_or_default(),
         seconds,
         size,
+        vidu_mode,
+        vidu_quality,
     };
 
     // Validate parameters
@@ -190,13 +209,20 @@ pub async fn create_video(
 
     // Charge video generation using the parsed multipart model id so billing
     // always matches the actual model selected by the request body.
+    // For Vidu requests, apply per-mode extra multiplier (returns None for all other models).
+    let extra_multiplier = crate::service::vidu_pricing::direct_vidu_extra_multiplier(
+        request.vidu_mode.as_deref(),
+        request.vidu_quality.as_deref(),
+        &request.seconds,
+    );
     let charging_context = state
         .charging_manager
-        .prepare_charging(
+        .prepare_charging_with_multiplier(
             user.id,
             ActionType::VideoGenerate,
             request.ai_model_id,
             None,
+            extra_multiplier,
         )
         .await?;
 

@@ -13,7 +13,7 @@ const DEFAULT_BASE_URL: &str = "https://api.vidu.cn";
 
 /// Check if a model_key belongs to Vidu
 pub fn is_vidu_model(model_key: &str) -> bool {
-    model_key.starts_with("vidu-")
+    model_key == "vidu" || model_key.starts_with("vidu-")
 }
 
 #[derive(Clone)]
@@ -462,6 +462,74 @@ pub fn detect_default_duration(model_key: &str) -> i32 {
     }
 }
 
+/// Maps the canonical frontend mode token (stored in vidu_config.mode / multipart vidu_mode)
+/// to the internal generation-mode string used for client routing.
+pub fn vidu_token_to_internal(token: &str) -> Option<&'static str> {
+    Some(match token {
+        "text2video" => "text_to_video",
+        "image2video" => "image_to_video",
+        "start_end_frame" => "start_end_to_video",
+        "reference_video" => "reference_to_video",
+        "multi_frame" => "multi_frame",
+        "ad_film" => "ad_film",
+        "oneclick" => "oneclick",
+        _ => return None,
+    })
+}
+
+/// Derive the Vidu model version from (internal_mode, quality).
+/// `fast` quality always yields viduq1 regardless of mode.
+pub fn vidu_version_for(internal_mode: &str, quality: &str) -> &'static str {
+    if quality == "fast" {
+        return "viduq1";
+    }
+    match internal_mode {
+        "image_to_video" | "start_end_to_video" => "viduq3-turbo",
+        "multi_frame" => "viduq2-turbo",
+        _ => "viduq2",
+    }
+}
+
+/// Derive the Vidu resolution from quality.
+pub fn vidu_resolution_for(quality: &str) -> &'static str {
+    if quality == "fast" {
+        "1080p"
+    } else {
+        "720p"
+    }
+}
+
+/// Resolve the internal generation mode: explicit token wins; otherwise fall back
+/// to the legacy model_key derivation (keeps pre-migration plans/videos working).
+pub fn resolve_vidu_mode(explicit: Option<&str>, model_key: &str) -> Result<String, ApiError> {
+    if let Some(tok) = explicit.filter(|s| !s.is_empty()) {
+        return vidu_token_to_internal(tok)
+            .map(|s| s.to_string())
+            .ok_or_else(|| ApiError::BadRequest(format!("unknown vidu mode: {tok}")));
+    }
+    Ok(detect_generation_mode(model_key).to_string())
+}
+
+/// One-click general film is AIPub-only (v1); the direct /video/generate path rejects it.
+pub fn vidu_mode_supported_in_direct(internal_mode: &str) -> bool {
+    internal_mode != "oneclick"
+}
+
+/// Composed direct-path resolver: resolve the internal mode, then reject AIPub-only modes.
+/// `create_video_vidu` calls THIS so the rejection wiring is unit-tested (not just the predicate).
+pub fn resolve_vidu_mode_for_direct(
+    explicit: Option<&str>,
+    model_key: &str,
+) -> Result<String, ApiError> {
+    let m = resolve_vidu_mode(explicit, model_key)?;
+    if !vidu_mode_supported_in_direct(&m) {
+        return Err(ApiError::BadRequest(
+            "one-click general film is only available in the publishing studio".to_string(),
+        ));
+    }
+    Ok(m)
+}
+
 /// Detect generation mode from model_key.
 pub fn detect_generation_mode(model_key: &str) -> &str {
     match model_key {
@@ -475,6 +543,107 @@ pub fn detect_generation_mode(model_key: &str) -> &str {
         "vidu-general-film" => "general_film",
         "vidu-ad-film" => "ad_film",
         _ => "text_to_video",
+    }
+}
+
+#[cfg(test)]
+mod resolve_vidu_mode_tests {
+    use super::{resolve_vidu_mode, resolve_vidu_mode_for_direct, vidu_mode_supported_in_direct};
+    #[test]
+    fn explicit_token_wins() {
+        assert_eq!(
+            resolve_vidu_mode(Some("image2video"), "vidu").unwrap(),
+            "image_to_video"
+        );
+    }
+    #[test]
+    fn falls_back_to_model_key_when_absent() {
+        // legacy plan/video with no explicit mode + legacy key
+        assert_eq!(
+            resolve_vidu_mode(None, "vidu-multiframe").unwrap(),
+            "multi_frame"
+        );
+        assert_eq!(
+            resolve_vidu_mode(Some(""), "vidu-i2v").unwrap(),
+            "image_to_video"
+        );
+    }
+    #[test]
+    fn unknown_token_errors() {
+        assert!(resolve_vidu_mode(Some("nope"), "vidu").is_err());
+    }
+    #[test]
+    fn oneclick_not_supported_in_direct_path() {
+        assert!(!vidu_mode_supported_in_direct("oneclick"));
+        assert!(vidu_mode_supported_in_direct("image_to_video"));
+    }
+    #[test]
+    fn direct_resolver_rejects_explicit_oneclick_but_allows_others() {
+        assert!(resolve_vidu_mode_for_direct(Some("oneclick"), "vidu").is_err());
+        assert_eq!(
+            resolve_vidu_mode_for_direct(Some("image2video"), "vidu").unwrap(),
+            "image_to_video"
+        );
+        assert_eq!(
+            resolve_vidu_mode_for_direct(None, "vidu-i2v").unwrap(),
+            "image_to_video"
+        );
+    }
+}
+
+#[cfg(test)]
+mod vidu_version_tests {
+    use super::{vidu_resolution_for, vidu_version_for};
+    #[test]
+    fn fast_quality_forces_viduq1_1080p() {
+        assert_eq!(vidu_version_for("image_to_video", "fast"), "viduq1");
+        assert_eq!(vidu_resolution_for("fast"), "1080p");
+    }
+    #[test]
+    fn standard_defaults_per_mode() {
+        assert_eq!(
+            vidu_version_for("image_to_video", "standard"),
+            "viduq3-turbo"
+        );
+        assert_eq!(vidu_version_for("multi_frame", "standard"), "viduq2-turbo");
+        assert_eq!(vidu_version_for("text_to_video", "standard"), "viduq2");
+        assert_eq!(vidu_resolution_for("standard"), "720p");
+    }
+}
+
+#[cfg(test)]
+mod vidu_token_tests {
+    use super::vidu_token_to_internal;
+    #[test]
+    fn maps_all_seven_tokens() {
+        assert_eq!(vidu_token_to_internal("text2video"), Some("text_to_video"));
+        assert_eq!(
+            vidu_token_to_internal("image2video"),
+            Some("image_to_video")
+        );
+        assert_eq!(
+            vidu_token_to_internal("start_end_frame"),
+            Some("start_end_to_video")
+        );
+        assert_eq!(
+            vidu_token_to_internal("reference_video"),
+            Some("reference_to_video")
+        );
+        assert_eq!(vidu_token_to_internal("multi_frame"), Some("multi_frame"));
+        assert_eq!(vidu_token_to_internal("ad_film"), Some("ad_film"));
+        assert_eq!(vidu_token_to_internal("oneclick"), Some("oneclick"));
+        assert_eq!(vidu_token_to_internal("bogus"), None);
+    }
+}
+
+#[cfg(test)]
+mod is_vidu_model_tests {
+    use super::is_vidu_model;
+    #[test]
+    fn matches_unified_and_legacy_keys() {
+        assert!(is_vidu_model("vidu"));
+        assert!(is_vidu_model("vidu-i2v"));
+        assert!(!is_vidu_model("seedance"));
     }
 }
 
