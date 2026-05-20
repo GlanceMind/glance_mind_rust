@@ -27,6 +27,7 @@ pub mod seedance_validation;
 pub mod social_account_service;
 pub mod social_group_service;
 pub mod template_service;
+pub mod vidu_pricing;
 pub mod vidu_validation;
 // pub mod tikhub_client; // Replaced by laozhang_client
 pub mod drama_billing;
