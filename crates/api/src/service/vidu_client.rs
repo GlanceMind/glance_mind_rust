@@ -477,6 +477,37 @@ pub fn vidu_token_to_internal(token: &str) -> Option<&'static str> {
     })
 }
 
+/// Resolve the internal generation mode: explicit token wins; otherwise fall back
+/// to the legacy model_key derivation (keeps pre-migration plans/videos working).
+pub fn resolve_vidu_mode(explicit: Option<&str>, model_key: &str) -> Result<String, ApiError> {
+    if let Some(tok) = explicit.filter(|s| !s.is_empty()) {
+        return vidu_token_to_internal(tok)
+            .map(|s| s.to_string())
+            .ok_or_else(|| ApiError::BadRequest(format!("unknown vidu mode: {tok}")));
+    }
+    Ok(detect_generation_mode(model_key).to_string())
+}
+
+/// One-click general film is AIPub-only (v1); the direct /video/generate path rejects it.
+pub fn vidu_mode_supported_in_direct(internal_mode: &str) -> bool {
+    internal_mode != "oneclick"
+}
+
+/// Composed direct-path resolver: resolve the internal mode, then reject AIPub-only modes.
+/// `create_video_vidu` calls THIS so the rejection wiring is unit-tested (not just the predicate).
+pub fn resolve_vidu_mode_for_direct(
+    explicit: Option<&str>,
+    model_key: &str,
+) -> Result<String, ApiError> {
+    let m = resolve_vidu_mode(explicit, model_key)?;
+    if !vidu_mode_supported_in_direct(&m) {
+        return Err(ApiError::BadRequest(
+            "one-click general film is only available in the publishing studio".to_string(),
+        ));
+    }
+    Ok(m)
+}
+
 /// Detect generation mode from model_key.
 pub fn detect_generation_mode(model_key: &str) -> &str {
     match model_key {
@@ -490,6 +521,51 @@ pub fn detect_generation_mode(model_key: &str) -> &str {
         "vidu-general-film" => "general_film",
         "vidu-ad-film" => "ad_film",
         _ => "text_to_video",
+    }
+}
+
+#[cfg(test)]
+mod resolve_vidu_mode_tests {
+    use super::{resolve_vidu_mode, resolve_vidu_mode_for_direct, vidu_mode_supported_in_direct};
+    #[test]
+    fn explicit_token_wins() {
+        assert_eq!(
+            resolve_vidu_mode(Some("image2video"), "vidu").unwrap(),
+            "image_to_video"
+        );
+    }
+    #[test]
+    fn falls_back_to_model_key_when_absent() {
+        // legacy plan/video with no explicit mode + legacy key
+        assert_eq!(
+            resolve_vidu_mode(None, "vidu-multiframe").unwrap(),
+            "multi_frame"
+        );
+        assert_eq!(
+            resolve_vidu_mode(Some(""), "vidu-i2v").unwrap(),
+            "image_to_video"
+        );
+    }
+    #[test]
+    fn unknown_token_errors() {
+        assert!(resolve_vidu_mode(Some("nope"), "vidu").is_err());
+    }
+    #[test]
+    fn oneclick_not_supported_in_direct_path() {
+        assert!(!vidu_mode_supported_in_direct("oneclick"));
+        assert!(vidu_mode_supported_in_direct("image_to_video"));
+    }
+    #[test]
+    fn direct_resolver_rejects_explicit_oneclick_but_allows_others() {
+        assert!(resolve_vidu_mode_for_direct(Some("oneclick"), "vidu").is_err());
+        assert_eq!(
+            resolve_vidu_mode_for_direct(Some("image2video"), "vidu").unwrap(),
+            "image_to_video"
+        );
+        assert_eq!(
+            resolve_vidu_mode_for_direct(None, "vidu-i2v").unwrap(),
+            "image_to_video"
+        );
     }
 }
 
