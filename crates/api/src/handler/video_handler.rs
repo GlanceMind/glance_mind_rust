@@ -209,13 +209,20 @@ pub async fn create_video(
 
     // Charge video generation using the parsed multipart model id so billing
     // always matches the actual model selected by the request body.
+    // For Vidu requests, apply per-mode extra multiplier (returns None for all other models).
+    let extra_multiplier = crate::service::vidu_pricing::direct_vidu_extra_multiplier(
+        request.vidu_mode.as_deref(),
+        request.vidu_quality.as_deref(),
+        &request.seconds,
+    );
     let charging_context = state
         .charging_manager
-        .prepare_charging(
+        .prepare_charging_with_multiplier(
             user.id,
             ActionType::VideoGenerate,
             request.ai_model_id,
             None,
+            extra_multiplier,
         )
         .await?;
 
