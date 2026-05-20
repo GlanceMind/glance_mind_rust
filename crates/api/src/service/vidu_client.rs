@@ -477,6 +477,28 @@ pub fn vidu_token_to_internal(token: &str) -> Option<&'static str> {
     })
 }
 
+/// Derive the Vidu model version from (internal_mode, quality).
+/// `fast` quality always yields viduq1 regardless of mode.
+pub fn vidu_version_for(internal_mode: &str, quality: &str) -> &'static str {
+    if quality == "fast" {
+        return "viduq1";
+    }
+    match internal_mode {
+        "image_to_video" | "start_end_to_video" => "viduq3-turbo",
+        "multi_frame" => "viduq2-turbo",
+        _ => "viduq2",
+    }
+}
+
+/// Derive the Vidu resolution from quality.
+pub fn vidu_resolution_for(quality: &str) -> &'static str {
+    if quality == "fast" {
+        "1080p"
+    } else {
+        "720p"
+    }
+}
+
 /// Resolve the internal generation mode: explicit token wins; otherwise fall back
 /// to the legacy model_key derivation (keeps pre-migration plans/videos working).
 pub fn resolve_vidu_mode(explicit: Option<&str>, model_key: &str) -> Result<String, ApiError> {
@@ -566,6 +588,26 @@ mod resolve_vidu_mode_tests {
             resolve_vidu_mode_for_direct(None, "vidu-i2v").unwrap(),
             "image_to_video"
         );
+    }
+}
+
+#[cfg(test)]
+mod vidu_version_tests {
+    use super::{vidu_resolution_for, vidu_version_for};
+    #[test]
+    fn fast_quality_forces_viduq1_1080p() {
+        assert_eq!(vidu_version_for("image_to_video", "fast"), "viduq1");
+        assert_eq!(vidu_resolution_for("fast"), "1080p");
+    }
+    #[test]
+    fn standard_defaults_per_mode() {
+        assert_eq!(
+            vidu_version_for("image_to_video", "standard"),
+            "viduq3-turbo"
+        );
+        assert_eq!(vidu_version_for("multi_frame", "standard"), "viduq2-turbo");
+        assert_eq!(vidu_version_for("text_to_video", "standard"), "viduq2");
+        assert_eq!(vidu_resolution_for("standard"), "720p");
     }
 }
 
