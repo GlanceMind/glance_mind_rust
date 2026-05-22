@@ -10,6 +10,16 @@
 
 use serde_json::json;
 
+#[test]
+fn audientry_tool_is_registered_as_fallback() {
+    let defs = glance_mind_api::service::ai_chat::tool_registry::ToolRegistry::definitions();
+    let t = defs
+        .iter()
+        .find(|d| d.name == "audientry")
+        .expect("audientry tool present");
+    assert!(t.description.to_lowercase().contains("audience") || t.description.contains("受众"));
+}
+
 const BASE_URL: &str = "http://localhost:8000/api/v1";
 const TEST_USERNAME: &str = "jacksoom";
 const TEST_PASSWORD: &str = "Lifeng94101";

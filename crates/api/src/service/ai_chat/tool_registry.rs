@@ -92,6 +92,22 @@ impl ToolRegistry {
             // ── Phase 2: Crawler / content tools ──────────────────
             Self::def("list_campaign_contents", "列出营销活动的统一内容", SafetyLevel::ReadOnly, json!({ "type": "object", "properties": { "campaign_id": { "type": "integer", "description": "活动ID" }, "platform_id": { "type": "integer", "description": "平台ID" }, "page": { "type": "integer" }, "page_size": { "type": "integer" } }, "required": ["campaign_id", "platform_id"] })),
             Self::def("get_crawler_results", "获取爬虫任务结果", SafetyLevel::ReadOnly, json!({ "type": "object", "properties": { "task_id": { "type": "integer", "description": "爬虫任务ID" }, "page": { "type": "integer" }, "page_size": { "type": "integer" } }, "required": ["task_id"] })),
+            // ── Audientry (audience-entry analysis) ───────────────
+            Self::def(
+                "audientry",
+                "运行受众入场分析（M01-M07）。注意：/audientry 斜杠命令是确定性入口；此工具仅作自然语言兜底。",
+                SafetyLevel::ReadOnly,
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "product_name": {"type": "string"},
+                        "description": {"type": "string"},
+                        "landing_page_url": {"type": "string"},
+                        "locale": {"type": "string"}
+                    },
+                    "required": ["product_name", "description"]
+                }),
+            ),
         ]
     }
 
