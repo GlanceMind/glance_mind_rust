@@ -15,6 +15,24 @@ fn display_hint_for_tool(tool_name: &str) -> Option<&'static str> {
     }
 }
 
+/// Pure builder for the audientry tool-call audit row (R007). Records success on
+/// a completed relay and failure (timeout / interruption) otherwise. Kept pure so
+/// it is unit-testable without the DB.
+pub fn audientry_audit_row(user_id: i32, conversation_id: i32, success: bool) -> NewAiToolAuditLog {
+    NewAiToolAuditLog {
+        user_id,
+        conversation_id: Some(conversation_id),
+        tool_name: "audientry".into(),
+        safety_level: "read_only".into(),
+        success,
+        error_message: if success {
+            None
+        } else {
+            Some("audientry analysis did not complete (timeout or interruption)".into())
+        },
+    }
+}
+
 const PRODUCT_HELP_QUERY_CUES: &[&str] = &[
     "怎么",
     "如何",
