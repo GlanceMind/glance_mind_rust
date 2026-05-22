@@ -1,7 +1,15 @@
+use std::time::Duration;
+
 use crate::dto::ai_chat_dto::*;
+use crate::dto::audientry_dto::{AudientryWorkerTaskEnvelope, ProductBrief};
 use crate::dto::common::PageResponse;
 use crate::error::api_error::ApiError;
+use crate::service::ai_chat::audientry_input::{
+    is_audientry_command, parse_audientry_input, AudientryParse,
+};
 use crate::service::ai_chat::*;
+use crate::service::audientry_relay::relay_job_events;
+use crate::service::audientry_worker_dispatcher::AudientryWorkerDispatcher;
 use crate::state::user_state::UserState;
 use glance_mind_db::entity::ai_chat::*;
 use glance_mind_db::entity::ai_model::AiModel;
@@ -31,6 +39,30 @@ pub fn audientry_audit_row(user_id: i32, conversation_id: i32, success: bool) ->
             Some("audientry analysis did not complete (timeout or interruption)".into())
         },
     }
+}
+
+/// Wall-clock cap (seconds) for an audientry relay before it is considered timed out.
+const AUDIENTRY_MAX_SECS: u64 = 600;
+
+fn default_contract_version() -> String {
+    "2026-04-29".into()
+}
+
+/// Flatten a questionnaire submission's answers into the envelope's
+/// `questionnaire_answers` (string values; non-string values are stringified).
+fn questionnaire_answers_as_strings(
+    sub: &QuestionnaireSubmission,
+) -> std::collections::BTreeMap<String, String> {
+    sub.answers
+        .iter()
+        .map(|(k, v)| {
+            let s = match v {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            (k.clone(), s)
+        })
+        .collect()
 }
 
 const PRODUCT_HELP_QUERY_CUES: &[&str] = &[
@@ -514,6 +546,119 @@ impl AiChatService {
         Ok(())
     }
 
+    /// Deterministic `/audientry` handling (R001/R005/R007/R008): parse the
+    /// product brief (or ask for it via a questionnaire), enqueue a worker task,
+    /// relay the per-job phase/report stream, then persist a terminal assistant
+    /// message on BOTH success and failure (finding 18 — never leave the
+    /// conversation dangling), audit the run, and close with `message_end`.
+    async fn handle_audientry(
+        &self,
+        conv_id: i32,
+        user_id: i32,
+        content: &str,
+        sub: Option<&QuestionnaireSubmission>,
+        audientry_dispatcher: Option<AudientryWorkerDispatcher>,
+        tx: mpsc::Sender<SseEvent>,
+    ) -> Result<(), ApiError> {
+        // 1) parse → questionnaire or ready brief
+        let brief: ProductBrief = match parse_audientry_input(content, sub) {
+            AudientryParse::NeedInput(questionnaire) => {
+                let _ = tx.send(SseEvent::Questionnaire { questionnaire }).await;
+                let _ = tx
+                    .send(SseEvent::MessageEnd {
+                        message_id: 0,
+                        finish_reason: "stop".into(),
+                    })
+                    .await;
+                return Ok(());
+            }
+            AudientryParse::Ready(brief) => brief,
+        };
+
+        // 2) the redis-bearing dispatcher is injected at the handler.
+        let dispatcher = audientry_dispatcher.ok_or_else(|| {
+            ApiError::InternalServerError("audientry worker dispatcher not configured".into())
+        })?;
+
+        // 3) Rust is the sole writer of job_id (INV-06).
+        let job_id = format!("aud_{}", uuid::Uuid::new_v4());
+
+        // 4) build + enqueue the worker task envelope.
+        let envelope = AudientryWorkerTaskEnvelope {
+            contract_version: default_contract_version(),
+            job_id: job_id.clone(),
+            conversation_id: conv_id,
+            user_id,
+            product: brief,
+            questionnaire_answers: sub.map(questionnaire_answers_as_strings),
+        };
+        dispatcher
+            .enqueue(&envelope)
+            .await
+            .map_err(ApiError::InternalServerError)?;
+
+        // 5) relay the job's phase/report stream. We forward through an internal
+        //    channel so we can both re-emit each event to the client AND capture
+        //    the terminal report json for durable persistence.
+        let (relay_tx, mut relay_rx) = mpsc::channel::<SseEvent>(64);
+        let relay_handle = tokio::spawn(relay_job_events(
+            dispatcher.client(),
+            job_id.clone(),
+            relay_tx,
+            Duration::from_secs(AUDIENTRY_MAX_SECS),
+        ));
+
+        let mut report_json: Option<Value> = None;
+        while let Some(ev) = relay_rx.recv().await {
+            if let SseEvent::AudientryReport { data } = &ev {
+                report_json = Some(data.clone());
+            }
+            // client gone → stop forwarding (the relay also notices and exits).
+            if tx.send(ev).await.is_err() {
+                break;
+            }
+        }
+        let relayed: bool = match relay_handle.await {
+            Ok(Ok(terminal)) => terminal,
+            Ok(Err(e)) => {
+                tracing::warn!("audientry relay error for {job_id}: {e}");
+                false
+            }
+            Err(e) => {
+                tracing::warn!("audientry relay task join error for {job_id}: {e}");
+                false
+            }
+        };
+
+        // 6) persist a terminal assistant message on BOTH branches (finding 18).
+        let (content_text, tool_calls) = if relayed {
+            ("受众分析完成。".to_string(), report_json)
+        } else {
+            ("受众分析未能完成（超时或中断）。".to_string(), None)
+        };
+        let assistant_msg = self.repo.create_message(&NewAiMessage {
+            conversation_id: conv_id,
+            role: "assistant".into(),
+            content: content_text,
+            tool_calls,
+            tool_call_id: None,
+            plan_id: None,
+        })?;
+
+        // 7) audit the run (R007).
+        self.repo
+            .log_tool_call(&audientry_audit_row(user_id, conv_id, relayed))?;
+
+        // 8) close the stream.
+        let _ = tx
+            .send(SseEvent::MessageEnd {
+                message_id: assistant_msg.id,
+                finish_reason: if relayed { "stop" } else { "error" }.into(),
+            })
+            .await;
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn send_message(
         &self,
@@ -525,6 +670,7 @@ impl AiChatService {
         questionnaire_submission: Option<QuestionnaireSubmission>,
         state: &UserState,
         tx: mpsc::Sender<SseEvent>,
+        audientry_dispatcher: Option<AudientryWorkerDispatcher>,
     ) -> Result<(), ApiError> {
         if content.len() > MAX_MESSAGE_LENGTH {
             return Err(ApiError::BadRequest(format!(
@@ -561,6 +707,27 @@ impl AiChatService {
             tool_call_id: None,
             plan_id: None,
         })?;
+
+        // Deterministic /audientry interception (R001): runs before the LLM. The
+        // slash command is the canonical entry point; a questionnaire submission
+        // with intent=audientry is the resume path after the follow-up form.
+        if is_audientry_command(content)
+            || questionnaire_submission
+                .as_ref()
+                .map(|s| s.intent == "audientry")
+                .unwrap_or(false)
+        {
+            return self
+                .handle_audientry(
+                    conv_id,
+                    user_id,
+                    content,
+                    questionnaire_submission.as_ref(),
+                    audientry_dispatcher,
+                    tx,
+                )
+                .await;
+        }
 
         let history = self
             .repo

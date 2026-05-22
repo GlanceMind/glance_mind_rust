@@ -15,6 +15,7 @@ use crate::api_ok;
 use crate::dto::ai_chat_dto::*;
 use crate::error::api_error::ApiError;
 use crate::service::ai_chat::SseEvent;
+use crate::service::audientry_worker_dispatcher::AudientryWorkerDispatcher;
 use crate::state::user_state::UserState;
 use glance_mind_db::entity::User;
 use tokio_stream::StreamExt;
@@ -85,6 +86,7 @@ pub async fn get_messages(
 pub async fn send_message(
     Extension(user): Extension<User>,
     Extension(state): Extension<UserState>,
+    Extension(audientry_dispatcher): Extension<Option<AudientryWorkerDispatcher>>,
     Path(conv_id): Path<i32>,
     Json(req): Json<SendMessageRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
@@ -109,6 +111,7 @@ pub async fn send_message(
                 questionnaire_submission,
                 &state,
                 tx.clone(),
+                audientry_dispatcher,
             )
             .await
         {
