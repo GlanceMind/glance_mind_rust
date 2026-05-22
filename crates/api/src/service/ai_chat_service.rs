@@ -592,46 +592,61 @@ impl AiChatService {
             product: brief,
             questionnaire_answers: sub.map(questionnaire_answers_as_strings),
         };
-        dispatcher
-            .enqueue(&envelope)
-            .await
-            .map_err(ApiError::InternalServerError)?;
-
-        // 5) relay the job's phase/report stream. We forward through an internal
-        //    channel so we can both re-emit each event to the client AND capture
-        //    the terminal report json for durable persistence.
-        let (relay_tx, mut relay_rx) = mpsc::channel::<SseEvent>(64);
-        let relay_handle = tokio::spawn(relay_job_events(
-            dispatcher.client(),
-            job_id.clone(),
-            relay_tx,
-            Duration::from_secs(AUDIENTRY_MAX_SECS),
-        ));
-
+        // 5) enqueue + relay. On enqueue failure we do NOT early-return (that would
+        //    leave the SSE stream hanging with no terminal message); we fall through to
+        //    the terminal block below with relayed=false so the stream always closes and
+        //    a durable assistant message + audit row are written (review C-2).
         let mut report_json: Option<Value> = None;
-        while let Some(ev) = relay_rx.recv().await {
-            if let SseEvent::AudientryReport { data } = &ev {
-                report_json = Some(data.clone());
-            }
-            // client gone → stop forwarding (the relay also notices and exits).
-            if tx.send(ev).await.is_err() {
-                break;
-            }
-        }
-        let relayed: bool = match relay_handle.await {
-            Ok(Ok(terminal)) => terminal,
-            Ok(Err(e)) => {
-                tracing::warn!("audientry relay error for {job_id}: {e}");
-                false
-            }
+        let relayed: bool = match dispatcher.enqueue(&envelope).await {
             Err(e) => {
-                tracing::warn!("audientry relay task join error for {job_id}: {e}");
+                tracing::error!("audientry enqueue failed for {job_id}: {e}");
+                let _ = tx
+                    .send(SseEvent::Error {
+                        message: "受众分析服务暂时不可用，请稍后重试。".into(),
+                    })
+                    .await;
                 false
+            }
+            Ok(()) => {
+                // forward the job's phase/report stream through an internal channel so we
+                // can both re-emit each event to the client AND capture the terminal
+                // report json for durable persistence.
+                let (relay_tx, mut relay_rx) = mpsc::channel::<SseEvent>(64);
+                let relay_handle = tokio::spawn(relay_job_events(
+                    dispatcher.client(),
+                    job_id.clone(),
+                    relay_tx,
+                    Duration::from_secs(AUDIENTRY_MAX_SECS),
+                ));
+                while let Some(ev) = relay_rx.recv().await {
+                    if let SseEvent::AudientryReport { data } = &ev {
+                        report_json = Some(data.clone());
+                    }
+                    // client gone → stop forwarding (the relay also notices and exits).
+                    if tx.send(ev).await.is_err() {
+                        break;
+                    }
+                }
+                match relay_handle.await {
+                    Ok(Ok(terminal)) => terminal,
+                    Ok(Err(e)) => {
+                        tracing::warn!("audientry relay error for {job_id}: {e}");
+                        false
+                    }
+                    Err(e) => {
+                        tracing::warn!("audientry relay task join error for {job_id}: {e}");
+                        false
+                    }
+                }
             }
         };
 
-        // 6) persist a terminal assistant message on BOTH branches (finding 18).
-        let (content_text, tool_calls) = if relayed {
+        // 6) persist a terminal assistant message on BOTH branches (finding 18). If a
+        //    report was captured we persist it even when relayed=false (e.g. the client
+        //    disconnected right after the report arrived) so the conversation keeps the
+        //    completed analysis (review C-1).
+        let completed = relayed || report_json.is_some();
+        let (content_text, tool_calls) = if completed {
             ("受众分析完成。".to_string(), report_json)
         } else {
             ("受众分析未能完成（超时或中断）。".to_string(), None)
@@ -647,13 +662,13 @@ impl AiChatService {
 
         // 7) audit the run (R007).
         self.repo
-            .log_tool_call(&audientry_audit_row(user_id, conv_id, relayed))?;
+            .log_tool_call(&audientry_audit_row(user_id, conv_id, completed))?;
 
         // 8) close the stream.
         let _ = tx
             .send(SseEvent::MessageEnd {
                 message_id: assistant_msg.id,
-                finish_reason: if relayed { "stop" } else { "error" }.into(),
+                finish_reason: if completed { "stop" } else { "error" }.into(),
             })
             .await;
         Ok(())

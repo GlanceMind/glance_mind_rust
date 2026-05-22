@@ -118,12 +118,18 @@ pub async fn relay_job_events(
                 }
                 match pubsub.get_message() {
                     Ok(msg) => {
+                        // a healthy message proves the connection recovered: reset the
+                        // reconnect budget so transient blips over a long job don't
+                        // accumulate to MAX_RECONNECTS (review I-3).
+                        reconnects = 0;
                         let payload: String = msg.get_payload().unwrap_or_default();
                         if let Some(ev) = map_channel_payload(&payload) {
                             // receiver dropped => client gone, stop.
                             if tx.blocking_send(ev).is_err() {
                                 return Ok(false);
                             }
+                        } else {
+                            tracing::debug!("audientry relay {job_id}: ignored payload: {payload}");
                         }
                         if is_terminal(&payload) {
                             return Ok(true);
