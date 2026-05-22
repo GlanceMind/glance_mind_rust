@@ -4,6 +4,7 @@ pub mod ai_chat;
 pub mod ai_chat_service;
 pub mod ai_service;
 pub mod aipub_service;
+pub mod audientry_relay;
 pub mod audientry_worker_dispatcher;
 pub mod behavior_validation;
 pub mod campaign_service;
