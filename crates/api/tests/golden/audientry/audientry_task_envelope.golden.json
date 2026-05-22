@@ -1,0 +1,13 @@
+{
+  "contract_version": "2026-04-29",
+  "conversation_id": 4211,
+  "job_id": "aud_demo",
+  "product": {
+    "contract_version": "2026-04-29",
+    "description": "herbal tea for faster sleep onset",
+    "landing_page_url": "https://acme.example/sleep-tea",
+    "locale": "en-US",
+    "name": "Acme Sleep Tea"
+  },
+  "user_id": 87
+}

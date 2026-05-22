@@ -1,0 +1,782 @@
+{
+  "audit": {
+    "artifact_bundle_id": "aud_ref",
+    "contract_version": "2026-04-29",
+    "evidence_snapshot_id": "snapshot-strategy-persona-focus-planner-persona-focus-planner",
+    "module_runs": [
+      {
+        "contract_version": "2026-04-29",
+        "input_artifact_ids": [],
+        "module_name": "m01_product_understanding",
+        "module_run_id": "run-m01_product_understanding",
+        "output_artifact_ids": [
+          "artifact-m01-product-understanding"
+        ],
+        "status": "completed",
+        "warnings": []
+      },
+      {
+        "contract_version": "2026-04-29",
+        "input_artifact_ids": [
+          "artifact-m01-product-understanding"
+        ],
+        "module_name": "m02_buyer_hypothesis",
+        "module_run_id": "run-m02_buyer_hypothesis",
+        "output_artifact_ids": [
+          "artifact-m02-buyer-hypotheses"
+        ],
+        "status": "completed",
+        "warnings": []
+      },
+      {
+        "contract_version": "2026-04-29",
+        "input_artifact_ids": [
+          "artifact-m02-buyer-hypotheses"
+        ],
+        "module_name": "m03_social_entry_discovery",
+        "module_run_id": "run-m03_social_entry_discovery",
+        "output_artifact_ids": [
+          "artifact-m03-entry-panel"
+        ],
+        "status": "completed",
+        "warnings": []
+      },
+      {
+        "contract_version": "2026-04-29",
+        "input_artifact_ids": [
+          "artifact-m03-entry-panel"
+        ],
+        "module_name": "m04_intent_language",
+        "module_run_id": "run-m04_intent_language",
+        "output_artifact_ids": [
+          "artifact-m04-intent-validation"
+        ],
+        "status": "completed",
+        "warnings": []
+      },
+      {
+        "contract_version": "2026-04-29",
+        "input_artifact_ids": [
+          "artifact-m04-intent-validation"
+        ],
+        "module_name": "m05_persona_refinement",
+        "module_run_id": "run-m05_persona_refinement",
+        "output_artifact_ids": [
+          "artifact-m05-persona-selection"
+        ],
+        "status": "completed",
+        "warnings": []
+      },
+      {
+        "contract_version": "2026-04-29",
+        "input_artifact_ids": [
+          "artifact-m05-persona-selection"
+        ],
+        "module_name": "m06_strategy_recommendation",
+        "module_run_id": "run-m06_strategy_recommendation",
+        "output_artifact_ids": [
+          "artifact-m06-strategy-envelope"
+        ],
+        "status": "completed",
+        "warnings": []
+      },
+      {
+        "contract_version": "2026-04-29",
+        "input_artifact_ids": [
+          "artifact-m06-strategy-envelope"
+        ],
+        "module_name": "m07_simulation_sandbox",
+        "module_run_id": "run-m07_simulation_sandbox",
+        "output_artifact_ids": [
+          "artifact-m07-sandbox-feedback"
+        ],
+        "status": "completed",
+        "warnings": []
+      }
+    ]
+  },
+  "contract_version": "2026-04-29",
+  "evidence_index": [
+    {
+      "contract_version": "2026-04-29",
+      "kind": "quote",
+      "m04_decision": "validated",
+      "oss_ref": null,
+      "quote": "I need help protecting focus without losing control.",
+      "ref_id": "evidence-1",
+      "source": "reddit",
+      "url": "https://example.com/source-evidence-1"
+    },
+    {
+      "contract_version": "2026-04-29",
+      "kind": "quote",
+      "m04_decision": "validated",
+      "oss_ref": null,
+      "quote": "I need help protecting focus without losing control.",
+      "ref_id": "evidence-2",
+      "source": "reddit",
+      "url": "https://example.com/source-evidence-2"
+    },
+    {
+      "contract_version": "2026-04-29",
+      "kind": "quote",
+      "m04_decision": "validated",
+      "oss_ref": null,
+      "quote": "I need help protecting focus without losing control.",
+      "ref_id": "evidence-3",
+      "source": "reddit",
+      "url": "https://example.com/source-evidence-3"
+    }
+  ],
+  "job_id": "aud_demo",
+  "kind": "report",
+  "sections": {
+    "buyer_hypotheses": {
+      "contract_version": "2026-04-29",
+      "hypotheses": [
+        {
+          "confidence": "medium",
+          "contract_version": "2026-04-29",
+          "hypothesis_id": "hypothesis-1",
+          "job_to_be_done": {
+            "contract_version": "2026-04-29",
+            "job_id": "jtbd-hypothesis-1",
+            "statement": "reduce product-relevant workflow friction while staying in control"
+          },
+          "label": "category users trying to reduce product-relevant workflow friction",
+          "trace_refs": [
+            "product_summary:Focus App"
+          ],
+          "validation_status": "candidate"
+        },
+        {
+          "confidence": "medium",
+          "contract_version": "2026-04-29",
+          "hypothesis_id": "hypothesis-2",
+          "job_to_be_done": {
+            "contract_version": "2026-04-29",
+            "job_id": "jtbd-hypothesis-2",
+            "statement": "decide whether the promised benefit is credible"
+          },
+          "label": "skeptical buyers comparing Focus App claims",
+          "trace_refs": [
+            "product_summary:Focus App"
+          ],
+          "validation_status": "candidate"
+        },
+        {
+          "confidence": "medium",
+          "contract_version": "2026-04-29",
+          "hypothesis_id": "hypothesis-3",
+          "job_to_be_done": {
+            "contract_version": "2026-04-29",
+            "job_id": "jtbd-hypothesis-3",
+            "statement": "improve the routine without adding friction"
+          },
+          "label": "existing tool users dissatisfied with current category routines",
+          "trace_refs": [
+            "product_summary:Focus App"
+          ],
+          "validation_status": "candidate"
+        }
+      ]
+    },
+    "contract_version": "2026-04-29",
+    "intent_validation": {
+      "candidate_id": "persona-focus-planner",
+      "contract_version": "2026-04-29",
+      "cultural_risk": {
+        "blocked": false,
+        "contract_version": "2026-04-29",
+        "proxy_signals": [],
+        "reason": ""
+      },
+      "decision": {
+        "contract_version": "2026-04-29",
+        "limitations": [],
+        "reason": "validation policy thresholds are met",
+        "status": "validated"
+      },
+      "validated_entry": {
+        "contract_version": "2026-04-29",
+        "entry_id": "persona-focus-planner",
+        "evidence_refs": [
+          {
+            "claim": "buyers want autonomy-preserving focus support",
+            "contract_version": "2026-04-29",
+            "evidence_id": "evidence-1",
+            "quote": "I need help protecting focus without losing control.",
+            "source": {
+              "canonical_url": "https://example.com/source-evidence-1",
+              "captured_at": "2026-04-29T00:00:00Z",
+              "contract_version": "2026-04-29",
+              "platform": "reddit",
+              "source_id": "source-evidence-1",
+              "source_type": "observed"
+            }
+          },
+          {
+            "claim": "buyers want autonomy-preserving focus support",
+            "contract_version": "2026-04-29",
+            "evidence_id": "evidence-2",
+            "quote": "I need help protecting focus without losing control.",
+            "source": {
+              "canonical_url": "https://example.com/source-evidence-2",
+              "captured_at": "2026-04-29T00:00:00Z",
+              "contract_version": "2026-04-29",
+              "platform": "reddit",
+              "source_id": "source-evidence-2",
+              "source_type": "observed"
+            }
+          },
+          {
+            "claim": "buyers want autonomy-preserving focus support",
+            "contract_version": "2026-04-29",
+            "evidence_id": "evidence-3",
+            "quote": "I need help protecting focus without losing control.",
+            "source": {
+              "canonical_url": "https://example.com/source-evidence-3",
+              "captured_at": "2026-04-29T00:00:00Z",
+              "contract_version": "2026-04-29",
+              "platform": "reddit",
+              "source_id": "source-evidence-3",
+              "source_type": "observed"
+            }
+          }
+        ],
+        "label": "focus planners protecting autonomy",
+        "validation_decision": {
+          "contract_version": "2026-04-29",
+          "limitations": [],
+          "reason": "validation policy thresholds are met",
+          "status": "validated"
+        }
+      }
+    },
+    "persona_selection": {
+      "compression_ledger": {
+        "contract_version": "2026-04-29",
+        "entries": [
+          {
+            "candidate_id": "persona-focus-planner",
+            "contract_version": "2026-04-29",
+            "disposition": "selected",
+            "reason": "deterministic persona compression decision",
+            "support_count": 3
+          },
+          {
+            "candidate_id": "persona-general-productivity",
+            "contract_version": "2026-04-29",
+            "disposition": "preserved_not_selected",
+            "reason": "deterministic persona compression decision",
+            "support_count": 2
+          }
+        ]
+      },
+      "contract_version": "2026-04-29",
+      "selected_persona": {
+        "confidence": "medium",
+        "contract_version": "2026-04-29",
+        "evidence_refs": [
+          {
+            "claim": "buyers want autonomy-preserving focus support",
+            "contract_version": "2026-04-29",
+            "evidence_id": "evidence-1",
+            "quote": "I need help protecting focus without losing control.",
+            "source": {
+              "canonical_url": "https://example.com/source-evidence-1",
+              "captured_at": "2026-04-29T00:00:00Z",
+              "contract_version": "2026-04-29",
+              "platform": "reddit",
+              "source_id": "source-evidence-1",
+              "source_type": "observed"
+            }
+          },
+          {
+            "claim": "buyers want autonomy-preserving focus support",
+            "contract_version": "2026-04-29",
+            "evidence_id": "evidence-2",
+            "quote": "I need help protecting focus without losing control.",
+            "source": {
+              "canonical_url": "https://example.com/source-evidence-2",
+              "captured_at": "2026-04-29T00:00:00Z",
+              "contract_version": "2026-04-29",
+              "platform": "reddit",
+              "source_id": "source-evidence-2",
+              "source_type": "observed"
+            }
+          },
+          {
+            "claim": "buyers want autonomy-preserving focus support",
+            "contract_version": "2026-04-29",
+            "evidence_id": "evidence-3",
+            "quote": "I need help protecting focus without losing control.",
+            "source": {
+              "canonical_url": "https://example.com/source-evidence-3",
+              "captured_at": "2026-04-29T00:00:00Z",
+              "contract_version": "2026-04-29",
+              "platform": "reddit",
+              "source_id": "source-evidence-3",
+              "source_type": "observed"
+            }
+          }
+        ],
+        "job_to_be_done": "protect focus without surrendering control",
+        "label": "focus planners protecting autonomy",
+        "persona_id": "persona-focus-planner"
+      },
+      "status": "selected",
+      "tie_break_rule": "support_confidence_specificity_candidate_id"
+    },
+    "product_understanding": {
+      "category_state": {
+        "category": null,
+        "contract_version": "2026-04-29",
+        "maturity": null
+      },
+      "contract_version": "2026-04-29",
+      "decision_context": {
+        "contract_version": "2026-04-29",
+        "degradation_reason": null,
+        "degraded": false
+      },
+      "product_summary": {
+        "confidence": "medium",
+        "contract_version": "2026-04-29",
+        "facts": [],
+        "pain_candidates": [],
+        "product_name": "Focus App",
+        "seller_claims": [],
+        "validated_pains": []
+      }
+    },
+    "simulation_feedback": {
+      "augmentation_only": true,
+      "calibration_plan": {
+        "augmentation_only": true,
+        "baseline_required": true,
+        "confidence": "medium",
+        "contract_version": "2026-04-29",
+        "decision_rule": "Advance only if observed lift in ctr matches the expected direction 'increase' without triggering rejected avoid angles.",
+        "evidence_snapshot_id": "snapshot-strategy-persona-focus-planner-persona-focus-planner",
+        "experiment_required": true,
+        "metric": "ctr",
+        "observed_data_required": true,
+        "observed_outcome_refs": [],
+        "plan_id": "calibration-strategy-persona-focus-planner",
+        "required_observed_data": [
+          "baseline cohort outcome data",
+          "controlled experiment outcome data",
+          "qualitative objections from exposed audience"
+        ],
+        "status": "uncalibrated",
+        "strategy_id": "strategy-persona-focus-planner",
+        "suggested_experiment": "Compare the candidate angle against preserve observed evidence labels in message claims; establish a baseline before reading lift; run an experiment before strengthening causal claims; tie proof to focus planners protecting autonomy (validated) for focus planners protecting autonomy; protect focus without surrendering control; focus planners protecting autonomy.",
+        "what_cannot_be_concluded": [
+          "hard metric prediction",
+          "calibrated status",
+          "causal impact without observed outcome data"
+        ]
+      },
+      "contract_version": "2026-04-29",
+      "debate_report": {
+        "accepted_hypotheses": [
+          "Help focus planners protecting autonomy act on 'protecting focus without losing control' with proof of focus planners protecting autonomy. is plausible enough to test for response to focus planners protecting autonomy."
+        ],
+        "augmentation_only": true,
+        "confidence": "medium",
+        "contract_version": "2026-04-29",
+        "disagreements": [
+          "Whether connect focus planners protecting autonomy to observed 'protecting focus without losing control' language overcomes focus planners protecting autonomy (validated) is unresolved.",
+          "Whether focus planners protecting autonomy; protect focus without surrendering control; focus planners protecting autonomy generalizes is unresolved."
+        ],
+        "evidence_snapshot_id": "snapshot-strategy-persona-focus-planner-persona-focus-planner",
+        "limitations": [],
+        "rejected_hypotheses": [
+          "Do not use hard metric prediction.",
+          "Do not treat M07 simulation as observed evidence."
+        ],
+        "report_id": "debate-strategy-persona-focus-planner",
+        "role_outputs": [
+          {
+            "augmentation_only": true,
+            "claim": "Angle can be tested as connect focus planners protecting autonomy to observed 'protecting focus without losing control' language.",
+            "confidence": "medium",
+            "contract_version": "2026-04-29",
+            "counter_evidence": "Evidence only shows buyers want autonomy-preserving focus support; buyers want autonomy-preserving focus support; buyers want autonomy-preserving focus support.",
+            "critique": "Use Help focus planners protecting autonomy act on 'protecting focus without losing control' with proof of focus planners protecting autonomy. for focus planners protecting autonomy; protect focus without surrendering control; focus planners protecting autonomy.",
+            "evidence_snapshot_id": "snapshot-strategy-persona-focus-planner-persona-focus-planner",
+            "model_version": "model-v1",
+            "prompt_version": "prompt-v1",
+            "required_calibration": "Observe ctr only after baseline and controlled experiment data exist.",
+            "risk": "Positioning could drift into hard metric prediction.",
+            "role": "marketing_strategist",
+            "schema_version": "schema-v1",
+            "supporting_evidence_ids": [
+              "evidence-1",
+              "evidence-2",
+              "evidence-3"
+            ]
+          },
+          {
+            "augmentation_only": true,
+            "claim": "Observed quotes do not yet prove try the product in one focused work session.",
+            "confidence": "medium",
+            "contract_version": "2026-04-29",
+            "counter_evidence": "Counterpoint: observed evidence for focus planners protecting autonomy, plus a baseline and experiment before stronger claims.",
+            "critique": "Require preserve observed evidence labels in message claims; establish a baseline before reading lift; run an experiment before strengthening causal claims; tie proof to focus planners protecting autonomy (validated).",
+            "evidence_snapshot_id": "snapshot-strategy-persona-focus-planner-persona-focus-planner",
+            "model_version": "model-v1",
+            "prompt_version": "prompt-v1",
+            "required_calibration": "Observe ctr only after baseline and controlled experiment data exist.",
+            "risk": "Simulation may overread persona fit for persona-focus-planner.",
+            "role": "skeptical_researcher",
+            "schema_version": "schema-v1",
+            "supporting_evidence_ids": [
+              "evidence-1",
+              "evidence-2",
+              "evidence-3"
+            ]
+          },
+          {
+            "augmentation_only": true,
+            "claim": "Measurement must stay tied to ctr.",
+            "confidence": "medium",
+            "contract_version": "2026-04-29",
+            "counter_evidence": "No observed outcome lift is present in M07.",
+            "critique": "Baseline and experiment gates must precede conclusions.",
+            "evidence_snapshot_id": "snapshot-strategy-persona-focus-planner-persona-focus-planner",
+            "model_version": "model-v1",
+            "prompt_version": "prompt-v1",
+            "required_calibration": "Observe ctr only after baseline and controlled experiment data exist.",
+            "risk": "Hard metric prediction would violate the measurement contract.",
+            "role": "analytics_reviewer",
+            "schema_version": "schema-v1",
+            "supporting_evidence_ids": [
+              "evidence-1",
+              "evidence-2",
+              "evidence-3"
+            ]
+          },
+          {
+            "augmentation_only": true,
+            "claim": "Avoid hard metric prediction.",
+            "confidence": "medium",
+            "contract_version": "2026-04-29",
+            "counter_evidence": "Evidence does not prove cultural acceptability across contexts.",
+            "critique": "Keep agency explicit while reducing doubt that focus planners protecting autonomy applies to focus planners protecting autonomy.",
+            "evidence_snapshot_id": "snapshot-strategy-persona-focus-planner-persona-focus-planner",
+            "model_version": "model-v1",
+            "prompt_version": "prompt-v1",
+            "required_calibration": "Observe ctr only after baseline and controlled experiment data exist.",
+            "risk": "Over-personalization could cross augmentation boundaries.",
+            "role": "ethics_culture_reviewer",
+            "schema_version": "schema-v1",
+            "supporting_evidence_ids": [
+              "evidence-1",
+              "evidence-2",
+              "evidence-3"
+            ]
+          },
+          {
+            "augmentation_only": true,
+            "claim": "Accept testing the angle, reject treating it as proven.",
+            "confidence": "medium",
+            "contract_version": "2026-04-29",
+            "counter_evidence": "Disagreement remains around focus planners protecting autonomy (validated).",
+            "critique": "Proceed only with calibration for observed evidence for focus planners protecting autonomy, plus a baseline and experiment before stronger claims.",
+            "evidence_snapshot_id": "snapshot-strategy-persona-focus-planner-persona-focus-planner",
+            "model_version": "model-v1",
+            "prompt_version": "prompt-v1",
+            "required_calibration": "Observe ctr only after baseline and controlled experiment data exist.",
+            "risk": "Judge cannot convert simulated debate into observed evidence.",
+            "role": "judge_synthesizer",
+            "schema_version": "schema-v1",
+            "supporting_evidence_ids": [
+              "evidence-1",
+              "evidence-2",
+              "evidence-3"
+            ]
+          }
+        ],
+        "strategy_id": "strategy-persona-focus-planner",
+        "what_cannot_be_concluded": [
+          "No ctr movement can be concluded without observed outcomes.",
+          "No hard metric prediction can be made from simulated debate.",
+          "No proof of try the product in one focused work session exists in M07."
+        ]
+      },
+      "evidence_snapshot": {
+        "contract_version": "2026-04-29",
+        "evidence_refs": [
+          {
+            "claim": "buyers want autonomy-preserving focus support",
+            "contract_version": "2026-04-29",
+            "evidence_id": "evidence-1",
+            "quote": "I need help protecting focus without losing control.",
+            "source": {
+              "canonical_url": "https://example.com/source-evidence-1",
+              "captured_at": "2026-04-29T00:00:00Z",
+              "contract_version": "2026-04-29",
+              "platform": "reddit",
+              "source_id": "source-evidence-1",
+              "source_type": "observed"
+            }
+          },
+          {
+            "claim": "buyers want autonomy-preserving focus support",
+            "contract_version": "2026-04-29",
+            "evidence_id": "evidence-2",
+            "quote": "I need help protecting focus without losing control.",
+            "source": {
+              "canonical_url": "https://example.com/source-evidence-2",
+              "captured_at": "2026-04-29T00:00:00Z",
+              "contract_version": "2026-04-29",
+              "platform": "reddit",
+              "source_id": "source-evidence-2",
+              "source_type": "observed"
+            }
+          },
+          {
+            "claim": "buyers want autonomy-preserving focus support",
+            "contract_version": "2026-04-29",
+            "evidence_id": "evidence-3",
+            "quote": "I need help protecting focus without losing control.",
+            "source": {
+              "canonical_url": "https://example.com/source-evidence-3",
+              "captured_at": "2026-04-29T00:00:00Z",
+              "contract_version": "2026-04-29",
+              "platform": "reddit",
+              "source_id": "source-evidence-3",
+              "source_type": "observed"
+            }
+          }
+        ],
+        "input_hash": "eeecb64db57e960d2c1768900efcd673086b80483eab11b1352012cdd913da12",
+        "model_version": "model-v1",
+        "persona_id": "persona-focus-planner",
+        "prompt_version": "prompt-v1",
+        "schema_version": "schema-v1",
+        "snapshot_id": "snapshot-strategy-persona-focus-planner-persona-focus-planner",
+        "strategy_id": "strategy-persona-focus-planner"
+      },
+      "feedback_id": "feedback-strategy-persona-focus-planner",
+      "message_reaction_hypotheses": [
+        {
+          "augmentation_only": true,
+          "confidence": "medium",
+          "contract_version": "2026-04-29",
+          "evidence_snapshot_id": "snapshot-strategy-persona-focus-planner-persona-focus-planner",
+          "expected_negative_reaction": "May reject the angle as focus planners protecting autonomy (validated) or as hard metric prediction.",
+          "expected_positive_reaction": "May feel from hesitation to evidence-backed confidence if the message reduces doubt that focus planners protecting autonomy applies to focus planners protecting autonomy.",
+          "limitations": [],
+          "proof_gap": "Needs observed evidence for focus planners protecting autonomy, plus a baseline and experiment before stronger claims; specifically preserve observed evidence labels in message claims; establish a baseline before reading lift; run an experiment before strengthening causal claims; tie proof to focus planners protecting autonomy (validated).",
+          "reaction_id": "reaction-strategy-persona-focus-planner",
+          "strategy_id": "strategy-persona-focus-planner",
+          "summary": "Reaction hypothesis for 'Help focus planners protecting autonomy act on 'protecting focus without losing control' with proof of focus planners protecting autonomy.' remains simulated while testing response to focus planners protecting autonomy until preserve observed evidence labels in message claims; establish a baseline before reading lift; run an experiment before strengthening causal claims; tie proof to focus planners protecting autonomy (validated) is observed.",
+          "trigger": "focus planners protecting autonomy sees the message when the audience says 'protecting focus without losing control' around focus planners protecting autonomy while trying to protect focus without surrendering control."
+        }
+      ],
+      "simulations": [
+        {
+          "augmentation_only": true,
+          "confidence": "medium",
+          "contract_version": "2026-04-29",
+          "evidence_snapshot_id": "snapshot-strategy-persona-focus-planner-persona-focus-planner",
+          "likely_objection": "Objection: focus planners protecting autonomy (validated); avoid hard metric prediction.",
+          "limitations": [],
+          "opportunity": "Opportunity is connect focus planners protecting autonomy to observed 'protecting focus without losing control' language for focus planners protecting autonomy, but proof needed is observed evidence for focus planners protecting autonomy, plus a baseline and experiment before stronger claims.",
+          "reaction_summary": "Simulated response tests whether Help focus planners protecting autonomy act on 'protecting focus without losing control' with proof of focus planners protecting autonomy. can move response to focus planners protecting autonomy by shifting from uncertainty to 'buyers want support without losing autonomy' and from hesitation to evidence-backed confidence.",
+          "risk_flags": [
+            "friction to reduce: doubt that focus planners protecting autonomy applies to focus planners protecting autonomy",
+            "proof requirements: preserve observed evidence labels in message claims; establish a baseline before reading lift; run an experiment before strengthening causal claims; tie proof to focus planners protecting autonomy (validated)",
+            "avoid angles: hard metric prediction"
+          ],
+          "scenario": "focus planners protecting autonomy encounters 'Help focus planners protecting autonomy act on 'protecting focus without losing control' with proof of focus planners protecting autonomy.' when the audience says 'protecting focus without losing control' around focus planners protecting autonomy.",
+          "simulation_id": "simulation-strategy-persona-focus-planner",
+          "strategy_id": "strategy-persona-focus-planner"
+        }
+      ]
+    },
+    "social_entry_panel": {
+      "auditability": "complete",
+      "contract_version": "2026-04-29",
+      "entries": [
+        {
+          "canonical_url": "https://example.com/r/focus-1",
+          "contract_version": "2026-04-29",
+          "entry_id": "entry-1",
+          "excerpt": "I need help protecting focus without losing control.",
+          "hypothesis_id": "hypothesis-1",
+          "platform": "reddit",
+          "title": "I lose focus when planning"
+        },
+        {
+          "canonical_url": "https://example.com/r/focus-2",
+          "contract_version": "2026-04-29",
+          "entry_id": "entry-2",
+          "excerpt": "I want structure, but not another rigid system.",
+          "hypothesis_id": "hypothesis-1",
+          "platform": "reddit",
+          "title": "Planning tools feel controlling"
+        }
+      ],
+      "hypothesis_id": "hypothesis-1",
+      "panel_id": "panel-hypothesis-1",
+      "query_provenance": {
+        "contract_version": "2026-04-29",
+        "executed_at": "2026-04-29T00:00:00Z",
+        "generated_from": [
+          "hypothesis-1"
+        ],
+        "platform": "reddit",
+        "query": "focus planning context switching",
+        "query_id": "query-001",
+        "rank_cutoff": 20
+      },
+      "sampling_frame": {
+        "contract_version": "2026-04-29",
+        "excluded_source_rules": [
+          "ads",
+          "seller-owned pages"
+        ],
+        "platform_sampling_rule": "top organic discussions per platform",
+        "query": "focus planning context switching",
+        "rank_cutoff": 20,
+        "time_window": "2026-01-01..2026-04-29"
+      }
+    },
+    "strategy_envelope": {
+      "contract_version": "2026-04-29",
+      "envelope_id": "strategy-envelope-persona-focus-planner",
+      "recommendations": [
+        {
+          "angle": "Help focus planners protecting autonomy act on 'protecting focus without losing control' with proof of focus planners protecting autonomy.",
+          "audience_contexts": [
+            "focus planners protecting autonomy",
+            "protect focus without surrendering control",
+            "focus planners protecting autonomy"
+          ],
+          "avoid_angles": [
+            "hard metric prediction"
+          ],
+          "causal_pathway": {
+            "barrier": "focus planners protecting autonomy (validated)",
+            "behavior_to_change": "response to focus planners protecting autonomy",
+            "belief_shift": "from uncertainty to 'buyers want support without losing autonomy'",
+            "contract_version": "2026-04-29",
+            "current_state": "protect focus without surrendering control",
+            "emotional_shift": "from hesitation to evidence-backed confidence",
+            "friction_to_reduce": "doubt that focus planners protecting autonomy applies to focus planners protecting autonomy",
+            "intended_action": "try the product in one focused work session",
+            "mechanism": "connect focus planners protecting autonomy to observed 'protecting focus without losing control' language",
+            "proof_needed": "observed evidence for focus planners protecting autonomy, plus a baseline and experiment before stronger claims",
+            "trigger_context": "when the audience says 'protecting focus without losing control' around focus planners protecting autonomy"
+          },
+          "confidence": "medium",
+          "contract_version": "2026-04-29",
+          "evidence_refs": [
+            {
+              "claim": "buyers want autonomy-preserving focus support",
+              "contract_version": "2026-04-29",
+              "evidence_id": "evidence-1",
+              "quote": "I need help protecting focus without losing control.",
+              "source": {
+                "canonical_url": "https://example.com/source-evidence-1",
+                "captured_at": "2026-04-29T00:00:00Z",
+                "contract_version": "2026-04-29",
+                "platform": "reddit",
+                "source_id": "source-evidence-1",
+                "source_type": "observed"
+              }
+            },
+            {
+              "claim": "buyers want autonomy-preserving focus support",
+              "contract_version": "2026-04-29",
+              "evidence_id": "evidence-2",
+              "quote": "I need help protecting focus without losing control.",
+              "source": {
+                "canonical_url": "https://example.com/source-evidence-2",
+                "captured_at": "2026-04-29T00:00:00Z",
+                "contract_version": "2026-04-29",
+                "platform": "reddit",
+                "source_id": "source-evidence-2",
+                "source_type": "observed"
+              }
+            },
+            {
+              "claim": "buyers want autonomy-preserving focus support",
+              "contract_version": "2026-04-29",
+              "evidence_id": "evidence-3",
+              "quote": "I need help protecting focus without losing control.",
+              "source": {
+                "canonical_url": "https://example.com/source-evidence-3",
+                "captured_at": "2026-04-29T00:00:00Z",
+                "contract_version": "2026-04-29",
+                "platform": "reddit",
+                "source_id": "source-evidence-3",
+                "source_type": "observed"
+              }
+            }
+          ],
+          "governance_status": "ok",
+          "limitations": [],
+          "measurement_hypothesis": {
+            "baseline_required": true,
+            "contract_version": "2026-04-29",
+            "expected_direction": "increase",
+            "experiment_required": true,
+            "hard_prediction": null,
+            "metric": "ctr"
+          },
+          "persona_id": "persona-focus-planner",
+          "proof_requirements": [
+            "preserve observed evidence labels in message claims",
+            "establish a baseline before reading lift",
+            "run an experiment before strengthening causal claims",
+            "tie proof to focus planners protecting autonomy (validated)"
+          ],
+          "strategy_id": "strategy-persona-focus-planner"
+        }
+      ]
+    }
+  },
+  "status": "completed",
+  "summary": {
+    "contract_version": "2026-04-29",
+    "headline_strategy": "Help focus planners protecting autonomy act on 'protecting focus without losing control' with proof of focus planners protecting autonomy.",
+    "key_evidence": [
+      {
+        "contract_version": "2026-04-29",
+        "kind": "quote",
+        "m04_decision": "validated",
+        "oss_ref": null,
+        "quote": "I need help protecting focus without losing control.",
+        "ref_id": "evidence-1",
+        "source": "reddit",
+        "url": "https://example.com/source-evidence-1"
+      },
+      {
+        "contract_version": "2026-04-29",
+        "kind": "quote",
+        "m04_decision": "validated",
+        "oss_ref": null,
+        "quote": "I need help protecting focus without losing control.",
+        "ref_id": "evidence-2",
+        "source": "reddit",
+        "url": "https://example.com/source-evidence-2"
+      },
+      {
+        "contract_version": "2026-04-29",
+        "kind": "quote",
+        "m04_decision": "validated",
+        "oss_ref": null,
+        "quote": "I need help protecting focus without losing control.",
+        "ref_id": "evidence-3",
+        "source": "reddit",
+        "url": "https://example.com/source-evidence-3"
+      }
+    ],
+    "recommended_persona": "focus planners protecting autonomy"
+  }
+}

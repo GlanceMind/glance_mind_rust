@@ -199,6 +199,12 @@ pub enum SseEvent {
     PlanCompleted { plan_id: i32, summary: String },
     #[serde(rename = "error")]
     Error { message: String },
+    // Audientry: the full channel payload rides through as an opaque Value so the
+    // desktop receives every field (minus the "kind" discriminator stripped by the relay).
+    #[serde(rename = "audientry_phase")]
+    AudientryPhase { data: serde_json::Value },
+    #[serde(rename = "audientry_report")]
+    AudientryReport { data: serde_json::Value },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -278,6 +284,8 @@ impl SseEvent {
                 serde_json::json!({ "plan_id": plan_id, "summary": summary }),
             ),
             Self::Error { message } => ("error", serde_json::json!({ "message": message })),
+            Self::AudientryPhase { data } => ("audientry_phase", data.clone()),
+            Self::AudientryReport { data } => ("audientry_report", data.clone()),
         };
         format!(
             "event: {}\ndata: {}\n\n",

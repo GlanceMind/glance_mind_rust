@@ -1,3 +1,4 @@
+pub mod audientry_input;
 pub mod knowledge;
 pub mod llm_client;
 pub mod repository;

@@ -63,6 +63,16 @@ pub fn routes(
                 }
             };
 
+        let audientry_worker_dispatcher =
+            match crate::service::audientry_worker_dispatcher::AudientryWorkerDispatcher::from_env()
+            {
+                Ok(dispatcher) => Some(dispatcher),
+                Err(e) => {
+                    tracing::warn!("Audientry worker dispatcher unavailable: {e}");
+                    None
+                }
+            };
+
         // /api/v1
         Router::new()
             .nest(
@@ -396,6 +406,7 @@ pub fn routes(
                                 user_state.clone(),
                                 auth_middleware::auth,
                             ))
+                            .layer(axum::Extension(audientry_worker_dispatcher.clone()))
                             .layer(axum::Extension(user_state.clone())),
                     )
                     .with_state(user_state.clone()),
