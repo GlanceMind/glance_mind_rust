@@ -197,6 +197,8 @@ fn event_name(event: &SseEvent) -> &'static str {
         SseEvent::StepFailed { .. } => "step_failed",
         SseEvent::PlanCompleted { .. } => "plan_completed",
         SseEvent::Error { .. } => "error",
+        SseEvent::AudientryPhase { .. } => "audientry_phase",
+        SseEvent::AudientryReport { .. } => "audientry_report",
     }
 }
 
