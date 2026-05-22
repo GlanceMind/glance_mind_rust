@@ -4,7 +4,7 @@
 //!   1. a real redis (e.g. `docker compose -f docker-compose.e2e.yml up -d redis` in gm_audientry,
 //!      which exposes it on host port 6381), and
 //!   2. a running Python worker against the SAME redis, e.g.:
-//!        GM_AUDIENTRY_FAKE_PROVIDERS=1 REDIS_URL=redis://127.0.0.1:6381 python -m gm_audientry.worker
+//!      GM_AUDIENTRY_FAKE_PROVIDERS=1 REDIS_URL=redis://127.0.0.1:6381 python -m gm_audientry.worker
 //!
 //! Run:
 //!   RUN_REDIS_INTEGRATION_TESTS=1 REDIS_URL=redis://127.0.0.1:6381 \
