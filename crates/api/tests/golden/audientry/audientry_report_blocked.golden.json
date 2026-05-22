@@ -1,0 +1,212 @@
+{
+  "audit": {
+    "artifact_bundle_id": "aud_blocked",
+    "contract_version": "2026-04-29",
+    "evidence_snapshot_id": null,
+    "module_runs": [
+      {
+        "contract_version": "2026-04-29",
+        "input_artifact_ids": [],
+        "module_name": "m01_product_understanding",
+        "module_run_id": "run-m01_product_understanding",
+        "output_artifact_ids": [
+          "artifact-m01-product-understanding"
+        ],
+        "status": "completed",
+        "warnings": []
+      },
+      {
+        "contract_version": "2026-04-29",
+        "input_artifact_ids": [
+          "artifact-m01-product-understanding"
+        ],
+        "module_name": "m02_buyer_hypothesis",
+        "module_run_id": "run-m02_buyer_hypothesis",
+        "output_artifact_ids": [
+          "artifact-m02-buyer-hypotheses"
+        ],
+        "status": "completed",
+        "warnings": []
+      },
+      {
+        "contract_version": "2026-04-29",
+        "input_artifact_ids": [
+          "artifact-m02-buyer-hypotheses"
+        ],
+        "module_name": "m03_social_entry_discovery",
+        "module_run_id": "run-m03_social_entry_discovery",
+        "output_artifact_ids": [
+          "artifact-m03-entry-panel"
+        ],
+        "status": "completed",
+        "warnings": []
+      },
+      {
+        "contract_version": "2026-04-29",
+        "input_artifact_ids": [
+          "artifact-m03-entry-panel"
+        ],
+        "module_name": "m04_intent_language",
+        "module_run_id": "run-m04_intent_language",
+        "output_artifact_ids": [
+          "artifact-m04-intent-validation"
+        ],
+        "status": "blocked",
+        "warnings": [
+          "no observed evidence"
+        ]
+      }
+    ]
+  },
+  "contract_version": "2026-04-29",
+  "evidence_index": [],
+  "job_id": "aud_demo",
+  "kind": "report",
+  "sections": {
+    "buyer_hypotheses": {
+      "contract_version": "2026-04-29",
+      "hypotheses": [
+        {
+          "confidence": "medium",
+          "contract_version": "2026-04-29",
+          "hypothesis_id": "hypothesis-1",
+          "job_to_be_done": {
+            "contract_version": "2026-04-29",
+            "job_id": "jtbd-hypothesis-1",
+            "statement": "reduce product-relevant workflow friction while staying in control"
+          },
+          "label": "category users trying to reduce product-relevant workflow friction",
+          "trace_refs": [
+            "product_summary:Focus App"
+          ],
+          "validation_status": "candidate"
+        },
+        {
+          "confidence": "medium",
+          "contract_version": "2026-04-29",
+          "hypothesis_id": "hypothesis-2",
+          "job_to_be_done": {
+            "contract_version": "2026-04-29",
+            "job_id": "jtbd-hypothesis-2",
+            "statement": "decide whether the promised benefit is credible"
+          },
+          "label": "skeptical buyers comparing Focus App claims",
+          "trace_refs": [
+            "product_summary:Focus App"
+          ],
+          "validation_status": "candidate"
+        },
+        {
+          "confidence": "medium",
+          "contract_version": "2026-04-29",
+          "hypothesis_id": "hypothesis-3",
+          "job_to_be_done": {
+            "contract_version": "2026-04-29",
+            "job_id": "jtbd-hypothesis-3",
+            "statement": "improve the routine without adding friction"
+          },
+          "label": "existing tool users dissatisfied with current category routines",
+          "trace_refs": [
+            "product_summary:Focus App"
+          ],
+          "validation_status": "candidate"
+        }
+      ]
+    },
+    "contract_version": "2026-04-29",
+    "intent_validation": {
+      "candidate_id": "persona-focus-planner",
+      "contract_version": "2026-04-29",
+      "cultural_risk": {
+        "blocked": false,
+        "contract_version": "2026-04-29",
+        "proxy_signals": [],
+        "reason": ""
+      },
+      "decision": {
+        "contract_version": "2026-04-29",
+        "limitations": [],
+        "reason": "no observed evidence",
+        "status": "rejected"
+      },
+      "validated_entry": null
+    },
+    "product_understanding": {
+      "category_state": {
+        "category": null,
+        "contract_version": "2026-04-29",
+        "maturity": null
+      },
+      "contract_version": "2026-04-29",
+      "decision_context": {
+        "contract_version": "2026-04-29",
+        "degradation_reason": null,
+        "degraded": false
+      },
+      "product_summary": {
+        "confidence": "medium",
+        "contract_version": "2026-04-29",
+        "facts": [],
+        "pain_candidates": [],
+        "product_name": "Focus App",
+        "seller_claims": [],
+        "validated_pains": []
+      }
+    },
+    "social_entry_panel": {
+      "auditability": "complete",
+      "contract_version": "2026-04-29",
+      "entries": [
+        {
+          "canonical_url": "https://example.com/r/focus-1",
+          "contract_version": "2026-04-29",
+          "entry_id": "entry-1",
+          "excerpt": "I need help protecting focus without losing control.",
+          "hypothesis_id": "hypothesis-1",
+          "platform": "reddit",
+          "title": "I lose focus when planning"
+        },
+        {
+          "canonical_url": "https://example.com/r/focus-2",
+          "contract_version": "2026-04-29",
+          "entry_id": "entry-2",
+          "excerpt": "I want structure, but not another rigid system.",
+          "hypothesis_id": "hypothesis-1",
+          "platform": "reddit",
+          "title": "Planning tools feel controlling"
+        }
+      ],
+      "hypothesis_id": "hypothesis-1",
+      "panel_id": "panel-hypothesis-1",
+      "query_provenance": {
+        "contract_version": "2026-04-29",
+        "executed_at": "2026-04-29T00:00:00Z",
+        "generated_from": [
+          "hypothesis-1"
+        ],
+        "platform": "reddit",
+        "query": "focus planning context switching",
+        "query_id": "query-001",
+        "rank_cutoff": 20
+      },
+      "sampling_frame": {
+        "contract_version": "2026-04-29",
+        "excluded_source_rules": [
+          "ads",
+          "seller-owned pages"
+        ],
+        "platform_sampling_rule": "top organic discussions per platform",
+        "query": "focus planning context switching",
+        "rank_cutoff": 20,
+        "time_window": "2026-01-01..2026-04-29"
+      }
+    }
+  },
+  "status": "blocked",
+  "summary": {
+    "contract_version": "2026-04-29",
+    "headline_strategy": "No validated entry; analysis blocked at M04.",
+    "key_evidence": [],
+    "recommended_persona": ""
+  }
+}

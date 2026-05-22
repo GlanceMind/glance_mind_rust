@@ -1,0 +1,15 @@
+{
+  "artifact_id": "m03_panel",
+  "contract_version": "2026-04-29",
+  "evidence_refs": [
+    "ev_1",
+    "ev_14"
+  ],
+  "job_id": "aud_demo",
+  "kind": "phase",
+  "module_name": "m03_social_entry_discovery",
+  "partial_summary": "Found 42 candidate entries.",
+  "phase": "m03",
+  "status": "completed",
+  "warning": null
+}
