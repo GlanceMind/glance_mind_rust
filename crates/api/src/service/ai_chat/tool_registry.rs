@@ -2759,8 +2759,12 @@ mod tests {
     #[test]
     fn tool_count_matches_expected() {
         let defs = ToolRegistry::definitions();
-        // 27 original + 16 Phase 1 + 12 Phase 2 = 55
-        assert_eq!(defs.len(), 55, "Expected 55 tools (27 + 16 + 12)");
+        // 27 original + 16 Phase 1 + 12 Phase 2 + 1 audientry (NL fallback) = 56
+        assert_eq!(
+            defs.len(),
+            56,
+            "Expected 56 tools (27 + 16 + 12 + 1 audientry)"
+        );
     }
 
     #[test]
