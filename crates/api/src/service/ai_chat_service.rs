@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use crate::dto::ai_chat_dto::*;
 use crate::dto::audientry_dto::{AudientryWorkerTaskEnvelope, ProductBrief};
@@ -13,6 +13,8 @@ use crate::service::audientry_worker_dispatcher::AudientryWorkerDispatcher;
 use crate::state::user_state::UserState;
 use glance_mind_db::entity::ai_chat::*;
 use glance_mind_db::entity::ai_model::AiModel;
+use glance_mind_db::entity::platform::Platform;
+use glance_mind_db::entity::region::Region;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
@@ -145,6 +147,600 @@ const GENERIC_WRITING_CUES: &[&str] = &[
     "例子",
     "网红笔记",
 ];
+
+const EDITABLE_TEMPLATE_MARKER: &str = "<!-- gm:editable-template -->";
+
+const TASK_CREATE_CUES: &[&str] = &[
+    "创建", "新建", "建立", "生成", "帮我", "create", "build", "set up", "setup",
+];
+
+const SOCIAL_STUDIO_TASK_CUES: &[&str] = &[
+    "社媒工作室",
+    "社媒任务",
+    "社媒",
+    "营销活动",
+    "智能获客",
+    "获客",
+    "campaign",
+    "social media studio",
+    "social studio",
+];
+
+const PUBLISH_TASK_CUES: &[&str] = &[
+    "ai发布",
+    "ai 发布",
+    "发布计划",
+    "发布任务",
+    "发布内容",
+    "publish plan",
+    "publish task",
+    "aipub",
+];
+
+const PLATFORM_DETAIL_CUES: &[&str] = &[
+    "tiktok",
+    "tik tok",
+    "facebook",
+    "instagram",
+    "reddit",
+    "youtube",
+    "linkedin",
+    "twitter",
+    "x ",
+    "小红书",
+    "抖音",
+    "快手",
+    "平台",
+];
+
+const REGION_OR_LANGUAGE_DETAIL_CUES: &[&str] = &[
+    "地区",
+    "语言",
+    "中文",
+    "英文",
+    "美国",
+    "日本",
+    "欧洲",
+    "东南亚",
+    "region",
+    "language",
+    "english",
+    "chinese",
+];
+
+const PRODUCT_DETAIL_CUES: &[&str] = &[
+    "产品", "品牌", "业务", "卖点", "product", "brand", "business",
+];
+
+const AUDIENCE_DETAIL_CUES: &[&str] = &[
+    "目标用户",
+    "目标客户",
+    "用户",
+    "客户",
+    "受众",
+    "人群",
+    "audience",
+    "persona",
+];
+
+const CAMPAIGN_DETAIL_CUES: &[&str] = &[
+    "关键词",
+    "话题",
+    "账号分组",
+    "社交账号",
+    "预算",
+    "扫描",
+    "监控",
+    "频率",
+    "keyword",
+    "topic",
+    "group",
+    "account",
+    "budget",
+    "scan",
+    "frequency",
+];
+
+const PUBLISH_DETAIL_CUES: &[&str] = &[
+    "视频",
+    "图文",
+    "帖子",
+    "短视频",
+    "文案",
+    "素材",
+    "账号",
+    "分组",
+    "发布时间",
+    "频率",
+    "content_type",
+    "video",
+    "post",
+    "reel",
+    "story",
+    "caption",
+    "asset",
+    "schedule",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditableTaskTemplateKind {
+    SocialStudio,
+    PublishPlan,
+}
+
+fn contains_any(lower: &str, cues: &[&str]) -> bool {
+    cues.iter().any(|cue| lower.contains(cue))
+}
+
+fn task_detail_score(lower: &str, kind: EditableTaskTemplateKind) -> usize {
+    let mut score = 0;
+    for cues in [
+        PLATFORM_DETAIL_CUES,
+        REGION_OR_LANGUAGE_DETAIL_CUES,
+        PRODUCT_DETAIL_CUES,
+        AUDIENCE_DETAIL_CUES,
+    ] {
+        if contains_any(lower, cues) {
+            score += 1;
+        }
+    }
+
+    let task_cues = match kind {
+        EditableTaskTemplateKind::SocialStudio => CAMPAIGN_DETAIL_CUES,
+        EditableTaskTemplateKind::PublishPlan => PUBLISH_DETAIL_CUES,
+    };
+    if contains_any(lower, task_cues) {
+        score += 1;
+    }
+    if lower.chars().any(|ch| ch.is_ascii_digit()) {
+        score += 1;
+    }
+
+    score
+}
+
+fn infer_editable_task_template_kind(
+    content: &str,
+    ui_capabilities: &AiChatUiCapabilities,
+    has_questionnaire_submission: bool,
+) -> Option<EditableTaskTemplateKind> {
+    if !ui_capabilities.editable_markdown_template || has_questionnaire_submission {
+        return None;
+    }
+
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lower = trimmed.to_lowercase();
+    if !contains_any(&lower, TASK_CREATE_CUES) {
+        return None;
+    }
+
+    let kind = if contains_any(&lower, PUBLISH_TASK_CUES) {
+        EditableTaskTemplateKind::PublishPlan
+    } else if contains_any(&lower, SOCIAL_STUDIO_TASK_CUES) {
+        EditableTaskTemplateKind::SocialStudio
+    } else {
+        return None;
+    };
+
+    if task_detail_score(&lower, kind) >= 3 {
+        return None;
+    }
+
+    Some(kind)
+}
+
+fn build_editable_task_template(kind: EditableTaskTemplateKind) -> String {
+    let table = match kind {
+        EditableTaskTemplateKind::SocialStudio => {
+            "## 创建 AI 社媒工作室任务\n\n\
+            | 字段 | 内容 |\n\
+            | --- | --- |\n\
+            | 产品/业务 |  |\n\
+            | 目标平台 |  |\n\
+            | 目标地区/语言 |  |\n\
+            | 目标用户 |  |\n\
+            | 关键词/话题 |  |\n\
+            | 账号分组/社交账号 |  |\n\
+            | 内容风格 |  |\n\
+            | 监控或互动频率 |  |\n\
+            | 预算/扫描量 |  |\n\
+            | 特殊要求 |  |"
+        }
+        EditableTaskTemplateKind::PublishPlan => {
+            "## 创建 AI 发布任务\n\n\
+            | 字段 | 内容 |\n\
+            | --- | --- |\n\
+            | 发布平台 |  |\n\
+            | Reddit 子版块 |  |\n\
+            | 账号/分组 |  |\n\
+            | 内容类型 |  |\n\
+            | 发布主题或完整文案 |  |\n\
+            | 素材/视频要求 |  |\n\
+            | AI 模型偏好 |  |\n\
+            | 发布时间或频率 |  |\n\
+            | 成功标准 |  |\n\
+            | 特殊要求 |  |"
+        }
+    };
+
+    format!(
+        "信息还不够完整。请直接修改下面的 Markdown 模板，补充后发送给我：\n\n{}\n{}",
+        EDITABLE_TEMPLATE_MARKER, table
+    )
+}
+
+fn parse_markdown_table_fields(content: &str) -> BTreeMap<String, String> {
+    let mut fields = BTreeMap::new();
+    for line in content.lines().map(str::trim) {
+        if !line.starts_with('|') || !line.ends_with('|') {
+            continue;
+        }
+
+        let cells: Vec<&str> = line.trim_matches('|').split('|').map(str::trim).collect();
+        if cells.len() < 2 {
+            continue;
+        }
+
+        let key = cells[0].trim();
+        let value = cells[1].trim();
+        if key.is_empty()
+            || value.is_empty()
+            || key.eq_ignore_ascii_case("字段")
+            || key.eq_ignore_ascii_case("field")
+            || key.chars().all(|ch| ch == '-' || ch == ':')
+        {
+            continue;
+        }
+
+        fields.insert(key.to_string(), value.to_string());
+    }
+    fields
+}
+
+fn template_field(fields: &BTreeMap<String, String>, labels: &[&str]) -> Option<String> {
+    fields
+        .iter()
+        .find(|(key, _)| labels.iter().any(|label| key.contains(label)))
+        .map(|(_, value)| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn submitted_template_kind(
+    content: &str,
+    fields: &BTreeMap<String, String>,
+) -> Option<EditableTaskTemplateKind> {
+    let lower = content.to_lowercase();
+    if lower.contains("创建 ai 发布") || template_field(fields, &["发布平台", "内容类型"]).is_some()
+    {
+        return Some(EditableTaskTemplateKind::PublishPlan);
+    }
+
+    if lower.contains("创建 ai 社媒工作室")
+        || template_field(fields, &["产品/业务", "目标平台", "关键词/话题"]).is_some()
+    {
+        return Some(EditableTaskTemplateKind::SocialStudio);
+    }
+
+    None
+}
+
+fn find_platform_id_in_text(text: &str, platforms: &[Platform]) -> Option<i32> {
+    let normalized = text.to_lowercase();
+    platforms.iter().find_map(|platform| {
+        let display = platform.display_name.to_lowercase();
+        let name = platform.name.to_lowercase();
+        if normalized.contains(&display) || normalized.contains(&name) {
+            Some(platform.id)
+        } else {
+            None
+        }
+    })
+}
+
+fn region_aliases(code: &str) -> &'static [&'static str] {
+    match code {
+        "us" => &[
+            "美国",
+            "美区",
+            "usa",
+            "u.s.",
+            "united states",
+            "united states of america",
+        ],
+        "gb" => &["英国", "英区", "uk", "great britain", "britain"],
+        "jp" => &["日本", "日区", "japan"],
+        "tw" => &["台湾", "台区", "taiwan"],
+        _ => &[],
+    }
+}
+
+fn find_region_id_in_text(text: &str, regions: &[Region]) -> Option<i32> {
+    let normalized = text.to_lowercase();
+    regions.iter().find_map(|region| {
+        let display = region.display_name.to_lowercase();
+        let name = region.name.to_lowercase();
+        let code = region.code.to_lowercase();
+        if normalized.contains(&display)
+            || normalized.contains(&name)
+            || normalized.contains(&format!("地区 {code}"))
+            || normalized.contains(&format!("地区{code}"))
+            || normalized.contains(&format!("region {code}"))
+            || normalized.contains(&format!("({code})"))
+            || normalized.contains(&format!(" {code} "))
+            || region_aliases(&code)
+                .iter()
+                .any(|alias| normalized.contains(alias))
+        {
+            Some(region.id)
+        } else {
+            None
+        }
+    })
+}
+
+fn numbers_from_text(text: &str) -> Vec<f64> {
+    let mut numbers = Vec::new();
+    let mut current = String::new();
+    for ch in text.chars() {
+        if ch.is_ascii_digit() || ch == '.' {
+            current.push(ch);
+        } else if !current.is_empty() {
+            if let Ok(value) = current.parse::<f64>() {
+                numbers.push(value);
+            }
+            current.clear();
+        }
+    }
+    if !current.is_empty() {
+        if let Ok(value) = current.parse::<f64>() {
+            numbers.push(value);
+        }
+    }
+    numbers
+}
+
+fn short_name_fragment(value: &str) -> String {
+    let fragment: String = value.trim().chars().take(48).collect();
+    if fragment.is_empty() {
+        "AI Assistant".into()
+    } else {
+        fragment
+    }
+}
+
+fn content_type_from_template(value: &str) -> String {
+    let lower = value.to_lowercase();
+    if lower.contains("video") || lower.contains("视频") || lower.contains("短视频") {
+        "video".into()
+    } else if lower.contains("reel") {
+        "reel".into()
+    } else if lower.contains("story") || lower.contains("故事") {
+        "story".into()
+    } else if lower.contains("image") || lower.contains("图片") || lower.contains("图文") {
+        "image".into()
+    } else {
+        "post".into()
+    }
+}
+
+fn plan_type_for_template(platform_text: &str, content_type: &str) -> String {
+    let platform = platform_text.to_lowercase();
+    if platform.contains("reddit") {
+        return match content_type {
+            "image" => "reddit_image".into(),
+            "link" => "reddit_link".into(),
+            _ => "reddit_text".into(),
+        };
+    }
+    if content_type == "video" {
+        "single_video".into()
+    } else {
+        "batch_text".into()
+    }
+}
+
+async fn build_plan_proposal_from_editable_task_template(
+    content: &str,
+    state: &UserState,
+) -> Result<Option<PlanProposal>, ApiError> {
+    let fields = parse_markdown_table_fields(content);
+    if fields.is_empty() {
+        return Ok(None);
+    }
+
+    match submitted_template_kind(content, &fields) {
+        Some(EditableTaskTemplateKind::SocialStudio) => {
+            build_campaign_plan_proposal_from_template(&fields, state)
+                .await
+                .map(Some)
+        }
+        Some(EditableTaskTemplateKind::PublishPlan) => {
+            build_publish_plan_proposal_from_template(&fields, state)
+                .await
+                .map(Some)
+        }
+        None => Ok(None),
+    }
+}
+
+async fn build_campaign_plan_proposal_from_template(
+    fields: &BTreeMap<String, String>,
+    state: &UserState,
+) -> Result<PlanProposal, ApiError> {
+    let product = template_field(fields, &["产品/业务", "产品", "业务"])
+        .ok_or_else(|| ApiError::BadRequest("产品/业务不能为空".into()))?;
+    let platform_text = template_field(fields, &["目标平台", "平台"])
+        .ok_or_else(|| ApiError::BadRequest("目标平台不能为空".into()))?;
+    let region_text = template_field(fields, &["目标地区/语言", "地区", "语言"]);
+    let audience = template_field(fields, &["目标用户", "目标客户", "受众"]);
+    let keywords = template_field(fields, &["关键词/话题", "关键词", "话题"]);
+    let style = template_field(fields, &["内容风格", "风格"]);
+    let frequency = template_field(fields, &["监控或互动频率", "频率"]);
+    let budget_scan = template_field(fields, &["预算/扫描量", "预算", "扫描"]);
+    let special = template_field(fields, &["特殊要求", "要求"]);
+
+    let platforms = state
+        .platform_service
+        .get_all_platforms()
+        .await
+        .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+    let platform_id = find_platform_id_in_text(&platform_text, &platforms)
+        .ok_or_else(|| ApiError::BadRequest(format!("无法识别目标平台：{platform_text}")))?;
+    let regions = state
+        .platform_service
+        .get_regions_by_platform(platform_id)
+        .await
+        .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+    let region_id = region_text
+        .as_deref()
+        .and_then(|text| find_region_id_in_text(text, &regions))
+        .or_else(|| regions.first().map(|region| region.id))
+        .ok_or_else(|| ApiError::BadRequest("目标平台没有可用地区".into()))?;
+
+    let mut product_prompt_parts = vec![format!("产品/业务：{product}")];
+    if let Some(value) = &audience {
+        product_prompt_parts.push(format!("目标用户：{value}"));
+    }
+    if let Some(value) = &style {
+        product_prompt_parts.push(format!("内容风格：{value}"));
+    }
+    if let Some(value) = &frequency {
+        product_prompt_parts.push(format!("监控或互动频率：{value}"));
+    }
+    if let Some(value) = &special {
+        product_prompt_parts.push(format!("特殊要求：{value}"));
+    }
+
+    let mut tool_params = serde_json::Map::new();
+    tool_params.insert(
+        "name".into(),
+        json!(format!("AI Chat - {}", short_name_fragment(&product))),
+    );
+    tool_params.insert("platform_id".into(), json!(platform_id));
+    tool_params.insert("region_id".into(), json!(region_id));
+    tool_params.insert("ai_model_id".into(), json!(2));
+    tool_params.insert("schedule_type".into(), json!("ONCE"));
+    tool_params.insert(
+        "product_prompt".into(),
+        json!(product_prompt_parts.join("\n")),
+    );
+    if let Some(value) = &keywords {
+        tool_params.insert("keyword".into(), json!(value));
+    }
+    if let Some(value) = &audience {
+        tool_params.insert("target_audience".into(), json!(value));
+    }
+    if let Some(value) = &budget_scan {
+        let numbers = numbers_from_text(value);
+        if let Some(budget) = numbers.first() {
+            tool_params.insert("budget_cap".into(), json!(budget));
+        }
+        if let Some(scan_count) = numbers.get(1).or_else(|| numbers.first()) {
+            tool_params.insert("max_scan_count".into(), json!(*scan_count as i32));
+        }
+    }
+
+    Ok(PlanProposal {
+        title: format!("创建 AI 社媒工作室任务：{}", short_name_fragment(&product)),
+        description: "根据用户补充的 Markdown 模板生成的待确认营销活动计划。".into(),
+        steps: vec![PlanStep {
+            tool_name: "create_campaign".into(),
+            tool_params: Value::Object(tool_params),
+            description: format!(
+                "创建 {} 社媒营销活动：{}",
+                platform_text,
+                short_name_fragment(&product)
+            ),
+        }],
+    })
+}
+
+async fn build_publish_plan_proposal_from_template(
+    fields: &BTreeMap<String, String>,
+    state: &UserState,
+) -> Result<PlanProposal, ApiError> {
+    let platform_text = template_field(fields, &["发布平台", "平台"])
+        .ok_or_else(|| ApiError::BadRequest("发布平台不能为空".into()))?;
+    let content_type_text =
+        template_field(fields, &["内容类型", "类型"]).unwrap_or_else(|| "post".into());
+    let subreddit = template_field(fields, &["Reddit 子版块", "子版块", "subreddit"]);
+    let content_prompt = template_field(
+        fields,
+        &[
+            "发布主题或完整文案",
+            "发布主题",
+            "完整文案",
+            "主题",
+            "内容主题",
+        ],
+    )
+    .ok_or_else(|| ApiError::BadRequest("发布主题或完整文案不能为空".into()))?;
+    let schedule_text = template_field(fields, &["发布时间或频率", "发布时间", "频率"]);
+    let special = template_field(fields, &["特殊要求", "要求"]);
+
+    let platforms = state
+        .platform_service
+        .get_all_platforms()
+        .await
+        .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+    let platform_id = find_platform_id_in_text(&platform_text, &platforms)
+        .ok_or_else(|| ApiError::BadRequest(format!("无法识别发布平台：{platform_text}")))?;
+    let content_type = content_type_from_template(&content_type_text);
+    let plan_type = plan_type_for_template(&platform_text, &content_type);
+
+    let mut prompt_parts = vec![content_prompt.clone()];
+    if let Some(value) = &schedule_text {
+        prompt_parts.push(format!("发布时间或频率：{value}"));
+    }
+    if let Some(value) = &special {
+        prompt_parts.push(format!("特殊要求：{value}"));
+    }
+    let normalized_prompt = prompt_parts.join("\n");
+
+    let mut tool_params = serde_json::Map::new();
+    tool_params.insert(
+        "name".into(),
+        json!(format!(
+            "AI Chat 发布 - {}",
+            short_name_fragment(&content_prompt)
+        )),
+    );
+    tool_params.insert("platform_id".into(), json!(platform_id));
+    tool_params.insert("content_type".into(), json!(content_type));
+    tool_params.insert("plan_type".into(), json!(plan_type));
+    tool_params.insert("content_prompt".into(), json!(normalized_prompt));
+    tool_params.insert(
+        "ai_input".into(),
+        if platform_text.to_lowercase().contains("reddit") {
+            json!({
+                "content_prompt": normalized_prompt,
+                "reddit_config": {
+                    "subreddit": subreddit.unwrap_or_else(|| "r/programming".into()),
+                    "image_source": "upload"
+                }
+            })
+        } else {
+            json!({
+                "content_prompt": normalized_prompt,
+            })
+        },
+    );
+    tool_params.insert("chat_ai_model_id".into(), json!(2));
+
+    Ok(PlanProposal {
+        title: format!("创建 AI 发布任务：{}", short_name_fragment(&content_prompt)),
+        description: "根据用户补充的 Markdown 模板生成的待确认发布计划。".into(),
+        steps: vec![PlanStep {
+            tool_name: "create_publish_plan".into(),
+            tool_params: Value::Object(tool_params),
+            description: format!("创建 AI 发布计划：{}", short_name_fragment(&content_prompt)),
+        }],
+    })
+}
 
 fn infer_forced_knowledge_query(content: &str) -> Option<String> {
     let trimmed = content.trim();
@@ -742,6 +1338,81 @@ impl AiChatService {
                     tx,
                 )
                 .await;
+        }
+
+        if let Some(template_kind) = infer_editable_task_template_kind(
+            content,
+            &ui_capabilities,
+            questionnaire_submission.is_some(),
+        ) {
+            let template = build_editable_task_template(template_kind);
+            let assistant_msg = self.repo.create_message(&NewAiMessage {
+                conversation_id: conv_id,
+                role: "assistant".into(),
+                content: template.clone(),
+                tool_calls: None,
+                tool_call_id: None,
+                plan_id: None,
+            })?;
+
+            let _ = tx.send(SseEvent::TextDelta { delta: template }).await;
+            let _ = tx
+                .send(SseEvent::MessageEnd {
+                    message_id: assistant_msg.id,
+                    finish_reason: "stop".into(),
+                })
+                .await;
+            self.repo.touch_conversation(conv_id)?;
+            return Ok(());
+        }
+
+        if ui_capabilities.editable_markdown_template && questionnaire_submission.is_none() {
+            if let Some(proposal) =
+                build_plan_proposal_from_editable_task_template(content, state).await?
+            {
+                let plan = self.create_plan_from_proposal(conv_id, user_id, &proposal)?;
+                let steps = self.repo.get_plan_steps(plan.id)?;
+                let assistant_text =
+                    "已根据你补充的模板生成待确认计划，请检查下方步骤。".to_string();
+                let assistant_msg = self.repo.create_message(&NewAiMessage {
+                    conversation_id: conv_id,
+                    role: "assistant".into(),
+                    content: assistant_text.clone(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    plan_id: Some(plan.id),
+                })?;
+
+                let _ = tx
+                    .send(SseEvent::TextDelta {
+                        delta: assistant_text,
+                    })
+                    .await;
+                let _ = tx
+                    .send(SseEvent::PlanCreated {
+                        plan_id: plan.id,
+                        title: proposal.title.clone(),
+                        steps: steps
+                            .iter()
+                            .map(|step| PlanStepSse {
+                                step_id: step.id,
+                                step_order: step.step_order,
+                                tool_name: step.tool_name.clone(),
+                                description: step.description.clone(),
+                                tool_params: step.tool_params.clone(),
+                            })
+                            .collect(),
+                    })
+                    .await;
+                let _ = tx
+                    .send(SseEvent::MessageEnd {
+                        message_id: assistant_msg.id,
+                        finish_reason: "stop".into(),
+                    })
+                    .await;
+                self.repo.touch_conversation(conv_id)?;
+                return Ok(());
+            }
         }
 
         let history = self
@@ -1360,10 +2031,14 @@ impl AiChatService {
 #[cfg(test)]
 mod tests {
     use super::{
-        client_safe_tool_result, display_hint_for_tool, friendly_ai_chat_error_message,
-        infer_forced_knowledge_query, is_retryable_model_provider_error,
-        validate_requested_chat_model,
+        build_editable_task_template, client_safe_tool_result, display_hint_for_tool,
+        friendly_ai_chat_error_message, infer_editable_task_template_kind,
+        infer_forced_knowledge_query, is_retryable_model_provider_error, numbers_from_text,
+        parse_markdown_table_fields, plan_type_for_template, submitted_template_kind,
+        template_field, validate_requested_chat_model, EditableTaskTemplateKind,
+        EDITABLE_TEMPLATE_MARKER,
     };
+    use crate::dto::ai_chat_dto::AiChatUiCapabilities;
     use glance_mind_db::entity::ai_model::AiModel;
     use serde_json::json;
 
@@ -1413,6 +2088,133 @@ mod tests {
         assert_eq!(safe["count"], json!(1));
         assert_eq!(safe["sources"][0]["title"], json!("配置回复模板"));
         assert!(safe["sources"][0].get("content").is_none());
+    }
+
+    #[test]
+    fn editable_template_detects_sparse_social_studio_request() {
+        let caps = AiChatUiCapabilities {
+            editable_markdown_template: true,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            infer_editable_task_template_kind(
+                "帮我创建一个 AI 社媒工作室任务，用来推广我的新产品。",
+                &caps,
+                false,
+            ),
+            Some(EditableTaskTemplateKind::SocialStudio)
+        );
+    }
+
+    #[test]
+    fn editable_template_detects_sparse_publish_request() {
+        let caps = AiChatUiCapabilities {
+            editable_markdown_template: true,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            infer_editable_task_template_kind("帮我创建一个 AI 发布任务", &caps, false),
+            Some(EditableTaskTemplateKind::PublishPlan)
+        );
+    }
+
+    #[test]
+    fn editable_template_requires_capability_and_regular_user_turn() {
+        let caps = AiChatUiCapabilities::default();
+        let enabled_caps = AiChatUiCapabilities {
+            editable_markdown_template: true,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            infer_editable_task_template_kind("帮我创建一个 AI 发布任务", &caps, false),
+            None
+        );
+        assert_eq!(
+            infer_editable_task_template_kind("帮我创建一个 AI 发布任务", &enabled_caps, true),
+            None
+        );
+    }
+
+    #[test]
+    fn editable_template_ignores_detailed_campaign_request() {
+        let caps = AiChatUiCapabilities {
+            editable_markdown_template: true,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            infer_editable_task_template_kind(
+                "帮我创建 TikTok 社媒工作室任务，产品是旅行背包，目标用户是美国大学生，关键词是轻量旅行，预算 500。",
+                &caps,
+                false,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn editable_template_contains_frontend_marker_and_required_rows() {
+        let social_template = build_editable_task_template(EditableTaskTemplateKind::SocialStudio);
+        assert!(social_template.contains(EDITABLE_TEMPLATE_MARKER));
+        assert!(social_template.contains("| 产品/业务 |"));
+        assert!(social_template.contains("| 目标平台 |"));
+
+        let publish_template = build_editable_task_template(EditableTaskTemplateKind::PublishPlan);
+        assert!(publish_template.contains(EDITABLE_TEMPLATE_MARKER));
+        assert!(publish_template.contains("| 发布平台 |"));
+        assert!(publish_template.contains("| Reddit 子版块 |"));
+        assert!(publish_template.contains("| 内容类型 |"));
+    }
+
+    #[test]
+    fn markdown_table_parser_extracts_editable_template_values() {
+        let fields = parse_markdown_table_fields(
+            "## 创建 AI 社媒工作室任务\n\n\
+            | 字段 | 内容 |\n\
+            | --- | --- |\n\
+            | 产品/业务 | E2E-AI-ASSISTANT AI 写作工具 |\n\
+            | 目标平台 | Reddit |\n\
+            | 预算/扫描量 | 500 / 100 |",
+        );
+
+        assert_eq!(
+            template_field(&fields, &["产品/业务"]).as_deref(),
+            Some("E2E-AI-ASSISTANT AI 写作工具")
+        );
+        assert_eq!(
+            submitted_template_kind("## 创建 AI 社媒工作室任务", &fields),
+            Some(EditableTaskTemplateKind::SocialStudio)
+        );
+        assert_eq!(
+            numbers_from_text(&fields["预算/扫描量"]),
+            vec![500.0, 100.0]
+        );
+    }
+
+    #[test]
+    fn submitted_template_kind_detects_publish_templates() {
+        let fields = parse_markdown_table_fields(
+            "| 字段 | 内容 |\n\
+            | --- | --- |\n\
+            | 发布平台 | Reddit |\n\
+            | Reddit 子版块 | r/programming |\n\
+            | 内容类型 | post |\n\
+            | 发布主题或完整文案 | AI 写作工具如何节省内容时间 |",
+        );
+
+        assert_eq!(
+            submitted_template_kind("## 创建 AI 发布任务", &fields),
+            Some(EditableTaskTemplateKind::PublishPlan)
+        );
+        assert_eq!(plan_type_for_template("Reddit", "post"), "reddit_text");
+        assert_eq!(
+            template_field(&fields, &["Reddit 子版块"]).as_deref(),
+            Some("r/programming")
+        );
+        assert_eq!(plan_type_for_template("TikTok", "video"), "single_video");
     }
 
     #[test]

@@ -12,12 +12,23 @@ use crate::state::oauth_state::OauthState;
 // use crate::state::token_state::TokenState;
 use crate::state::user_state::UserState;
 use axum::http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
+use axum::http::HeaderName;
 use axum::routing::get;
 use axum::{middleware, Router};
 use std::sync::Arc;
 use tower::ServiceBuilder;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
+
+fn cors_allowed_headers() -> [HeaderName; 5] {
+    [
+        AUTHORIZATION,
+        CONTENT_TYPE,
+        ACCEPT,
+        HeaderName::from_static("idempotency-key"),
+        HeaderName::from_static("x-idempotency-key"),
+    ]
+}
 
 pub fn routes(
     db_conn: Arc<Database>,
@@ -501,6 +512,19 @@ pub fn routes(
             CorsLayer::new()
                 .allow_origin(Any)
                 .allow_methods(Any)
-                .allow_headers([AUTHORIZATION, CONTENT_TYPE, ACCEPT]),
+                .allow_headers(cors_allowed_headers()),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cors_headers_allow_desktop_idempotency_key() {
+        let headers = cors_allowed_headers();
+        assert!(headers
+            .iter()
+            .any(|header| header.as_str() == "idempotency-key"));
+    }
 }

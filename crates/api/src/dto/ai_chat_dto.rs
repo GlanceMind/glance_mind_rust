@@ -28,6 +28,8 @@ pub struct SendMessageRequest {
 pub struct AiChatUiCapabilities {
     #[serde(default)]
     pub questionnaire: bool,
+    #[serde(default)]
+    pub editable_markdown_template: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -143,5 +145,31 @@ impl From<AiPlanStep> for PlanStepDto {
             result: s.result,
             error_message: s.error_message,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AiChatUiCapabilities;
+    use serde_json::json;
+
+    #[test]
+    fn ai_chat_ui_capabilities_default_missing_fields_to_false() {
+        let caps: AiChatUiCapabilities = serde_json::from_value(json!({})).unwrap();
+
+        assert!(!caps.questionnaire);
+        assert!(!caps.editable_markdown_template);
+    }
+
+    #[test]
+    fn ai_chat_ui_capabilities_accept_editable_markdown_template_flag() {
+        let caps: AiChatUiCapabilities = serde_json::from_value(json!({
+            "questionnaire": true,
+            "editable_markdown_template": true
+        }))
+        .unwrap();
+
+        assert!(caps.questionnaire);
+        assert!(caps.editable_markdown_template);
     }
 }
