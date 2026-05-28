@@ -90,7 +90,12 @@ pub trait OpenMontageJobStore: Send + Sync {
     fn get_job(&self, job_id: &str) -> Result<Option<Job>, String>;
     fn find_by_idempotency(&self, key: &str) -> Result<Option<Job>, String>;
     fn append_event(&self, event: NewJobEvent) -> Result<AppendResult, String>;
-    fn list_events(&self, job_id: &str, after_sequence: i64, limit: i64) -> Result<Vec<JobEvent>, String>;
+    fn list_events(
+        &self,
+        job_id: &str,
+        after_sequence: i64,
+        limit: i64,
+    ) -> Result<Vec<JobEvent>, String>;
     fn update_from_event(&self, event: &NewJobEvent) -> Result<(), String>;
     fn set_status(&self, job_id: &str, status: &str) -> Result<(), String>;
     fn set_cancel_requested(&self, job_id: &str) -> Result<(), String>;
@@ -171,10 +176,13 @@ impl OpenMontageJobStore for InMemoryJobStore {
             updated_at: None,
         };
 
-        data.insert(new_job.job_id.clone(), InMemoryJob {
-            job: job.clone(),
-            events: Vec::new(),
-        });
+        data.insert(
+            new_job.job_id.clone(),
+            InMemoryJob {
+                job: job.clone(),
+                events: Vec::new(),
+            },
+        );
 
         Ok(job)
     }
@@ -196,13 +204,17 @@ impl OpenMontageJobStore for InMemoryJobStore {
 
     fn append_event(&self, event: NewJobEvent) -> Result<AppendResult, String> {
         let mut data = self.data.lock().unwrap();
-        let stored = data.get_mut(&event.job_id)
+        let stored = data
+            .get_mut(&event.job_id)
             .ok_or_else(|| format!("Job not found: {}", event.job_id))?;
 
         // Check for duplicate (event_id + sequence)
         for existing in &stored.events {
             if existing.event_id == event.event_id && existing.sequence == event.sequence {
-                return Ok(AppendResult { inserted: false, gap: false });
+                return Ok(AppendResult {
+                    inserted: false,
+                    gap: false,
+                });
             }
         }
 
@@ -238,15 +250,26 @@ impl OpenMontageJobStore for InMemoryJobStore {
         }
         stored.job.updated_at = Some(chrono::Utc::now());
 
-        Ok(AppendResult { inserted: true, gap })
+        Ok(AppendResult {
+            inserted: true,
+            gap,
+        })
     }
 
-    fn list_events(&self, job_id: &str, after_sequence: i64, limit: i64) -> Result<Vec<JobEvent>, String> {
+    fn list_events(
+        &self,
+        job_id: &str,
+        after_sequence: i64,
+        limit: i64,
+    ) -> Result<Vec<JobEvent>, String> {
         let data = self.data.lock().unwrap();
-        let stored = data.get(job_id)
+        let stored = data
+            .get(job_id)
             .ok_or_else(|| format!("Job not found: {}", job_id))?;
 
-        let events: Vec<JobEvent> = stored.events.iter()
+        let events: Vec<JobEvent> = stored
+            .events
+            .iter()
             .filter(|e| e.sequence > after_sequence)
             .take(limit as usize)
             .cloned()
@@ -257,7 +280,8 @@ impl OpenMontageJobStore for InMemoryJobStore {
 
     fn update_from_event(&self, event: &NewJobEvent) -> Result<(), String> {
         let mut data = self.data.lock().unwrap();
-        let stored = data.get_mut(&event.job_id)
+        let stored = data
+            .get_mut(&event.job_id)
             .ok_or_else(|| format!("Job not found: {}", event.job_id))?;
 
         if let Some(ref status) = event.status {
@@ -278,7 +302,8 @@ impl OpenMontageJobStore for InMemoryJobStore {
 
     fn set_status(&self, job_id: &str, status: &str) -> Result<(), String> {
         let mut data = self.data.lock().unwrap();
-        let stored = data.get_mut(job_id)
+        let stored = data
+            .get_mut(job_id)
             .ok_or_else(|| format!("Job not found: {}", job_id))?;
         stored.job.status = status.to_string();
         stored.job.updated_at = Some(chrono::Utc::now());
@@ -287,7 +312,8 @@ impl OpenMontageJobStore for InMemoryJobStore {
 
     fn set_cancel_requested(&self, job_id: &str) -> Result<(), String> {
         let mut data = self.data.lock().unwrap();
-        let stored = data.get_mut(job_id)
+        let stored = data
+            .get_mut(job_id)
             .ok_or_else(|| format!("Job not found: {}", job_id))?;
         stored.job.cancel_requested = true;
         stored.job.updated_at = Some(chrono::Utc::now());
@@ -299,7 +325,7 @@ impl OpenMontageJobStore for InMemoryJobStore {
 // Postgres Implementation (stub for production — DB schema not yet migrated)
 // ============================================================================
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct PgJobStore {}
 
 impl PgJobStore {
@@ -326,7 +352,12 @@ impl OpenMontageJobStore for PgJobStore {
         Err("PgJobStore not implemented".to_string())
     }
 
-    fn list_events(&self, _job_id: &str, _after_sequence: i64, _limit: i64) -> Result<Vec<JobEvent>, String> {
+    fn list_events(
+        &self,
+        _job_id: &str,
+        _after_sequence: i64,
+        _limit: i64,
+    ) -> Result<Vec<JobEvent>, String> {
         Err("PgJobStore not implemented".to_string())
     }
 

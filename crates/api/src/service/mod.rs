@@ -45,6 +45,8 @@ pub mod novel_worker_dispatcher;
 pub mod oauth_metrics;
 pub mod oauth_service;
 pub mod openmontage_client;
+pub mod openmontage_service;
+pub mod openmontage_stream_hub;
 pub mod redis_service;
 pub mod upload_task_service;
 pub mod user_service;

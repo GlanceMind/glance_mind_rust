@@ -104,7 +104,10 @@ impl CreateJobDto {
         for (field_name, value) in fields {
             for token in SECRET_TOKENS {
                 if value.to_lowercase().contains(&token.to_lowercase()) {
-                    return Err(format!("Field '{}' contains forbidden token: {}", field_name, token));
+                    return Err(format!(
+                        "Field '{}' contains forbidden token: {}",
+                        field_name, token
+                    ));
                 }
             }
         }
@@ -119,8 +122,13 @@ impl CreateJobDto {
             for (k, v) in slots {
                 for token in SECRET_TOKENS {
                     let token_lower = token.to_lowercase();
-                    if k.to_lowercase().contains(&token_lower) || v.to_lowercase().contains(&token_lower) {
-                        return Err(format!("provider_slots contains forbidden token: {}", token));
+                    if k.to_lowercase().contains(&token_lower)
+                        || v.to_lowercase().contains(&token_lower)
+                    {
+                        return Err(format!(
+                            "provider_slots contains forbidden token: {}",
+                            token
+                        ));
                     }
                 }
             }
@@ -196,7 +204,10 @@ fn check_json_for_secrets(value: &JsonValue, context: &str) -> Result<(), String
             for (k, v) in map {
                 for token in SECRET_TOKENS {
                     if k.to_lowercase().contains(&token.to_lowercase()) {
-                        return Err(format!("{}.{} key contains forbidden token: {}", context, k, token));
+                        return Err(format!(
+                            "{}.{} key contains forbidden token: {}",
+                            context, k, token
+                        ));
                     }
                 }
                 check_json_for_secrets(v, &format!("{}.{}", context, k))?;

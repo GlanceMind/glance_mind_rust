@@ -3,7 +3,7 @@
 //! Queue client for dispatching work to the OpenMontage worker.
 //! Mirrors the pattern from novel_worker_dispatcher.rs.
 
-use crate::dto::openmontage_dto::{PreflightDto, PipelinesDto};
+use crate::dto::openmontage_dto::{PipelinesDto, PreflightDto};
 use redis::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -19,7 +19,7 @@ pub struct WorkerEnvelope {
     pub project_id: String,
     pub attempt: u32,
     pub max_attempts: u32,
-    pub kind: String, // "run" | "resume"
+    pub kind: String,            // "run" | "resume"
     pub request_json: JsonValue, // the OpenMontageProfessionalVideoRequest as JSON
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resume_from_stage: Option<String>,
@@ -62,8 +62,8 @@ impl RedisOpenMontageClient {
 
     async fn enqueue_internal(&self, envelope: WorkerEnvelope) -> Result<(), String> {
         let client = self.client.clone();
-        let payload = serde_json::to_string(&envelope)
-            .map_err(|e| format!("serialize envelope: {}", e))?;
+        let payload =
+            serde_json::to_string(&envelope).map_err(|e| format!("serialize envelope: {}", e))?;
 
         tokio::task::spawn_blocking(move || {
             let mut conn = client
@@ -85,14 +85,12 @@ impl RedisOpenMontageClient {
 
 impl OpenMontageClient for RedisOpenMontageClient {
     fn enqueue_run(&self, envelope: WorkerEnvelope) -> Result<(), String> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| format!("tokio runtime: {}", e))?;
+        let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio runtime: {}", e))?;
         rt.block_on(self.enqueue_internal(envelope))
     }
 
     fn enqueue_resume(&self, envelope: WorkerEnvelope) -> Result<(), String> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| format!("tokio runtime: {}", e))?;
+        let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio runtime: {}", e))?;
         rt.block_on(self.enqueue_internal(envelope))
     }
 
@@ -101,8 +99,7 @@ impl OpenMontageClient for RedisOpenMontageClient {
         let client = self.client.clone();
         let key_owned = key.clone();
 
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| format!("tokio runtime: {}", e))?;
+        let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio runtime: {}", e))?;
 
         rt.block_on(tokio::task::spawn_blocking(move || {
             let mut conn = client
@@ -124,19 +121,19 @@ impl OpenMontageClient for RedisOpenMontageClient {
         let key = "openmontage:preflight";
         let client = self.client.clone();
 
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| format!("tokio runtime: {}", e))?;
+        let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio runtime: {}", e))?;
 
-        let value: Option<String> = rt.block_on(tokio::task::spawn_blocking(move || {
-            let mut conn = client
-                .get_connection()
-                .map_err(|e| format!("Redis connection error: {}", e))?;
-            redis::cmd("GET")
-                .arg(key)
-                .query(&mut conn)
-                .map_err(|e| format!("Redis GET error: {}", e))
-        }))
-        .map_err(|e| format!("read_preflight join error: {}", e))??;
+        let value: Option<String> = rt
+            .block_on(tokio::task::spawn_blocking(move || {
+                let mut conn = client
+                    .get_connection()
+                    .map_err(|e| format!("Redis connection error: {}", e))?;
+                redis::cmd("GET")
+                    .arg(key)
+                    .query(&mut conn)
+                    .map_err(|e| format!("Redis GET error: {}", e))
+            }))
+            .map_err(|e| format!("read_preflight join error: {}", e))??;
 
         if let Some(json_str) = value {
             let dto = serde_json::from_str(&json_str)
@@ -151,19 +148,19 @@ impl OpenMontageClient for RedisOpenMontageClient {
         let key = "openmontage:pipelines";
         let client = self.client.clone();
 
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| format!("tokio runtime: {}", e))?;
+        let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio runtime: {}", e))?;
 
-        let value: Option<String> = rt.block_on(tokio::task::spawn_blocking(move || {
-            let mut conn = client
-                .get_connection()
-                .map_err(|e| format!("Redis connection error: {}", e))?;
-            redis::cmd("GET")
-                .arg(key)
-                .query(&mut conn)
-                .map_err(|e| format!("Redis GET error: {}", e))
-        }))
-        .map_err(|e| format!("read_pipelines join error: {}", e))??;
+        let value: Option<String> = rt
+            .block_on(tokio::task::spawn_blocking(move || {
+                let mut conn = client
+                    .get_connection()
+                    .map_err(|e| format!("Redis connection error: {}", e))?;
+                redis::cmd("GET")
+                    .arg(key)
+                    .query(&mut conn)
+                    .map_err(|e| format!("Redis GET error: {}", e))
+            }))
+            .map_err(|e| format!("read_pipelines join error: {}", e))??;
 
         if let Some(json_str) = value {
             let dto = serde_json::from_str(&json_str)

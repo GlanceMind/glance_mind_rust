@@ -11,8 +11,9 @@ use serde_json::json;
 type Pool = r2d2::Pool<ConnectionManager<PgConnection>>;
 
 fn get_test_pool() -> Pool {
-    let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://postgres:password@localhost:5434/openmontage_test".to_string());
+    let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+        "postgres://postgres:password@localhost:5434/openmontage_test".to_string()
+    });
 
     let manager = ConnectionManager::<PgConnection>::new(database_url);
     r2d2::Pool::builder()
@@ -30,21 +31,26 @@ fn pg_store_round_trips_job_and_events() {
     let project_id = format!("omx-{}", job_id);
 
     // Create job
-    store.create_job(NewJob {
-        job_id: job_id.clone(),
-        project_id: project_id.clone(),
-        user_id: 999,
-        tenant_id: "test-tenant".to_string(),
-        request_id: "req-test".to_string(),
-        idempotency_key: format!("idem-{}", uuid::Uuid::new_v4()),
-        pipeline: "animated-explainer".to_string(),
-        input_mode: Some("text".to_string()),
-        status: "queued".to_string(),
-        snapshot_json: json!({"title": "Test"}),
-    }).expect("create job");
+    store
+        .create_job(NewJob {
+            job_id: job_id.clone(),
+            project_id: project_id.clone(),
+            user_id: 999,
+            tenant_id: "test-tenant".to_string(),
+            request_id: "req-test".to_string(),
+            idempotency_key: format!("idem-{}", uuid::Uuid::new_v4()),
+            pipeline: "animated-explainer".to_string(),
+            input_mode: Some("text".to_string()),
+            status: "queued".to_string(),
+            snapshot_json: json!({"title": "Test"}),
+        })
+        .expect("create job");
 
     // Get job
-    let job = store.get_job(&job_id).expect("get job").expect("job exists");
+    let job = store
+        .get_job(&job_id)
+        .expect("get job")
+        .expect("job exists");
     assert_eq!(job.job_id, job_id);
     assert_eq!(job.user_id, 999);
     assert_eq!(job.status, "queued");
@@ -68,7 +74,9 @@ fn pg_store_round_trips_job_and_events() {
     assert_eq!(events[0].sequence, 1);
 
     // Test idempotency
-    let result2 = store.append_event(event1.clone()).expect("append duplicate");
+    let result2 = store
+        .append_event(event1.clone())
+        .expect("append duplicate");
     assert!(!result2.inserted, "Duplicate should not insert");
 
     // Test gap detection
@@ -85,7 +93,10 @@ fn pg_store_round_trips_job_and_events() {
     assert!(result3.gap, "Gap should be detected");
 
     // Verify sync_required set
-    let job_after_gap = store.get_job(&job_id).expect("get job").expect("job exists");
+    let job_after_gap = store
+        .get_job(&job_id)
+        .expect("get job")
+        .expect("job exists");
     assert!(job_after_gap.sync_required);
     assert_eq!(job_after_gap.next_event_sequence, 4);
 }
