@@ -18,6 +18,7 @@ use glance_mind_db::entity::aipub::{
     AiTaskStatus, AiTaskType, NewAipubPlan, NewAipubTask, PlanStatus, PlanType, PublishTaskStatus,
     UpdateAipubAiTask, UpdateAipubPlan, UpdateAipubTask,
 };
+use glance_mind_protocol::glance_mind::RedditPostConfig;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -65,9 +66,66 @@ impl AipubService {
             };
         }
 
+        // Phase 4.5 R1: reddit_image V1→V2 translation.
+        // When plan_type is reddit_image AND ai_input contains a v1 image_prompt
+        // (via reddit_config.image_prompt) AND ai_input has no image_generations[],
+        // inject a minimal v2 ImageGenerationSpec so the scheduler's v2-only
+        // image_gen processor can handle it.
+        let ai_input_for_storage = if PlanType::parse(plan_type.as_str())
+            == Some(PlanType::RedditImage)
+            && reddit_validation::has_ai_image_prompt(dto.ai_input.as_ref())
+        {
+            match dto.ai_input.as_ref() {
+                Some(ai_input) => {
+                    // Check if v2 image_generations[] is already present (non-empty).
+                    let has_v2 = ai_input
+                        .get("image_generations")
+                        .and_then(|v| v.as_array())
+                        .map(|a| !a.is_empty())
+                        .unwrap_or(false);
+                    if has_v2 {
+                        // Already v2 — no translation needed.
+                        dto.ai_input.clone()
+                    } else {
+                        // Extract v1 image_prompt from reddit_config (typed access).
+                        let reddit_config_json = ai_input.get("reddit_config");
+                        if let Some(rc_json) = reddit_config_json {
+                            if let Ok(reddit_config) =
+                                serde_json::from_value::<RedditPostConfig>(rc_json.clone())
+                            {
+                                if let Some(image_prompt) = reddit_config.image_prompt {
+                                    if !image_prompt.is_empty() {
+                                        // Build minimal v2 spec: only prompts required, count defaults to 1.
+                                        // Model is omitted — scheduler falls back to default (OpenAI route in mock).
+                                        let mut ai_input_v2 = ai_input.clone();
+                                        ai_input_v2["image_generations"] = json!([{
+                                            "prompts": [image_prompt],
+                                            "count": 1
+                                        }]);
+                                        Some(ai_input_v2)
+                                    } else {
+                                        dto.ai_input.clone()
+                                    }
+                                } else {
+                                    dto.ai_input.clone()
+                                }
+                            } else {
+                                dto.ai_input.clone()
+                            }
+                        } else {
+                            dto.ai_input.clone()
+                        }
+                    }
+                }
+                None => dto.ai_input.clone(),
+            }
+        } else {
+            dto.ai_input.clone()
+        };
+
         // Validate ai_input.image_generations[] (V2 ImageGenerationSpec).
         // No-op when the field is absent (legacy V1 plans).
-        if let Some(ai_input) = dto.ai_input.as_ref() {
+        if let Some(ai_input) = ai_input_for_storage.as_ref() {
             image_generation_validation::validate(ai_input)?;
         }
 
@@ -231,7 +289,7 @@ impl AipubService {
             plan_type,
             ai_task_types: ai_task_types.map(|v| v.into_iter().map(Some).collect()),
             ai_service_config: dto.ai_service_config.clone(),
-            ai_input: dto.ai_input.clone(),
+            ai_input: ai_input_for_storage,
             content: dto.content.clone(),
             status: initial_status.to_string(),
             chat_ai_model_id: dto.chat_ai_model_id,
