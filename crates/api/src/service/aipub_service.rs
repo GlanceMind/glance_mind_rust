@@ -18,7 +18,7 @@ use glance_mind_db::entity::aipub::{
     AiTaskStatus, AiTaskType, NewAipubPlan, NewAipubTask, PlanStatus, PlanType, PublishTaskStatus,
     UpdateAipubAiTask, UpdateAipubPlan, UpdateAipubTask,
 };
-use glance_mind_protocol::glance_mind::RedditPostConfig;
+use glance_mind_protocol::glance_mind::{ImageGenerationSpec, MediaRole, RedditPostConfig};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -95,13 +95,42 @@ impl AipubService {
                             {
                                 if let Some(image_prompt) = reddit_config.image_prompt {
                                     if !image_prompt.is_empty() {
-                                        // Build minimal v2 spec: only prompts required, count defaults to 1.
-                                        // Model is omitted — scheduler falls back to default (OpenAI route in mock).
+                                        // Build typed v2 ImageGenerationSpec with ALL required
+                                        // fields so the scheduler's parse_image_generations can
+                                        // deserialize it. The minimal {prompts, count} JSON
+                                        // previously failed with "missing field `width_px`".
+                                        let spec = ImageGenerationSpec {
+                                            prompts: vec![image_prompt.clone()],
+                                            count: 1,
+                                            model: None,
+                                            width_px: 0, // 0 = model default
+                                            height_px: 0,
+                                            role_hint: MediaRole::Primary as i32, // single-image post
+                                            reference_image_urls: vec![],
+                                            aspect_ratio: None,
+                                            output_format: None,
+                                            extras: Default::default(),
+                                            seed: None,
+                                            watermark: None,
+                                            provider_hint: None,
+                                            mode: None,
+                                            safety_tolerance: None,
+                                        };
+                                        // Serialize to JSON for storage. Because prost's serde
+                                        // omits zero-valued fields in proto3, width_px/height_px
+                                        // (both 0) may vanish → re-break the scheduler's
+                                        // deserialize. So we MUST verify the round-trip.
+                                        let image_generations = serde_json::to_value(vec![spec])
+                                            .map_err(|e| {
+                                                ApiError::BusinessError(BusinessError::InvalidInput(
+                                                    format!(
+                                                        "Failed to serialize ImageGenerationSpec: {}",
+                                                        e
+                                                    ),
+                                                ))
+                                            })?;
                                         let mut ai_input_v2 = ai_input.clone();
-                                        ai_input_v2["image_generations"] = json!([{
-                                            "prompts": [image_prompt],
-                                            "count": 1
-                                        }]);
+                                        ai_input_v2["image_generations"] = image_generations;
                                         Some(ai_input_v2)
                                     } else {
                                         dto.ai_input.clone()
