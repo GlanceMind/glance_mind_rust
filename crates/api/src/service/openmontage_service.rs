@@ -3,12 +3,15 @@
 //! Business logic layer for OpenMontage jobs: create, find by idempotency, cancel, approval.
 
 use crate::dto::openmontage_dto::{
-    ApprovalDto, CancelResultDto, CreateJobDto, JobEventDto, JobEventsDto, JobSnapshotDto,
-    PipelineInfoDto, PipelinesDto, PreflightDto, ServerContext,
+    ApprovalDto, AssetDto, CancelResultDto, CreateJobDto, JobEventDto, JobEventsDto,
+    JobSnapshotDto, PipelineInfoDto, PipelinesDto, PreflightDto, ServerContext,
 };
-use crate::repository::openmontage_repository::{NewJob, NewJobEvent, OpenMontageJobStore};
+use crate::repository::openmontage_repository::{
+    NewAsset, NewJob, NewJobEvent, OpenMontageJobStore,
+};
 use crate::service::openmontage_client::{OpenMontageClient, WorkerEnvelope};
 use crate::service::openmontage_stream_hub::{OpenMontageSseEvent, OpenMontageStreamHub};
+use crate::service::oss_service::OssService;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -53,7 +56,74 @@ impl OpenMontageService {
             callback_secret_ref: Some("internal-callback-secret".to_string()),
         };
 
-        let request_json = dto.to_protocol_request(server_ctx);
+        let mut request_json = dto.to_protocol_request(server_ctx);
+
+        // M2: Resolve asset_ids and build assets/tool_invocations based on input_mode
+        if let Some(ref asset_ids) = dto.asset_ids {
+            if !asset_ids.is_empty() {
+                let mut assets_array = Vec::new();
+                let mut tool_invocations = Vec::new();
+
+                // Resolve assets from store
+                for asset_id in asset_ids {
+                    let asset = self
+                        .store
+                        .get_asset(asset_id)
+                        .map_err(|e| format!("Failed to fetch asset {}: {}", asset_id, e))?
+                        .ok_or_else(|| format!("Asset not found: {}", asset_id))?;
+
+                    assets_array.push(serde_json::json!({
+                        "asset_id": asset.asset_id,
+                        "kind": asset.kind,
+                        "role": asset.role,
+                        "uri": asset.uri,
+                        "mime_type": asset.mime_type,
+                        "bytes": asset.bytes,
+                        "width_px": asset.width_px,
+                        "height_px": asset.height_px,
+                        "duration_ms": asset.duration_ms,
+                    }));
+                }
+
+                // Build tool_invocations based on input_mode
+                if let Some(ref input_mode) = dto.input_mode {
+                    match input_mode.as_str() {
+                        "image_to_video" => {
+                            // Find reference_image asset
+                            if let Some(img_asset) =
+                                assets_array.iter().find(|a| a["kind"] == "reference_image")
+                            {
+                                tool_invocations.push(serde_json::json!({
+                                    "operation": "image_to_video",
+                                    "input_json": serde_json::json!({
+                                        "prompt": dto.prompt,
+                                        "image_url": img_asset["uri"],
+                                        "duration": dto.duration_seconds.unwrap_or(60),
+                                    }).to_string(),
+                                }));
+                            }
+                        }
+                        "first_last_frame" => {
+                            // start_frame and end_frame are already in assets_array, no tool_invocation needed
+                        }
+                        "reference_driven" => {
+                            // reference_video is in assets_array, no direct generation invocation (worker gates it)
+                        }
+                        "source_clip" => {
+                            // source_video is in assets_array, no tool_invocation
+                        }
+                        _ => {
+                            // text_to_video / source_script / unknown: no assets/tool_invocations
+                        }
+                    }
+                }
+
+                request_json["assets"] = serde_json::Value::Array(assets_array);
+                if !tool_invocations.is_empty() {
+                    request_json["tool_invocations"] = serde_json::Value::Array(tool_invocations);
+                }
+            }
+        }
 
         let new_job = NewJob {
             job_id: job_id.clone(),
@@ -315,6 +385,80 @@ impl OpenMontageService {
             event_id: event.event_id,
             next_expected_sequence: job.next_event_sequence,
             sync_required: if append_result.gap { Some(true) } else { None },
+        })
+    }
+
+    /// Upload an asset (image/video/audio) via OSS and store metadata
+    pub async fn upload_asset(
+        &self,
+        user_id: i32,
+        kind: String,
+        role: String,
+        data: Vec<u8>,
+        filename: String,
+        content_type: String,
+    ) -> Result<AssetDto, String> {
+        // Determine upload method based on asset family
+        let is_image = matches!(
+            kind.as_str(),
+            "reference_image" | "start_frame" | "end_frame" | "brand_asset"
+        );
+        let is_video = matches!(kind.as_str(), "reference_video" | "source_video");
+        let is_audio = matches!(kind.as_str(), "audio" | "music");
+
+        // Upload to OSS
+        let oss_service =
+            OssService::from_env().map_err(|e| format!("OSS service unavailable: {}", e))?;
+
+        let upload_result = if is_image {
+            oss_service
+                .upload_image(data, user_id, filename.clone(), content_type.clone())
+                .await
+                .map_err(|e| format!("Image upload failed: {}", e))?
+        } else if is_video {
+            oss_service
+                .upload_video(data, user_id, filename.clone(), content_type.clone())
+                .await
+                .map_err(|e| format!("Video upload failed: {}", e))?
+        } else if is_audio {
+            oss_service
+                .upload_audio(data, user_id, filename.clone(), content_type.clone())
+                .await
+                .map_err(|e| format!("Audio upload failed: {}", e))?
+        } else {
+            return Err(format!("Unsupported asset kind for upload: {}", kind));
+        };
+
+        // Insert asset record
+        let asset_id = Uuid::new_v4().to_string();
+        let new_asset = NewAsset {
+            asset_id: asset_id.clone(),
+            user_id,
+            kind: kind.clone(),
+            role: role.clone(),
+            uri: upload_result.image_url.clone(),
+            mime_type: Some(content_type.clone()),
+            bytes: Some(upload_result.size as i64),
+            width_px: None, // Could be extracted from image metadata
+            height_px: None,
+            duration_ms: None,
+        };
+
+        let asset = self
+            .store
+            .insert_asset(new_asset)
+            .map_err(|e| format!("Asset record insert failed: {}", e))?;
+
+        Ok(AssetDto {
+            asset_id: asset.asset_id,
+            kind: asset.kind,
+            role: asset.role,
+            uri: asset.uri,
+            mime_type: asset.mime_type,
+            bytes: asset.bytes,
+            width_px: asset.width_px,
+            height_px: asset.height_px,
+            duration_ms: asset.duration_ms,
         })
     }
 }

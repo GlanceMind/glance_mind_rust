@@ -1,9 +1,9 @@
 //! OpenMontage HTTP Handlers
 //!
-//! E1-E8 (user routes) + I1 (internal callback).
+//! E1-E8 (user routes) + E9 (assets upload) + I1 (internal callback).
 
 use axum::{
-    extract::{Path, Query},
+    extract::{Multipart, Path, Query},
     response::sse::{Event, Sse},
     Extension, Json,
 };
@@ -13,9 +13,11 @@ use serde::Deserialize;
 use std::convert::Infallible;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
+use tracing::{error, info};
 
-use crate::dto::openmontage_dto::{ApprovalDto, CreateJobDto};
+use crate::dto::openmontage_dto::{ApprovalDto, AssetDto, CreateJobDto};
 use crate::error::api_error::ApiError;
+use crate::error::business_error::BusinessError;
 use crate::response::unified_response::ApiResponse;
 use crate::service::openmontage_service::OpenMontageService;
 use crate::service::openmontage_stream_hub::OpenMontageSseEvent;
@@ -239,6 +241,218 @@ pub async fn cancel_job(
         .map_err(|e| ApiError::InternalServerError(format!("cancel failed: {}", e)))?;
 
     Ok(Json(ApiResponse::success(result)))
+}
+
+// ============================================================================
+// E9: POST /openmontage/assets
+// ============================================================================
+
+/// Valid OpenMontage input asset kinds
+const VALID_ASSET_KINDS: &[&str] = &[
+    "reference_image",
+    "start_frame",
+    "end_frame",
+    "reference_video",
+    "source_video",
+    "brand_asset",
+    "audio",
+    "music",
+    "subtitle",
+];
+
+/// Maximum file size for images (OpenMontage assets): 30MB
+const MAX_OMX_IMAGE_SIZE: usize = 30 * 1024 * 1024;
+
+/// Maximum file size for videos (OpenMontage assets): 100MB
+const MAX_OMX_VIDEO_SIZE: usize = 100 * 1024 * 1024;
+
+/// Maximum file size for audio (OpenMontage assets): 15MB
+const MAX_OMX_AUDIO_SIZE: usize = 15 * 1024 * 1024;
+
+/// Allowed image MIME types for OpenMontage
+const OMX_IMAGE_MIMES: &[&str] = &[
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "image/bmp",
+    "image/tiff",
+];
+
+/// Allowed video MIME types for OpenMontage
+const OMX_VIDEO_MIMES: &[&str] = &[
+    "video/mp4",
+    "video/quicktime",
+    "video/x-msvideo",
+    "video/webm",
+    "video/x-matroska",
+    "video/x-flv",
+    "video/x-ms-wmv",
+    "video/x-m4v",
+];
+
+/// Allowed audio MIME types for OpenMontage
+const OMX_AUDIO_MIMES: &[&str] = &[
+    "audio/mpeg",
+    "audio/mp3",
+    "audio/wav",
+    "audio/x-wav",
+    "audio/wave",
+    "audio/ogg",
+    "audio/aac",
+    "audio/x-m4a",
+    "audio/mp4",
+];
+
+pub async fn upload_asset(
+    Extension(user): Extension<User>,
+    Extension(service): Extension<OpenMontageService>,
+    mut multipart: Multipart,
+) -> Result<Json<ApiResponse<AssetDto>>, ApiError> {
+    let mut file_data: Option<Vec<u8>> = None;
+    let mut file_name: Option<String> = None;
+    let mut file_mime: Option<String> = None;
+    let mut kind: Option<String> = None;
+    let mut role: Option<String> = None;
+
+    // Parse multipart fields
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| ApiError::BusinessError(BusinessError::FormParsingFailed))?
+    {
+        let field_name = field.name().unwrap_or("").to_string();
+
+        match field_name.as_str() {
+            "file" => {
+                file_name = field.file_name().map(|s| s.to_string());
+                file_mime = field.content_type().map(|s| s.to_string());
+                let data = field.bytes().await.map_err(|e| {
+                    error!("Failed to read asset file data: {:?}", e);
+                    ApiError::BusinessError(BusinessError::InvalidFormField("file".to_string()))
+                })?;
+                file_data = Some(data.to_vec());
+            }
+            "kind" => {
+                let data = field.bytes().await.map_err(|_| {
+                    ApiError::BusinessError(BusinessError::InvalidFormField("kind".to_string()))
+                })?;
+                kind = Some(String::from_utf8_lossy(&data).to_string());
+            }
+            "role" => {
+                let data = field.bytes().await.map_err(|_| {
+                    ApiError::BusinessError(BusinessError::InvalidFormField("role".to_string()))
+                })?;
+                role = Some(String::from_utf8_lossy(&data).to_string());
+            }
+            _ => {
+                // Ignore unknown fields
+            }
+        }
+    }
+
+    // Validate required fields
+    let data = file_data.ok_or_else(|| {
+        ApiError::BusinessError(BusinessError::MissingRequiredParameter("file".to_string()))
+    })?;
+    let asset_kind = kind.ok_or_else(|| {
+        ApiError::BusinessError(BusinessError::MissingRequiredParameter("kind".to_string()))
+    })?;
+    let filename = file_name.unwrap_or_else(|| "asset".to_string());
+    let content_type = file_mime.unwrap_or_else(|| "application/octet-stream".to_string());
+
+    // Validate kind
+    if !VALID_ASSET_KINDS.contains(&asset_kind.as_str()) {
+        return Err(ApiError::BadRequest(format!(
+            "Invalid asset kind: {}. Valid kinds: {:?}",
+            asset_kind, VALID_ASSET_KINDS
+        )));
+    }
+
+    // Determine asset family (image/video/audio) and validate mime + size
+    let is_image = matches!(
+        asset_kind.as_str(),
+        "reference_image" | "start_frame" | "end_frame" | "brand_asset"
+    );
+    let is_video = matches!(asset_kind.as_str(), "reference_video" | "source_video");
+    let is_audio = matches!(asset_kind.as_str(), "audio" | "music");
+
+    if is_image {
+        if !OMX_IMAGE_MIMES.contains(&content_type.as_str()) {
+            return Err(ApiError::BusinessError(BusinessError::InvalidFileType(
+                content_type,
+            )));
+        }
+        if data.len() > MAX_OMX_IMAGE_SIZE {
+            return Err(ApiError::BusinessError(BusinessError::FileTooLarge(
+                MAX_OMX_IMAGE_SIZE,
+            )));
+        }
+    } else if is_video {
+        if !OMX_VIDEO_MIMES.contains(&content_type.as_str()) {
+            return Err(ApiError::BusinessError(BusinessError::InvalidFileType(
+                content_type,
+            )));
+        }
+        if data.len() > MAX_OMX_VIDEO_SIZE {
+            return Err(ApiError::BusinessError(BusinessError::FileTooLarge(
+                MAX_OMX_VIDEO_SIZE,
+            )));
+        }
+    } else if is_audio {
+        if !OMX_AUDIO_MIMES.contains(&content_type.as_str()) {
+            return Err(ApiError::BusinessError(BusinessError::InvalidFileType(
+                content_type,
+            )));
+        }
+        if data.len() > MAX_OMX_AUDIO_SIZE {
+            return Err(ApiError::BusinessError(BusinessError::FileTooLarge(
+                MAX_OMX_AUDIO_SIZE,
+            )));
+        }
+    }
+
+    // Default role if not provided
+    let asset_role = role.unwrap_or_else(|| match asset_kind.as_str() {
+        "reference_image" => "primary_image".to_string(),
+        "start_frame" => "first_frame".to_string(),
+        "end_frame" => "last_frame".to_string(),
+        "reference_video" => "style_reference".to_string(),
+        "source_video" => "source_clip".to_string(),
+        "brand_asset" => "brand_logo".to_string(),
+        "audio" | "music" => "background_audio".to_string(),
+        "subtitle" => "subtitle_file".to_string(),
+        _ => "generic".to_string(),
+    });
+
+    info!(
+        "Uploading OpenMontage asset: kind={}, role={}, size={} bytes, user_id={}",
+        asset_kind,
+        asset_role,
+        data.len(),
+        user.id
+    );
+
+    // Upload via service (which will use OssService)
+    let asset_dto = service
+        .upload_asset(
+            user.id,
+            asset_kind,
+            asset_role,
+            data,
+            filename,
+            content_type,
+        )
+        .await
+        .map_err(|e| ApiError::InternalServerError(format!("Asset upload failed: {}", e)))?;
+
+    info!(
+        "OpenMontage asset uploaded: asset_id={}, uri={}",
+        asset_dto.asset_id, asset_dto.uri
+    );
+
+    Ok(Json(ApiResponse::success(asset_dto)))
 }
 
 // ============================================================================

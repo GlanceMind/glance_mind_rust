@@ -200,6 +200,10 @@ impl MockOpenMontageClient {
             .unwrap()
             .contains(&job_id.to_string())
     }
+
+    pub fn last_enqueued_run(&self) -> Option<WorkerEnvelope> {
+        self.enqueued.lock().unwrap().last().cloned()
+    }
 }
 
 impl Default for MockOpenMontageClient {

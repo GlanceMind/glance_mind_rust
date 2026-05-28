@@ -84,6 +84,38 @@ pub struct AppendResult {
     pub gap: bool,
 }
 
+/// Asset record
+#[derive(Debug, Clone)]
+pub struct Asset {
+    pub id: i32,
+    pub asset_id: String,
+    pub user_id: i32,
+    pub kind: String,
+    pub role: String,
+    pub uri: String,
+    pub mime_type: Option<String>,
+    pub bytes: Option<i64>,
+    pub width_px: Option<i32>,
+    pub height_px: Option<i32>,
+    pub duration_ms: Option<i32>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// New asset data for creation
+#[derive(Debug, Clone)]
+pub struct NewAsset {
+    pub asset_id: String,
+    pub user_id: i32,
+    pub kind: String,
+    pub role: String,
+    pub uri: String,
+    pub mime_type: Option<String>,
+    pub bytes: Option<i64>,
+    pub width_px: Option<i32>,
+    pub height_px: Option<i32>,
+    pub duration_ms: Option<i32>,
+}
+
 /// Job store trait
 pub trait OpenMontageJobStore: Send + Sync {
     fn create_job(&self, job: NewJob) -> Result<Job, String>;
@@ -99,6 +131,8 @@ pub trait OpenMontageJobStore: Send + Sync {
     fn update_from_event(&self, event: &NewJobEvent) -> Result<(), String>;
     fn set_status(&self, job_id: &str, status: &str) -> Result<(), String>;
     fn set_cancel_requested(&self, job_id: &str) -> Result<(), String>;
+    fn get_asset(&self, asset_id: &str) -> Result<Option<Asset>, String>;
+    fn insert_asset(&self, asset: NewAsset) -> Result<Asset, String>;
 }
 
 // ============================================================================
@@ -114,6 +148,7 @@ struct InMemoryJob {
 #[derive(Clone)]
 pub struct InMemoryJobStore {
     data: Arc<Mutex<HashMap<String, InMemoryJob>>>,
+    assets: Arc<Mutex<HashMap<String, Asset>>>,
     next_id: Arc<Mutex<i32>>,
 }
 
@@ -121,6 +156,7 @@ impl InMemoryJobStore {
     pub fn new() -> Self {
         Self {
             data: Arc::new(Mutex::new(HashMap::new())),
+            assets: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(Mutex::new(1)),
         }
     }
@@ -319,37 +355,73 @@ impl OpenMontageJobStore for InMemoryJobStore {
         stored.job.updated_at = Some(chrono::Utc::now());
         Ok(())
     }
+
+    fn get_asset(&self, asset_id: &str) -> Result<Option<Asset>, String> {
+        let assets = self.assets.lock().unwrap();
+        Ok(assets.get(asset_id).cloned())
+    }
+
+    fn insert_asset(&self, new_asset: NewAsset) -> Result<Asset, String> {
+        let mut assets = self.assets.lock().unwrap();
+
+        // Check if already exists
+        if assets.contains_key(&new_asset.asset_id) {
+            return Err(format!("Asset already exists: {}", new_asset.asset_id));
+        }
+
+        let asset = Asset {
+            id: self.allocate_id(),
+            asset_id: new_asset.asset_id.clone(),
+            user_id: new_asset.user_id,
+            kind: new_asset.kind,
+            role: new_asset.role,
+            uri: new_asset.uri,
+            mime_type: new_asset.mime_type,
+            bytes: new_asset.bytes,
+            width_px: new_asset.width_px,
+            height_px: new_asset.height_px,
+            duration_ms: new_asset.duration_ms,
+            created_at: chrono::Utc::now(),
+        };
+
+        assets.insert(new_asset.asset_id, asset.clone());
+        Ok(asset)
+    }
 }
 
 // ============================================================================
-// Postgres Implementation (stub for production — DB schema not yet migrated)
+// Postgres Implementation (stub for part 3 — full impl deferred to production readiness)
 // ============================================================================
 
-#[derive(Clone, Default)]
-pub struct PgJobStore {}
+use diesel::prelude::*;
+use diesel::r2d2::{ConnectionManager, Pool};
+
+#[derive(Clone)]
+pub struct PgJobStore {
+    _pool: Pool<ConnectionManager<PgConnection>>,
+}
 
 impl PgJobStore {
-    #[allow(dead_code)]
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(pool: Pool<ConnectionManager<PgConnection>>) -> Self {
+        Self { _pool: pool }
     }
 }
 
 impl OpenMontageJobStore for PgJobStore {
     fn create_job(&self, _new_job: NewJob) -> Result<Job, String> {
-        Err("PgJobStore not implemented - use InMemoryJobStore for tests".to_string())
+        Err("PgJobStore not yet implemented - use InMemoryJobStore for tests".to_string())
     }
 
     fn get_job(&self, _job_id: &str) -> Result<Option<Job>, String> {
-        Err("PgJobStore not implemented".to_string())
+        Err("PgJobStore not yet implemented".to_string())
     }
 
     fn find_by_idempotency(&self, _key: &str) -> Result<Option<Job>, String> {
-        Err("PgJobStore not implemented".to_string())
+        Err("PgJobStore not yet implemented".to_string())
     }
 
     fn append_event(&self, _event: NewJobEvent) -> Result<AppendResult, String> {
-        Err("PgJobStore not implemented".to_string())
+        Err("PgJobStore not yet implemented".to_string())
     }
 
     fn list_events(
@@ -358,18 +430,26 @@ impl OpenMontageJobStore for PgJobStore {
         _after_sequence: i64,
         _limit: i64,
     ) -> Result<Vec<JobEvent>, String> {
-        Err("PgJobStore not implemented".to_string())
+        Err("PgJobStore not yet implemented".to_string())
     }
 
     fn update_from_event(&self, _event: &NewJobEvent) -> Result<(), String> {
-        Err("PgJobStore not implemented".to_string())
+        Err("PgJobStore not yet implemented".to_string())
     }
 
     fn set_status(&self, _job_id: &str, _status: &str) -> Result<(), String> {
-        Err("PgJobStore not implemented".to_string())
+        Err("PgJobStore not yet implemented".to_string())
     }
 
     fn set_cancel_requested(&self, _job_id: &str) -> Result<(), String> {
-        Err("PgJobStore not implemented".to_string())
+        Err("PgJobStore not yet implemented".to_string())
+    }
+
+    fn get_asset(&self, _asset_id: &str) -> Result<Option<Asset>, String> {
+        Err("PgJobStore not yet implemented".to_string())
+    }
+
+    fn insert_asset(&self, _asset: NewAsset) -> Result<Asset, String> {
+        Err("PgJobStore not yet implemented".to_string())
     }
 }

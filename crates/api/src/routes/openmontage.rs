@@ -27,6 +27,7 @@ pub fn user_routes() -> Router {
             "/jobs/:job_id/cancel",
             post(openmontage_handler::cancel_job),
         )
+        .route("/assets", post(openmontage_handler::upload_asset))
 }
 
 /// Internal routes (mounted under /api/v1/internal/openmontage)

@@ -388,3 +388,228 @@ async fn cancel_running_sets_flag() {
     // Verify mock client recorded the cancel flag
     assert!(client.was_cancel_flag_set(job_id));
 }
+
+// ============================================================================
+// M2 Input Mode Mapping Tests (Part 3)
+// ============================================================================
+
+#[tokio::test]
+async fn to_protocol_request_maps_image_to_video() {
+    use glance_mind_api::{
+        dto::openmontage_dto::CreateJobDto,
+        repository::openmontage_repository::{InMemoryJobStore, NewAsset, OpenMontageJobStore},
+        service::{
+            openmontage_client::MockOpenMontageClient, openmontage_service::OpenMontageService,
+            openmontage_stream_hub::OpenMontageStreamHub,
+        },
+    };
+    use std::sync::Arc;
+
+    let store = Arc::new(InMemoryJobStore::new());
+    let client = Arc::new(MockOpenMontageClient::new());
+    let hub = OpenMontageStreamHub::new();
+    let service = OpenMontageService::new(store.clone(), client.clone(), hub);
+
+    // Seed a reference_image asset
+    let asset_id = uuid::Uuid::new_v4().to_string();
+    let new_asset = NewAsset {
+        asset_id: asset_id.clone(),
+        user_id: 1,
+        kind: "reference_image".to_string(),
+        role: "primary_image".to_string(),
+        uri: "https://example.com/image.png".to_string(),
+        mime_type: Some("image/png".to_string()),
+        bytes: Some(1024),
+        width_px: Some(512),
+        height_px: Some(512),
+        duration_ms: None,
+    };
+    store.insert_asset(new_asset).unwrap();
+
+    // Create job with input_mode=image_to_video and asset_ids
+    let dto = CreateJobDto {
+        title: "Image to Video Test".to_string(),
+        prompt: "Animate this image".to_string(),
+        target_platform: "youtube".to_string(),
+        input_mode: Some("image_to_video".to_string()),
+        asset_ids: Some(vec![asset_id.clone()]),
+        duration_seconds: Some(5),
+        ..Default::default()
+    };
+
+    service.create_job(1, "tenant-1", dto).unwrap();
+
+    // Retrieve the enqueued request from MockClient
+    let enqueued = client.last_enqueued_run().unwrap();
+    let request_json: serde_json::Value =
+        serde_json::from_str(&enqueued.request_json.to_string()).unwrap();
+
+    // Verify assets array contains the reference_image
+    assert!(request_json["assets"].is_array());
+    let assets = request_json["assets"].as_array().unwrap();
+    assert_eq!(assets.len(), 1);
+    assert_eq!(assets[0]["kind"], "reference_image");
+    assert_eq!(assets[0]["role"], "primary_image");
+    assert_eq!(assets[0]["uri"], "https://example.com/image.png");
+
+    // Verify tool_invocations contains image_to_video operation
+    assert!(request_json["tool_invocations"].is_array());
+    let invocations = request_json["tool_invocations"].as_array().unwrap();
+    assert_eq!(invocations.len(), 1);
+    assert_eq!(invocations[0]["operation"], "image_to_video");
+
+    let input_json: serde_json::Value =
+        serde_json::from_str(invocations[0]["input_json"].as_str().unwrap()).unwrap();
+    assert_eq!(input_json["prompt"], "Animate this image");
+    assert_eq!(input_json["image_url"], "https://example.com/image.png");
+    assert_eq!(input_json["duration"], 5);
+}
+
+#[tokio::test]
+async fn to_protocol_request_maps_first_last_frame() {
+    use glance_mind_api::{
+        dto::openmontage_dto::CreateJobDto,
+        repository::openmontage_repository::{InMemoryJobStore, NewAsset, OpenMontageJobStore},
+        service::{
+            openmontage_client::MockOpenMontageClient, openmontage_service::OpenMontageService,
+            openmontage_stream_hub::OpenMontageStreamHub,
+        },
+    };
+    use std::sync::Arc;
+
+    let store = Arc::new(InMemoryJobStore::new());
+    let client = Arc::new(MockOpenMontageClient::new());
+    let hub = OpenMontageStreamHub::new();
+    let service = OpenMontageService::new(store.clone(), client.clone(), hub);
+
+    // Seed start_frame and end_frame assets
+    let start_id = uuid::Uuid::new_v4().to_string();
+    let end_id = uuid::Uuid::new_v4().to_string();
+
+    store
+        .insert_asset(NewAsset {
+            asset_id: start_id.clone(),
+            user_id: 1,
+            kind: "start_frame".to_string(),
+            role: "first_frame".to_string(),
+            uri: "https://example.com/start.png".to_string(),
+            mime_type: Some("image/png".to_string()),
+            bytes: Some(1024),
+            width_px: None,
+            height_px: None,
+            duration_ms: None,
+        })
+        .unwrap();
+
+    store
+        .insert_asset(NewAsset {
+            asset_id: end_id.clone(),
+            user_id: 1,
+            kind: "end_frame".to_string(),
+            role: "last_frame".to_string(),
+            uri: "https://example.com/end.png".to_string(),
+            mime_type: Some("image/png".to_string()),
+            bytes: Some(1024),
+            width_px: None,
+            height_px: None,
+            duration_ms: None,
+        })
+        .unwrap();
+
+    // Create job with input_mode=first_last_frame
+    let dto = CreateJobDto {
+        title: "First Last Frame Test".to_string(),
+        prompt: "Interpolate between frames".to_string(),
+        target_platform: "tiktok".to_string(),
+        input_mode: Some("first_last_frame".to_string()),
+        asset_ids: Some(vec![start_id, end_id]),
+        ..Default::default()
+    };
+
+    service.create_job(1, "tenant-1", dto).unwrap();
+
+    let enqueued = client.last_enqueued_run().unwrap();
+    let request_json: serde_json::Value =
+        serde_json::from_str(&enqueued.request_json.to_string()).unwrap();
+
+    // Verify assets array contains both frames
+    let assets = request_json["assets"].as_array().unwrap();
+    assert_eq!(assets.len(), 2);
+    assert!(assets.iter().any(|a| a["kind"] == "start_frame"));
+    assert!(assets.iter().any(|a| a["kind"] == "end_frame"));
+
+    // first_last_frame mode does NOT generate tool_invocations (worker interpolates)
+    assert!(
+        request_json["tool_invocations"].is_null()
+            || request_json["tool_invocations"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn to_protocol_request_reference_driven_has_no_generation_invocation() {
+    use glance_mind_api::{
+        dto::openmontage_dto::CreateJobDto,
+        repository::openmontage_repository::{InMemoryJobStore, NewAsset, OpenMontageJobStore},
+        service::{
+            openmontage_client::MockOpenMontageClient, openmontage_service::OpenMontageService,
+            openmontage_stream_hub::OpenMontageStreamHub,
+        },
+    };
+    use std::sync::Arc;
+
+    let store = Arc::new(InMemoryJobStore::new());
+    let client = Arc::new(MockOpenMontageClient::new());
+    let hub = OpenMontageStreamHub::new();
+    let service = OpenMontageService::new(store.clone(), client.clone(), hub);
+
+    // Seed a reference_video asset
+    let ref_vid_id = uuid::Uuid::new_v4().to_string();
+    store
+        .insert_asset(NewAsset {
+            asset_id: ref_vid_id.clone(),
+            user_id: 1,
+            kind: "reference_video".to_string(),
+            role: "style_reference".to_string(),
+            uri: "https://example.com/reference.mp4".to_string(),
+            mime_type: Some("video/mp4".to_string()),
+            bytes: Some(10240),
+            width_px: Some(1920),
+            height_px: Some(1080),
+            duration_ms: Some(5000),
+        })
+        .unwrap();
+
+    // Create job with input_mode=reference_driven
+    let dto = CreateJobDto {
+        title: "Reference Driven Test".to_string(),
+        prompt: "Match this style".to_string(),
+        target_platform: "youtube".to_string(),
+        input_mode: Some("reference_driven".to_string()),
+        asset_ids: Some(vec![ref_vid_id]),
+        ..Default::default()
+    };
+
+    service.create_job(1, "tenant-1", dto).unwrap();
+
+    let enqueued = client.last_enqueued_run().unwrap();
+    let request_json: serde_json::Value =
+        serde_json::from_str(&enqueued.request_json.to_string()).unwrap();
+
+    // Verify reference_video is in assets
+    let assets = request_json["assets"].as_array().unwrap();
+    assert_eq!(assets.len(), 1);
+    assert_eq!(assets[0]["kind"], "reference_video");
+    assert_eq!(assets[0]["role"], "style_reference");
+
+    // reference_driven mode does NOT generate direct tool_invocations (analysis-first)
+    assert!(
+        request_json["tool_invocations"].is_null()
+            || request_json["tool_invocations"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+    );
+}
