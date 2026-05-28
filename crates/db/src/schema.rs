@@ -968,6 +968,88 @@ diesel::table! {
 }
 
 diesel::table! {
+    gm_openmontage_assets (id) {
+        id -> Int4,
+        #[max_length = 200]
+        asset_id -> Varchar,
+        user_id -> Int4,
+        #[max_length = 50]
+        kind -> Varchar,
+        #[max_length = 50]
+        role -> Varchar,
+        #[max_length = 1000]
+        uri -> Varchar,
+        #[max_length = 100]
+        mime_type -> Nullable<Varchar>,
+        bytes -> Nullable<Int8>,
+        width_px -> Nullable<Int4>,
+        height_px -> Nullable<Int4>,
+        duration_ms -> Nullable<Int4>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_openmontage_job_events (id) {
+        id -> Int4,
+        #[max_length = 200]
+        job_id -> Varchar,
+        sequence -> Int8,
+        #[max_length = 200]
+        event_id -> Varchar,
+        #[max_length = 100]
+        event_type -> Varchar,
+        #[max_length = 50]
+        status -> Nullable<Varchar>,
+        #[max_length = 100]
+        stage -> Nullable<Varchar>,
+        progress_pct -> Nullable<Int4>,
+        event_json -> Jsonb,
+        emitted_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_openmontage_jobs (id) {
+        id -> Int4,
+        #[max_length = 200]
+        job_id -> Varchar,
+        #[max_length = 200]
+        project_id -> Varchar,
+        user_id -> Int4,
+        #[max_length = 200]
+        tenant_id -> Varchar,
+        #[max_length = 200]
+        request_id -> Varchar,
+        #[max_length = 200]
+        idempotency_key -> Varchar,
+        #[max_length = 100]
+        pipeline -> Varchar,
+        #[max_length = 50]
+        input_mode -> Nullable<Varchar>,
+        #[max_length = 50]
+        status -> Varchar,
+        cancel_requested -> Bool,
+        #[max_length = 100]
+        current_stage -> Nullable<Varchar>,
+        progress_pct -> Int4,
+        #[max_length = 50]
+        render_runtime -> Nullable<Varchar>,
+        #[max_length = 50]
+        approval_policy -> Nullable<Varchar>,
+        budget_limit_usd -> Nullable<Numeric>,
+        last_event_sequence -> Int8,
+        next_event_sequence -> Int8,
+        sync_required -> Bool,
+        snapshot_json -> Jsonb,
+        error_json -> Nullable<Jsonb>,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
     gm_novel_architecture_checkpoints (id) {
         id -> Int8,
         project_id -> Text,
@@ -2074,6 +2156,9 @@ diesel::allow_tables_to_appear_in_same_query!(
     gm_email_verifications,
     gm_login_logs,
     gm_notifications,
+    gm_openmontage_assets,
+    gm_openmontage_job_events,
+    gm_openmontage_jobs,
     gm_novel_architecture_checkpoints,
     gm_novel_architectures,
     gm_novel_blueprint_chapters,
