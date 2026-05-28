@@ -305,6 +305,7 @@ async fn cancel_queued_marks_cancelled() {
 }
 
 #[tokio::test]
+#[allow(clippy::bool_assert_comparison)]
 async fn cancel_running_sets_flag() {
     use glance_mind_api::repository::openmontage_repository::NewJob;
     use std::sync::Arc;
