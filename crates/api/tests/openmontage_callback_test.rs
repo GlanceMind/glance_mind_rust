@@ -23,10 +23,7 @@ fn test_callback_router() -> axum::Router {
     let hub = OpenMontageStreamHub::new();
     let service = OpenMontageService::new(store.clone(), client.clone(), hub.clone());
 
-    openmontage::internal_routes()
-        .layer(axum::Extension(service))
-        .layer(axum::Extension(store))
-        .layer(axum::Extension(hub))
+    openmontage::internal_routes().layer(axum::Extension(service))
 }
 
 #[tokio::test]

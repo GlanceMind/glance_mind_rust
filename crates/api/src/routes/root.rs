@@ -513,9 +513,7 @@ pub fn routes(
             .nest(
                 "/internal/openmontage",
                 crate::routes::openmontage::internal_routes()
-                    .layer(axum::Extension(openmontage_service.clone()))
-                    .layer(axum::Extension(openmontage_store.clone()))
-                    .layer(axum::Extension(openmontage_hub.clone())),
+                    .layer(axum::Extension(openmontage_service.clone())),
             )
             // OpenMontage Routes (requires auth)
             .nest(
@@ -528,9 +526,6 @@ pub fn routes(
                                 auth_middleware::auth,
                             ))
                             .layer(axum::Extension(openmontage_service.clone()))
-                            .layer(axum::Extension(openmontage_store.clone()))
-                            .layer(axum::Extension(openmontage_client.clone()))
-                            .layer(axum::Extension(openmontage_hub.clone()))
                             .layer(axum::Extension(user_state.clone())),
                     ),
             )

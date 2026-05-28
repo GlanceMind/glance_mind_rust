@@ -9,7 +9,7 @@ use axum::{
 };
 use glance_mind_api::{
     dto::openmontage_dto::{ApprovalDto, CreateJobDto},
-    repository::openmontage_repository::InMemoryJobStore,
+    repository::openmontage_repository::{InMemoryJobStore, OpenMontageJobStore},
     service::{
         openmontage_client::MockOpenMontageClient, openmontage_service::OpenMontageService,
         openmontage_stream_hub::OpenMontageStreamHub,
@@ -50,9 +50,6 @@ fn test_openmontage_router() -> axum::Router {
     openmontage::user_routes()
         .layer(axum::Extension(user))
         .layer(axum::Extension(service))
-        .layer(axum::Extension(store))
-        .layer(axum::Extension(client))
-        .layer(axum::Extension(hub))
 }
 
 #[tokio::test]
@@ -309,6 +306,85 @@ async fn cancel_queued_marks_cancelled() {
 
 #[tokio::test]
 async fn cancel_running_sets_flag() {
-    // This test would need to set job status to running first
-    // For now, placeholder
+    use glance_mind_api::repository::openmontage_repository::NewJob;
+    use std::sync::Arc;
+
+    let store = Arc::new(InMemoryJobStore::new());
+    let client = Arc::new(MockOpenMontageClient::new());
+    let hub = OpenMontageStreamHub::new();
+    let service = OpenMontageService::new(store.clone(), client.clone(), hub.clone());
+
+    // Seed a running job
+    let job_id = "running-job-123";
+    let new_job = NewJob {
+        job_id: job_id.to_string(),
+        project_id: format!("omx-{}", job_id),
+        user_id: 1,
+        tenant_id: "default-tenant".to_string(),
+        request_id: "req-123".to_string(),
+        idempotency_key: "idem-123".to_string(),
+        pipeline: "animated-explainer".to_string(),
+        input_mode: Some("text".to_string()),
+        status: "running".to_string(),
+        snapshot_json: serde_json::json!({"title": "Running Test"}),
+    };
+    OpenMontageJobStore::create_job(&*store, new_job).unwrap();
+
+    // Build router with seeded store/service
+    use glance_mind_db::entity::user::User;
+
+    let user = User {
+        id: 1,
+        email: Some("test@example.com".to_string()),
+        password_hash: "".to_string(),
+        invitation_code: None,
+        referred_by: None,
+        company_name: None,
+        api_key: None,
+        status: "active".to_string(),
+        full_name: "Test User".to_string(),
+        role: "user".to_string(),
+        is_active: true,
+        created_at: chrono::Utc::now(),
+        updated_at: None,
+        username: Some("testuser".to_string()),
+        permissions: 0,
+    };
+
+    let router = glance_mind_api::routes::openmontage::user_routes()
+        .layer(axum::Extension(user))
+        .layer(axum::Extension(service));
+
+    // Cancel the running job
+    let cancel_req = Request::builder()
+        .method("POST")
+        .uri(format!("/jobs/{}/cancel", job_id))
+        .body(Body::empty())
+        .unwrap();
+
+    let cancel_resp = router.oneshot(cancel_req).await.unwrap();
+    assert_eq!(cancel_resp.status(), StatusCode::OK);
+
+    let body = hyper::body::to_bytes(cancel_resp.into_body())
+        .await
+        .unwrap();
+    let resp: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // Running job -> cancel_requested=true, status stays "running"
+    assert_eq!(resp["code"], 1000);
+    assert_eq!(resp["data"]["cancel_requested"], true);
+    assert!(resp["data"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("still running"));
+
+    // Verify job status is still "running" but cancel_requested is true
+    let job = OpenMontageJobStore::get_job(&*store, job_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(job.status, "running");
+    assert_eq!(job.cancel_requested, true);
+
+    // Verify mock client recorded the cancel flag
+    assert!(client.was_cancel_flag_set(job_id));
 }

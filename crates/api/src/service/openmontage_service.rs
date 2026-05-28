@@ -3,11 +3,12 @@
 //! Business logic layer for OpenMontage jobs: create, find by idempotency, cancel, approval.
 
 use crate::dto::openmontage_dto::{
-    ApprovalDto, CancelResultDto, CreateJobDto, JobSnapshotDto, ServerContext,
+    ApprovalDto, CancelResultDto, CreateJobDto, JobEventDto, JobEventsDto, JobSnapshotDto,
+    PipelineInfoDto, PipelinesDto, PreflightDto, ServerContext,
 };
-use crate::repository::openmontage_repository::{NewJob, OpenMontageJobStore};
+use crate::repository::openmontage_repository::{NewJob, NewJobEvent, OpenMontageJobStore};
 use crate::service::openmontage_client::{OpenMontageClient, WorkerEnvelope};
-use crate::service::openmontage_stream_hub::OpenMontageStreamHub;
+use crate::service::openmontage_stream_hub::{OpenMontageSseEvent, OpenMontageStreamHub};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -15,7 +16,6 @@ use uuid::Uuid;
 pub struct OpenMontageService {
     store: Arc<dyn OpenMontageJobStore>,
     client: Arc<dyn OpenMontageClient>,
-    #[allow(dead_code)] // Used in construction, will be used in future for publishing events
     hub: OpenMontageStreamHub,
 }
 
@@ -192,5 +192,129 @@ impl OpenMontageService {
         // Return current snapshot (approval doesn't change status immediately)
         self.get_job(job_id)?
             .ok_or_else(|| "Job disappeared after approval".to_string())
+    }
+
+    /// Preflight check (read from client with fallback to warming_up)
+    pub fn preflight(&self) -> Result<PreflightDto, String> {
+        let preflight = self.client.read_preflight()?;
+        Ok(preflight.unwrap_or_else(|| PreflightDto {
+            passed: false,
+            status: "warming_up".to_string(),
+            blocking: vec![],
+            warnings: vec![],
+            estimated_cost_cents: None,
+        }))
+    }
+
+    /// Available pipelines (read from client with fallback to animated-explainer)
+    pub fn pipelines(&self) -> Result<PipelinesDto, String> {
+        let pipelines = self.client.read_pipelines()?;
+        Ok(pipelines.unwrap_or_else(|| PipelinesDto {
+            pipelines: vec![PipelineInfoDto {
+                name: "animated-explainer".to_string(),
+                description: "Topic to fully generated explainer".to_string(),
+                stability: "production".to_string(),
+            }],
+        }))
+    }
+
+    /// List events for a job after a given sequence
+    pub fn list_events(
+        &self,
+        job_id: &str,
+        after: i64,
+        limit: i64,
+    ) -> Result<JobEventsDto, String> {
+        let events = self.store.list_events(job_id, after, limit)?;
+        let next_seq = events.last().map(|e| e.sequence as u64 + 1).unwrap_or(1);
+
+        let dtos: Vec<JobEventDto> = events
+            .iter()
+            .map(|e| JobEventDto {
+                sequence: e.sequence,
+                event_id: e.event_id.clone(),
+                event_type: e.event_type.clone(),
+                status: e.status.clone(),
+                stage: e.stage.clone(),
+                progress_pct: e.progress_pct,
+                event_json: e.event_json.clone(),
+                emitted_at: e.emitted_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
+            })
+            .collect();
+
+        Ok(JobEventsDto {
+            events: dtos,
+            next_sequence: next_seq,
+        })
+    }
+
+    /// Subscribe to a job's SSE stream
+    pub async fn subscribe(
+        &self,
+        job_id: &str,
+    ) -> tokio::sync::mpsc::Receiver<OpenMontageSseEvent> {
+        self.hub.subscribe(job_id).await
+    }
+
+    /// Get backlog events for SSE stream
+    pub fn backlog(
+        &self,
+        job_id: &str,
+        after: i64,
+    ) -> Result<Vec<crate::repository::openmontage_repository::JobEvent>, String> {
+        self.store.list_events(job_id, after, 100)
+    }
+
+    /// Ingest callback event from worker
+    pub fn ingest_event(
+        &self,
+        event: crate::handler::openmontage_handler::OpenMontageJobEvent,
+    ) -> Result<crate::handler::openmontage_handler::CallbackAck, String> {
+        let job_id = &event.job.job_id;
+
+        let new_event = NewJobEvent {
+            job_id: job_id.to_string(),
+            sequence: event.sequence,
+            event_id: event.event_id.clone(),
+            event_type: event.event_type.clone(),
+            status: Some(event.status.clone()),
+            event_json: serde_json::to_value(&event).unwrap_or_default(),
+        };
+
+        let append_result = self.store.append_event(new_event.clone())?;
+
+        if append_result.inserted {
+            self.store.update_from_event(&new_event)?;
+
+            // Publish to SSE hub
+            let sse_event = OpenMontageSseEvent {
+                event_type: event.event_type.clone(),
+                job_id: job_id.to_string(),
+                project_id: event.job.project_id.clone(),
+                sequence: event.sequence,
+                status: event.status.clone(),
+                stage: Some(event.stage.clone()),
+                progress_pct: event.progress_pct,
+                payload: serde_json::to_value(&event).unwrap_or_default(),
+            };
+            tokio::spawn({
+                let hub = self.hub.clone();
+                async move {
+                    hub.publish(sse_event).await;
+                }
+            });
+        }
+
+        let job = self
+            .store
+            .get_job(job_id)?
+            .ok_or_else(|| "Job not found".to_string())?;
+
+        Ok(crate::handler::openmontage_handler::CallbackAck {
+            received: true,
+            event_id: event.event_id,
+            next_expected_sequence: job.next_event_sequence,
+            sync_required: if append_result.gap { Some(true) } else { None },
+        })
     }
 }

@@ -179,17 +179,26 @@ impl OpenMontageClient for RedisOpenMontageClient {
 #[derive(Clone)]
 pub struct MockOpenMontageClient {
     enqueued: Arc<Mutex<Vec<WorkerEnvelope>>>,
+    cancel_flags: Arc<Mutex<Vec<String>>>,
 }
 
 impl MockOpenMontageClient {
     pub fn new() -> Self {
         Self {
             enqueued: Arc::new(Mutex::new(Vec::new())),
+            cancel_flags: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     pub fn get_enqueued(&self) -> Vec<WorkerEnvelope> {
         self.enqueued.lock().unwrap().clone()
+    }
+
+    pub fn was_cancel_flag_set(&self, job_id: &str) -> bool {
+        self.cancel_flags
+            .lock()
+            .unwrap()
+            .contains(&job_id.to_string())
     }
 }
 
@@ -210,7 +219,8 @@ impl OpenMontageClient for MockOpenMontageClient {
         Ok(())
     }
 
-    fn set_cancel_flag(&self, _job_id: &str) -> Result<(), String> {
+    fn set_cancel_flag(&self, job_id: &str) -> Result<(), String> {
+        self.cancel_flags.lock().unwrap().push(job_id.to_string());
         Ok(())
     }
 

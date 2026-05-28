@@ -14,35 +14,22 @@ use std::convert::Infallible;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
 
-use crate::dto::openmontage_dto::{
-    ApprovalDto, CreateJobDto, JobEventDto, JobEventsDto, PipelineInfoDto, PipelinesDto,
-    PreflightDto,
-};
+use crate::dto::openmontage_dto::{ApprovalDto, CreateJobDto};
 use crate::error::api_error::ApiError;
-use crate::repository::openmontage_repository::OpenMontageJobStore;
 use crate::response::unified_response::ApiResponse;
-use crate::service::openmontage_client::OpenMontageClient;
 use crate::service::openmontage_service::OpenMontageService;
-use crate::service::openmontage_stream_hub::{OpenMontageSseEvent, OpenMontageStreamHub};
+use crate::service::openmontage_stream_hub::OpenMontageSseEvent;
 
 // ============================================================================
 // E1: GET /openmontage/preflight
 // ============================================================================
 
 pub async fn get_preflight(
-    Extension(client): Extension<std::sync::Arc<dyn OpenMontageClient>>,
-) -> Result<Json<ApiResponse<PreflightDto>>, ApiError> {
-    let preflight = client
-        .read_preflight()
+    Extension(service): Extension<OpenMontageService>,
+) -> Result<Json<ApiResponse<crate::dto::openmontage_dto::PreflightDto>>, ApiError> {
+    let dto = service
+        .preflight()
         .map_err(|e| ApiError::InternalServerError(format!("preflight read failed: {}", e)))?;
-
-    let dto = preflight.unwrap_or_else(|| PreflightDto {
-        passed: false,
-        status: "warming_up".to_string(),
-        blocking: vec![],
-        warnings: vec![],
-        estimated_cost_cents: None,
-    });
 
     Ok(Json(ApiResponse::success(dto)))
 }
@@ -52,19 +39,11 @@ pub async fn get_preflight(
 // ============================================================================
 
 pub async fn get_pipelines(
-    Extension(client): Extension<std::sync::Arc<dyn OpenMontageClient>>,
-) -> Result<Json<ApiResponse<PipelinesDto>>, ApiError> {
-    let pipelines = client
-        .read_pipelines()
+    Extension(service): Extension<OpenMontageService>,
+) -> Result<Json<ApiResponse<crate::dto::openmontage_dto::PipelinesDto>>, ApiError> {
+    let dto = service
+        .pipelines()
         .map_err(|e| ApiError::InternalServerError(format!("pipelines read failed: {}", e)))?;
-
-    let dto = pipelines.unwrap_or_else(|| PipelinesDto {
-        pipelines: vec![PipelineInfoDto {
-            name: "animated-explainer".to_string(),
-            description: "Topic to fully generated explainer".to_string(),
-            stability: "production".to_string(),
-        }],
-    });
 
     Ok(Json(ApiResponse::success(dto)))
 }
@@ -120,34 +99,15 @@ fn default_limit() -> i64 {
 
 pub async fn get_events(
     Extension(_user): Extension<User>,
-    Extension(store): Extension<std::sync::Arc<dyn OpenMontageJobStore>>,
+    Extension(service): Extension<OpenMontageService>,
     Path(job_id): Path<String>,
     Query(query): Query<EventsQuery>,
-) -> Result<Json<ApiResponse<JobEventsDto>>, ApiError> {
-    let events = store
+) -> Result<Json<ApiResponse<crate::dto::openmontage_dto::JobEventsDto>>, ApiError> {
+    let dto = service
         .list_events(&job_id, query.after, query.limit)
         .map_err(|e| ApiError::InternalServerError(format!("list events failed: {}", e)))?;
 
-    let next_seq = events.last().map(|e| e.sequence as u64 + 1).unwrap_or(1);
-
-    let dtos: Vec<JobEventDto> = events
-        .iter()
-        .map(|e| JobEventDto {
-            sequence: e.sequence,
-            event_id: e.event_id.clone(),
-            event_type: e.event_type.clone(),
-            status: e.status.clone(),
-            stage: e.stage.clone(),
-            progress_pct: e.progress_pct,
-            event_json: e.event_json.clone(),
-            emitted_at: e.emitted_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
-        })
-        .collect();
-
-    Ok(Json(ApiResponse::success(JobEventsDto {
-        events: dtos,
-        next_sequence: next_seq,
-    })))
+    Ok(Json(ApiResponse::success(dto)))
 }
 
 // ============================================================================
@@ -163,8 +123,6 @@ pub struct StreamQuery {
 pub async fn stream_job(
     Extension(_user): Extension<User>,
     Extension(service): Extension<OpenMontageService>,
-    Extension(store): Extension<std::sync::Arc<dyn OpenMontageJobStore>>,
-    Extension(hub): Extension<OpenMontageStreamHub>,
     Path(job_id): Path<String>,
     Query(query): Query<StreamQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
@@ -172,7 +130,7 @@ pub async fn stream_job(
         .get_job(&job_id)
         .map_err(|e| ApiError::InternalServerError(format!("get job failed: {}", e)))?;
 
-    let rx = hub.subscribe(&job_id).await;
+    let rx = service.subscribe(&job_id).await;
     let (tx_out, rx_out) = tokio::sync::mpsc::channel::<OpenMontageSseEvent>(64);
 
     // Send snapshot
@@ -190,8 +148,8 @@ pub async fn stream_job(
         let _ = tx_out.send(snap_event).await;
 
         // Send backlog events after query.after
-        let backlog = store
-            .list_events(&job_id, query.after, 100)
+        let backlog = service
+            .backlog(&job_id, query.after)
             .map_err(|e| ApiError::InternalServerError(format!("backlog failed: {}", e)))?;
 
         for event in backlog {
@@ -346,57 +304,12 @@ pub struct CallbackAck {
 }
 
 pub async fn ingest_callback(
-    Extension(store): Extension<std::sync::Arc<dyn OpenMontageJobStore>>,
-    Extension(hub): Extension<OpenMontageStreamHub>,
+    Extension(service): Extension<OpenMontageService>,
     Json(event): Json<OpenMontageJobEvent>,
 ) -> Result<Json<ApiResponse<CallbackAck>>, ApiError> {
-    use crate::repository::openmontage_repository::NewJobEvent;
-
-    let job_id = &event.job.job_id;
-
-    let new_event = NewJobEvent {
-        job_id: job_id.to_string(),
-        sequence: event.sequence,
-        event_id: event.event_id.clone(),
-        event_type: event.event_type.clone(),
-        status: Some(event.status.clone()),
-        event_json: serde_json::to_value(&event).unwrap_or_default(),
-    };
-
-    let append_result = store
-        .append_event(new_event.clone())
-        .map_err(|e| ApiError::InternalServerError(format!("append event failed: {}", e)))?;
-
-    if append_result.inserted {
-        store.update_from_event(&new_event).map_err(|e| {
-            ApiError::InternalServerError(format!("update from event failed: {}", e))
-        })?;
-
-        // Publish to SSE hub
-        let sse_event = OpenMontageSseEvent {
-            event_type: event.event_type.clone(),
-            job_id: job_id.to_string(),
-            project_id: event.job.project_id.clone(),
-            sequence: event.sequence,
-            status: event.status.clone(),
-            stage: Some(event.stage.clone()),
-            progress_pct: event.progress_pct,
-            payload: serde_json::to_value(&event).unwrap_or_default(),
-        };
-        hub.publish(sse_event).await;
-    }
-
-    let job = store
-        .get_job(job_id)
-        .map_err(|e| ApiError::InternalServerError(format!("get job failed: {}", e)))?
-        .ok_or_else(|| ApiError::NotFound("Job not found".to_string()))?;
-
-    let ack = CallbackAck {
-        received: true,
-        event_id: event.event_id,
-        next_expected_sequence: job.next_event_sequence,
-        sync_required: if append_result.gap { Some(true) } else { None },
-    };
+    let ack = service
+        .ingest_event(event)
+        .map_err(|e| ApiError::InternalServerError(format!("ingest event failed: {}", e)))?;
 
     Ok(Json(ApiResponse::success(ack)))
 }
