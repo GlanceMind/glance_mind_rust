@@ -15,6 +15,7 @@ pub mod material;
 pub mod notification;
 pub mod novel;
 pub mod oauth;
+pub mod openmontage;
 pub mod patrol;
 pub(crate) mod promo_code;
 pub mod public;

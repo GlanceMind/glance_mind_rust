@@ -8,6 +8,7 @@ pub mod material_folder_repository;
 pub mod material_repository;
 pub mod notification_repository;
 pub mod oauth_repository;
+pub mod openmontage_repository;
 pub(crate) mod platform_repository;
 pub(crate) mod pricing_repository;
 pub mod referral_repository;

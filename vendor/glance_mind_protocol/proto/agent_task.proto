@@ -1,0 +1,85 @@
+syntax = "proto3";
+package glance_mind;
+
+option java_package = "io.glancemind.protocol";
+option java_multiple_files = true;
+
+// Generic task envelope shared by API, schedulers, and agent services.
+message AgentTaskEnvelope {
+  string task_id = 1 [json_name = "task_id"];
+  string agent_type = 2 [json_name = "agent_type"];
+  string agent_version = 3 [json_name = "agent_version"];
+  string tenant_id = 4 [json_name = "tenant_id"];
+  string correlation_id = 5 [json_name = "correlation_id"];
+  string idempotency_key = 6 [json_name = "idempotency_key"];
+  AgentDomainRef domain_ref = 7 [json_name = "domain_ref"];
+  string payload_json = 8 [json_name = "payload_json"];
+  int32 priority = 9;
+  int32 max_attempts = 10 [json_name = "max_attempts"];
+  string traceparent = 11;
+}
+
+// Reference back to the owning business domain. Agents preserve this;
+// domain orchestrators interpret it.
+message AgentDomainRef {
+  string domain = 1;
+  string entity_type = 2 [json_name = "entity_type"];
+  string entity_id = 3 [json_name = "entity_id"];
+  string slot = 4;
+  string on_success = 5 [json_name = "on_success"];
+  string context_json = 6 [json_name = "context_json"];
+}
+
+message AgentTextOutput {
+  string output_id = 1 [json_name = "output_id"];
+  string role = 2;
+  string title = 3;
+  string body = 4;
+  string format = 5;
+  string language = 6;
+  string metadata_json = 7 [json_name = "metadata_json"];
+}
+
+message AgentImageOutput {
+  string output_id = 1 [json_name = "output_id"];
+  string role = 2;
+  string uri = 3;
+  string mime_type = 4 [json_name = "mime_type"];
+  int32 width = 5;
+  int32 height = 6;
+  string prompt = 7;
+  string metadata_json = 8 [json_name = "metadata_json"];
+}
+
+message AgentVideoOutput {
+  string output_id = 1 [json_name = "output_id"];
+  string role = 2;
+  string uri = 3;
+  string mime_type = 4 [json_name = "mime_type"];
+  int32 width = 5;
+  int32 height = 6;
+  double duration_seconds = 7 [json_name = "duration_seconds"];
+  string thumbnail_uri = 8 [json_name = "thumbnail_uri"];
+  string prompt = 9;
+  string metadata_json = 10 [json_name = "metadata_json"];
+}
+
+message AgentTaskResult {
+  string task_id = 1 [json_name = "task_id"];
+  string status = 2;
+  repeated AgentTextOutput texts = 3;
+  repeated AgentImageOutput images = 4;
+  repeated AgentVideoOutput videos = 5;
+  string result_json = 6 [json_name = "result_json"];
+  string error_json = 7 [json_name = "error_json"];
+  string metrics_json = 8 [json_name = "metrics_json"];
+}
+
+message AgentTaskEvent {
+  string event_type = 1 [json_name = "event_type"];
+  string task_id = 2 [json_name = "task_id"];
+  string agent_type = 3 [json_name = "agent_type"];
+  string status = 4;
+  AgentDomainRef domain_ref = 5 [json_name = "domain_ref"];
+  string event_json = 6 [json_name = "event_json"];
+}

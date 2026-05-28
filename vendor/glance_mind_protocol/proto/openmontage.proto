@@ -1,0 +1,543 @@
+syntax = "proto3";
+package glance_mind;
+
+option java_package = "io.glancemind.protocol";
+option java_multiple_files = true;
+
+enum OpenMontageProtocolVersion {
+  OPEN_MONTAGE_PROTOCOL_VERSION_UNSPECIFIED = 0;
+  OPEN_MONTAGE_PROTOCOL_VERSION_V1 = 1;
+}
+
+enum OpenMontageJobStatus {
+  OPEN_MONTAGE_JOB_STATUS_UNSPECIFIED = 0;
+  OPEN_MONTAGE_JOB_STATUS_QUEUED = 1;
+  OPEN_MONTAGE_JOB_STATUS_PREFLIGHT = 2;
+  OPEN_MONTAGE_JOB_STATUS_AWAITING_APPROVAL = 3;
+  OPEN_MONTAGE_JOB_STATUS_RUNNING = 4;
+  OPEN_MONTAGE_JOB_STATUS_DEGRADED = 5;
+  OPEN_MONTAGE_JOB_STATUS_COMPLETED = 6;
+  OPEN_MONTAGE_JOB_STATUS_FAILED = 7;
+  OPEN_MONTAGE_JOB_STATUS_CANCELLED = 8;
+  OPEN_MONTAGE_JOB_STATUS_IN_PROGRESS = 9;
+  OPEN_MONTAGE_JOB_STATUS_AWAITING_HUMAN = 10;
+}
+
+enum OpenMontageEventType {
+  OPEN_MONTAGE_EVENT_TYPE_UNSPECIFIED = 0;
+  OPEN_MONTAGE_EVENT_TYPE_JOB_ACCEPTED = 1;
+  OPEN_MONTAGE_EVENT_TYPE_JOB_STATUS_CHANGED = 2;
+  OPEN_MONTAGE_EVENT_TYPE_STAGE_STARTED = 3;
+  OPEN_MONTAGE_EVENT_TYPE_STAGE_CHECKPOINTED = 4;
+  OPEN_MONTAGE_EVENT_TYPE_APPROVAL_REQUIRED = 5;
+  OPEN_MONTAGE_EVENT_TYPE_APPROVAL_RECORDED = 6;
+  OPEN_MONTAGE_EVENT_TYPE_ARTIFACT_READY = 7;
+  OPEN_MONTAGE_EVENT_TYPE_JOB_COMPLETED = 8;
+  OPEN_MONTAGE_EVENT_TYPE_JOB_FAILED = 9;
+  OPEN_MONTAGE_EVENT_TYPE_PREFLIGHT_COMPLETED = 10;
+  OPEN_MONTAGE_EVENT_TYPE_PIPELINE_MANIFEST_READY = 11;
+  OPEN_MONTAGE_EVENT_TYPE_TOOL_STARTED = 12;
+  OPEN_MONTAGE_EVENT_TYPE_TOOL_COMPLETED = 13;
+  OPEN_MONTAGE_EVENT_TYPE_TOOL_FAILED = 14;
+  OPEN_MONTAGE_EVENT_TYPE_CHECKPOINT_VALIDATED = 15;
+  OPEN_MONTAGE_EVENT_TYPE_ARTIFACT_VALIDATED = 16;
+  OPEN_MONTAGE_EVENT_TYPE_PROVIDER_BLOCKED = 17;
+}
+
+enum OpenMontageInputAssetKind {
+  OPEN_MONTAGE_INPUT_ASSET_KIND_UNSPECIFIED = 0;
+  OPEN_MONTAGE_INPUT_ASSET_KIND_REFERENCE_VIDEO = 1;
+  OPEN_MONTAGE_INPUT_ASSET_KIND_SOURCE_VIDEO = 2;
+  OPEN_MONTAGE_INPUT_ASSET_KIND_START_FRAME = 3;
+  OPEN_MONTAGE_INPUT_ASSET_KIND_END_FRAME = 4;
+  OPEN_MONTAGE_INPUT_ASSET_KIND_REFERENCE_IMAGE = 5;
+  OPEN_MONTAGE_INPUT_ASSET_KIND_BRAND_ASSET = 6;
+  OPEN_MONTAGE_INPUT_ASSET_KIND_AUDIO = 7;
+  OPEN_MONTAGE_INPUT_ASSET_KIND_SUBTITLE = 8;
+  OPEN_MONTAGE_INPUT_ASSET_KIND_NARRATION = 9;
+  OPEN_MONTAGE_INPUT_ASSET_KIND_MUSIC = 10;
+  OPEN_MONTAGE_INPUT_ASSET_KIND_SFX = 11;
+  OPEN_MONTAGE_INPUT_ASSET_KIND_DIAGRAM = 12;
+  OPEN_MONTAGE_INPUT_ASSET_KIND_ANIMATION = 13;
+  OPEN_MONTAGE_INPUT_ASSET_KIND_CODE_SNIPPET = 14;
+  OPEN_MONTAGE_INPUT_ASSET_KIND_FONT = 15;
+  OPEN_MONTAGE_INPUT_ASSET_KIND_LUT = 16;
+}
+
+enum OpenMontageArtifactKind {
+  OPEN_MONTAGE_ARTIFACT_KIND_UNSPECIFIED = 0;
+  OPEN_MONTAGE_ARTIFACT_KIND_VIDEO = 1;
+  OPEN_MONTAGE_ARTIFACT_KIND_IMAGE = 2;
+  OPEN_MONTAGE_ARTIFACT_KIND_AUDIO = 3;
+  OPEN_MONTAGE_ARTIFACT_KIND_SUBTITLE = 4;
+  OPEN_MONTAGE_ARTIFACT_KIND_JSON = 5;
+  OPEN_MONTAGE_ARTIFACT_KIND_REPORT = 6;
+  OPEN_MONTAGE_ARTIFACT_KIND_DIRECTORY = 7;
+  OPEN_MONTAGE_ARTIFACT_KIND_NARRATION = 8;
+  OPEN_MONTAGE_ARTIFACT_KIND_MUSIC = 9;
+  OPEN_MONTAGE_ARTIFACT_KIND_SFX = 10;
+  OPEN_MONTAGE_ARTIFACT_KIND_DIAGRAM = 11;
+  OPEN_MONTAGE_ARTIFACT_KIND_ANIMATION = 12;
+  OPEN_MONTAGE_ARTIFACT_KIND_CODE_SNIPPET = 13;
+  OPEN_MONTAGE_ARTIFACT_KIND_FONT = 14;
+  OPEN_MONTAGE_ARTIFACT_KIND_LUT = 15;
+  OPEN_MONTAGE_ARTIFACT_KIND_REVIEW = 16;
+  OPEN_MONTAGE_ARTIFACT_KIND_CHECKPOINT = 17;
+  OPEN_MONTAGE_ARTIFACT_KIND_MANIFEST = 18;
+}
+
+enum OpenMontageErrorCode {
+  OPEN_MONTAGE_ERROR_CODE_UNSPECIFIED = 0;
+  OPEN_MONTAGE_ERROR_CODE_UNSUPPORTED_PROTOCOL_VERSION = 1;
+  OPEN_MONTAGE_ERROR_CODE_VALIDATION_ERROR = 2;
+  OPEN_MONTAGE_ERROR_CODE_SECRET_MATERIAL_REJECTED = 3;
+  OPEN_MONTAGE_ERROR_CODE_IDEMPOTENCY_CONFLICT = 4;
+  OPEN_MONTAGE_ERROR_CODE_PIPELINE_NOT_FOUND = 5;
+  OPEN_MONTAGE_ERROR_CODE_APPROVAL_REQUIRED = 6;
+  OPEN_MONTAGE_ERROR_CODE_APPROVAL_REJECTED = 7;
+  OPEN_MONTAGE_ERROR_CODE_PROVIDER_UNAVAILABLE = 8;
+  OPEN_MONTAGE_ERROR_CODE_RENDER_FAILED = 9;
+  OPEN_MONTAGE_ERROR_CODE_INTERNAL_ERROR = 10;
+  OPEN_MONTAGE_ERROR_CODE_TOOL_NOT_FOUND = 11;
+  OPEN_MONTAGE_ERROR_CODE_TOOL_VALIDATION_ERROR = 12;
+  OPEN_MONTAGE_ERROR_CODE_CHECKPOINT_VALIDATION_ERROR = 13;
+  OPEN_MONTAGE_ERROR_CODE_ARTIFACT_VALIDATION_ERROR = 14;
+  OPEN_MONTAGE_ERROR_CODE_RUNTIME_UNAVAILABLE = 15;
+  OPEN_MONTAGE_ERROR_CODE_BUDGET_EXCEEDED = 16;
+  OPEN_MONTAGE_ERROR_CODE_LIVE_PROVIDER_NOT_APPROVED = 17;
+}
+
+message OpenMontageJobRef {
+  string job_id = 1 [json_name = "job_id"];
+  string request_id = 2 [json_name = "request_id"];
+  string project_id = 3 [json_name = "project_id"];
+  string correlation_id = 4 [json_name = "correlation_id"];
+  string idempotency_key = 5 [json_name = "idempotency_key"];
+}
+
+message OpenMontageCallbackConfig {
+  string callback_url = 1 [json_name = "callback_url"];
+  string callback_secret_ref = 2 [json_name = "callback_secret_ref"];
+  repeated string event_types = 3 [json_name = "event_types"];
+}
+
+message OpenMontageInputAsset {
+  OpenMontageInputAssetKind kind = 1;
+  string role = 2;
+  string uri = 3;
+  optional string mime_type = 4 [json_name = "mime_type"];
+  optional uint32 width_px = 5 [json_name = "width_px"];
+  optional uint32 height_px = 6 [json_name = "height_px"];
+  optional uint32 duration_ms = 7 [json_name = "duration_ms"];
+  optional string metadata_json = 8 [json_name = "metadata_json"];
+}
+
+message OpenMontageSchemaField {
+  string path = 1;
+  bool required = 2;
+  string json_type = 3 [json_name = "json_type"];
+  repeated string enum_values = 4 [json_name = "enum_values"];
+  optional string default_json = 5 [json_name = "default_json"];
+  optional string description = 6;
+}
+
+message OpenMontageResourceProfile {
+  uint32 cpu_cores = 1 [json_name = "cpu_cores"];
+  uint32 ram_mb = 2 [json_name = "ram_mb"];
+  uint32 vram_mb = 3 [json_name = "vram_mb"];
+  uint32 disk_mb = 4 [json_name = "disk_mb"];
+  bool network_required = 5 [json_name = "network_required"];
+}
+
+message OpenMontageRetryPolicy {
+  uint32 max_retries = 1 [json_name = "max_retries"];
+  double backoff_seconds = 2 [json_name = "backoff_seconds"];
+  repeated string retryable_errors = 3 [json_name = "retryable_errors"];
+}
+
+message OpenMontageToolContract {
+  string name = 1;
+  string version = 2;
+  string tier = 3;
+  string capability = 4;
+  string provider = 5;
+  string stability = 6;
+  string status = 7;
+  string execution_mode = 8 [json_name = "execution_mode"];
+  string determinism = 9;
+  string runtime = 10;
+  string module_path = 11 [json_name = "module_path"];
+  string usage_location = 12 [json_name = "usage_location"];
+  repeated string dependencies = 13;
+  string install_instructions = 14 [json_name = "install_instructions"];
+  repeated string capabilities = 15;
+  repeated OpenMontageSchemaField input_fields = 16 [json_name = "input_fields"];
+  repeated OpenMontageSchemaField output_fields = 17 [json_name = "output_fields"];
+  optional string input_schema_json = 18 [json_name = "input_schema_json"];
+  optional string output_schema_json = 19 [json_name = "output_schema_json"];
+  optional string artifact_schema_json = 20 [json_name = "artifact_schema_json"];
+  optional string progress_schema_json = 21 [json_name = "progress_schema_json"];
+  optional string supports_json = 22 [json_name = "supports_json"];
+  repeated string best_for = 23 [json_name = "best_for"];
+  repeated string not_good_for = 24 [json_name = "not_good_for"];
+  optional string provider_matrix_json = 25 [json_name = "provider_matrix_json"];
+  optional OpenMontageResourceProfile resource_profile = 26 [json_name = "resource_profile"];
+  optional OpenMontageRetryPolicy retry_policy = 27 [json_name = "retry_policy"];
+  string resume_support = 28 [json_name = "resume_support"];
+  repeated string side_effects = 29 [json_name = "side_effects"];
+  optional string fallback = 30;
+  repeated string fallback_tools = 31 [json_name = "fallback_tools"];
+  repeated string agent_skills = 32 [json_name = "agent_skills"];
+  repeated string user_visible_verification = 33 [json_name = "user_visible_verification"];
+  optional double quality_score = 34 [json_name = "quality_score"];
+  optional double historical_success_rate = 35 [json_name = "historical_success_rate"];
+  optional double latency_p50_seconds = 36 [json_name = "latency_p50_seconds"];
+  optional string render_engines_json = 37 [json_name = "render_engines_json"];
+  optional string render_runtimes_json = 38 [json_name = "render_runtimes_json"];
+  optional string remotion_note = 39 [json_name = "remotion_note"];
+  optional string hyperframes_note = 40 [json_name = "hyperframes_note"];
+  optional string runtime_governance = 41 [json_name = "runtime_governance"];
+  optional string raw_info_json = 42 [json_name = "raw_info_json"];
+  repeated string related_skills = 43 [json_name = "related_skills"];
+}
+
+message OpenMontageToolInvocation {
+  string invocation_id = 1 [json_name = "invocation_id"];
+  string stage = 2;
+  string tool_name = 3 [json_name = "tool_name"];
+  string role = 4;
+  string operation = 5;
+  string provider = 6;
+  string capability = 7;
+  string input_json = 8 [json_name = "input_json"];
+  optional string idempotency_key = 9 [json_name = "idempotency_key"];
+  optional double max_cost_usd = 10 [json_name = "max_cost_usd"];
+  bool dry_run = 11 [json_name = "dry_run"];
+  repeated string expected_artifact_roles = 12 [json_name = "expected_artifact_roles"];
+  optional string contract_version = 13 [json_name = "contract_version"];
+  optional string metadata_json = 14 [json_name = "metadata_json"];
+}
+
+message OpenMontageToolResult {
+  string invocation_id = 1 [json_name = "invocation_id"];
+  string tool_name = 2 [json_name = "tool_name"];
+  bool success = 3;
+  optional string data_json = 4 [json_name = "data_json"];
+  repeated string artifact_uris = 5 [json_name = "artifact_uris"];
+  repeated OpenMontageArtifact artifacts = 6;
+  optional string error = 7;
+  double cost_usd = 8 [json_name = "cost_usd"];
+  double duration_seconds = 9 [json_name = "duration_seconds"];
+  optional uint64 seed = 10;
+  optional string model = 11;
+  optional string raw_artifacts_json = 12 [json_name = "raw_artifacts_json"];
+  optional string metadata_json = 13 [json_name = "metadata_json"];
+}
+
+message OpenMontagePipelineSubStage {
+  string name = 1;
+  optional string description = 2;
+  optional string condition = 3;
+  optional bool human_approval_default = 4 [json_name = "human_approval_default"];
+  repeated string tools_available = 5 [json_name = "tools_available"];
+  repeated string review_focus = 6 [json_name = "review_focus"];
+}
+
+message OpenMontagePipelineStage {
+  string name = 1;
+  optional string agent = 2;
+  optional string skill = 3;
+  repeated string required_artifacts_in = 4 [json_name = "required_artifacts_in"];
+  repeated string optional_artifacts_in = 5 [json_name = "optional_artifacts_in"];
+  repeated string produces = 6;
+  repeated string preferred_tools = 7 [json_name = "preferred_tools"];
+  repeated string fallback_tools = 8 [json_name = "fallback_tools"];
+  repeated string required_tools = 9 [json_name = "required_tools"];
+  repeated string optional_tools = 10 [json_name = "optional_tools"];
+  repeated string tools_available = 11 [json_name = "tools_available"];
+  repeated string review_focus = 12 [json_name = "review_focus"];
+  optional bool checkpoint_required = 13 [json_name = "checkpoint_required"];
+  optional bool human_approval_default = 14 [json_name = "human_approval_default"];
+  repeated string success_criteria = 15 [json_name = "success_criteria"];
+  repeated OpenMontagePipelineSubStage sub_stages = 16 [json_name = "sub_stages"];
+  optional string metadata_json = 17 [json_name = "metadata_json"];
+}
+
+message OpenMontagePipelineOrchestration {
+  optional string mode = 1;
+  optional string skill = 2;
+  optional double budget_default_usd = 3 [json_name = "budget_default_usd"];
+  optional uint32 max_revisions_per_stage = 4 [json_name = "max_revisions_per_stage"];
+  optional uint32 max_send_backs = 5 [json_name = "max_send_backs"];
+  optional uint32 max_wall_time_minutes = 6 [json_name = "max_wall_time_minutes"];
+}
+
+message OpenMontageExtensionPermissions {
+  optional bool custom_scripts = 1 [json_name = "custom_scripts"];
+  optional bool custom_playbooks = 2 [json_name = "custom_playbooks"];
+  optional bool custom_skills = 3 [json_name = "custom_skills"];
+  optional bool custom_tools = 4 [json_name = "custom_tools"];
+}
+
+message OpenMontageReferenceInputConfig {
+  bool supported = 1;
+  optional string analysis_depth = 2 [json_name = "analysis_depth"];
+  repeated string analysis_tools = 3 [json_name = "analysis_tools"];
+}
+
+message OpenMontagePipelineManifest {
+  string name = 1;
+  string version = 2;
+  optional string description = 3;
+  optional string category = 4;
+  optional string stability = 5;
+  repeated string compatible_playbooks = 6 [json_name = "compatible_playbooks"];
+  optional string compatible_playbooks_json = 7 [json_name = "compatible_playbooks_json"];
+  repeated string required_skills = 8 [json_name = "required_skills"];
+  repeated OpenMontagePipelineStage stages = 9;
+  optional string default_checkpoint_policy = 10 [json_name = "default_checkpoint_policy"];
+  optional OpenMontageReferenceInputConfig reference_input = 11 [json_name = "reference_input"];
+  optional OpenMontagePipelineOrchestration orchestration = 12;
+  optional OpenMontageExtensionPermissions extensions = 13;
+  optional string metadata_json = 14 [json_name = "metadata_json"];
+  optional string raw_manifest_json = 15 [json_name = "raw_manifest_json"];
+}
+
+message OpenMontageArtifactPayload {
+  string artifact_name = 1 [json_name = "artifact_name"];
+  optional string schema_id = 2 [json_name = "schema_id"];
+  optional string schema_version = 3 [json_name = "schema_version"];
+  string payload_json = 4 [json_name = "payload_json"];
+  bool validated = 5;
+  repeated OpenMontageSchemaField schema_fields = 6 [json_name = "schema_fields"];
+  optional string validation_error = 7 [json_name = "validation_error"];
+  optional string uri = 8;
+  optional string role = 9;
+  optional string metadata_json = 10 [json_name = "metadata_json"];
+}
+
+message OpenMontageCheckpoint {
+  string version = 1;
+  string project_id = 2 [json_name = "project_id"];
+  string pipeline_type = 3 [json_name = "pipeline_type"];
+  string stage = 4;
+  string status = 5;
+  string timestamp = 6;
+  optional string style_playbook = 7 [json_name = "style_playbook"];
+  optional string checkpoint_policy = 8 [json_name = "checkpoint_policy"];
+  optional bool human_approval_required = 9 [json_name = "human_approval_required"];
+  optional bool human_approved = 10 [json_name = "human_approved"];
+  repeated OpenMontageArtifactPayload artifacts = 11;
+  optional string artifacts_json = 12 [json_name = "artifacts_json"];
+  optional string review_json = 13 [json_name = "review_json"];
+  optional string cost_snapshot_json = 14 [json_name = "cost_snapshot_json"];
+  optional string error = 15;
+  optional string metadata_json = 16 [json_name = "metadata_json"];
+  optional string path = 17;
+}
+
+message OpenMontageRuntimeAvailability {
+  string name = 1;
+  bool available = 2;
+  optional string note = 3;
+  repeated string warnings = 4;
+}
+
+message OpenMontageCapabilitySummary {
+  string capability = 1;
+  uint32 configured = 2;
+  uint32 total = 3;
+  repeated string available_providers = 4 [json_name = "available_providers"];
+  repeated string unavailable_providers = 5 [json_name = "unavailable_providers"];
+}
+
+message OpenMontageSetupOffer {
+  string capability = 1;
+  string tool = 2;
+  string provider = 3;
+  string install_instructions = 4 [json_name = "install_instructions"];
+}
+
+message OpenMontagePreflightSnapshot {
+  repeated OpenMontageRuntimeAvailability composition_runtimes = 1 [json_name = "composition_runtimes"];
+  repeated OpenMontageCapabilitySummary capabilities = 2;
+  repeated OpenMontageSetupOffer setup_offers = 3 [json_name = "setup_offers"];
+  repeated string runtime_warnings = 4 [json_name = "runtime_warnings"];
+  repeated OpenMontageToolContract tools = 5;
+  repeated OpenMontagePipelineManifest pipelines = 6;
+  string captured_at = 7 [json_name = "captured_at"];
+  optional string provider_menu_summary_json = 8 [json_name = "provider_menu_summary_json"];
+  optional string provider_menu_json = 9 [json_name = "provider_menu_json"];
+  optional string support_envelope_json = 10 [json_name = "support_envelope_json"];
+}
+
+message OpenMontageProfessionalVideoRequest {
+  OpenMontageProtocolVersion version = 1;
+  string request_id = 2 [json_name = "request_id"];
+  string idempotency_key = 3 [json_name = "idempotency_key"];
+  string tenant_id = 4 [json_name = "tenant_id"];
+  string user_id = 5 [json_name = "user_id"];
+  string title = 6;
+  string prompt = 7;
+  string target_platform = 8 [json_name = "target_platform"];
+  string language = 9;
+  uint32 duration_seconds = 10 [json_name = "duration_seconds"];
+  string aspect_ratio = 11 [json_name = "aspect_ratio"];
+  optional string audience = 12;
+  optional string objective = 13;
+  optional string brand_json = 14 [json_name = "brand_json"];
+  string pipeline = 15;
+  optional string style_playbook = 16 [json_name = "style_playbook"];
+  optional string render_runtime = 17 [json_name = "render_runtime"];
+  string quality_tier = 18 [json_name = "quality_tier"];
+  string approval_policy = 19 [json_name = "approval_policy"];
+  double budget_limit_usd = 20 [json_name = "budget_limit_usd"];
+  map<string, string> provider_preferences = 21 [json_name = "provider_preferences"];
+  repeated OpenMontageInputAsset assets = 22;
+  optional OpenMontageCallbackConfig callback = 23;
+  optional string metadata_json = 24 [json_name = "metadata_json"];
+  optional string source_script = 25 [json_name = "source_script"];
+  optional string source_script_uri = 26 [json_name = "source_script_uri"];
+  optional string input_mode = 27 [json_name = "input_mode"];
+  optional string output_profile = 28 [json_name = "output_profile"];
+  optional string renderer_family = 29 [json_name = "renderer_family"];
+  optional string delivery_promise_json = 30 [json_name = "delivery_promise_json"];
+  optional string music_plan_json = 31 [json_name = "music_plan_json"];
+  optional string voice_selection_json = 32 [json_name = "voice_selection_json"];
+  repeated OpenMontageToolInvocation tool_invocations = 33 [json_name = "tool_invocations"];
+  repeated OpenMontageArtifactPayload artifact_inputs = 34 [json_name = "artifact_inputs"];
+  optional OpenMontagePipelineManifest pipeline_manifest = 35 [json_name = "pipeline_manifest"];
+  optional string preflight_policy = 36 [json_name = "preflight_policy"];
+  optional string openmontage_request_json = 37 [json_name = "openmontage_request_json"];
+  map<string, string> provider_slots = 38 [json_name = "provider_slots"];
+}
+
+message OpenMontageError {
+  OpenMontageErrorCode code = 1;
+  string message = 2;
+  bool retryable = 3;
+  optional string detail_json = 4 [json_name = "detail_json"];
+}
+
+message OpenMontageSubmitResponse {
+  OpenMontageProtocolVersion version = 1;
+  OpenMontageJobRef job = 2;
+  OpenMontageJobStatus status = 3;
+  string accepted_at = 4 [json_name = "accepted_at"];
+  optional string status_url = 5 [json_name = "status_url"];
+  uint64 next_event_sequence = 6 [json_name = "next_event_sequence"];
+  optional OpenMontageError error = 7;
+}
+
+message OpenMontageArtifact {
+  string artifact_id = 1 [json_name = "artifact_id"];
+  OpenMontageArtifactKind kind = 2;
+  string role = 3;
+  string uri = 4;
+  optional string mime_type = 5 [json_name = "mime_type"];
+  optional uint32 width_px = 6 [json_name = "width_px"];
+  optional uint32 height_px = 7 [json_name = "height_px"];
+  optional uint32 duration_ms = 8 [json_name = "duration_ms"];
+  optional uint64 bytes = 9;
+  optional string metadata_json = 10 [json_name = "metadata_json"];
+  optional string artifact_name = 11 [json_name = "artifact_name"];
+  optional string path = 12;
+  optional string source_tool = 13 [json_name = "source_tool"];
+  optional string scene_id = 14 [json_name = "scene_id"];
+  optional string payload_json = 15 [json_name = "payload_json"];
+  optional string schema_id = 16 [json_name = "schema_id"];
+  optional bool validated = 17;
+}
+
+message OpenMontageStageCheckpoint {
+  uint64 sequence = 1;
+  string stage = 2;
+  OpenMontageJobStatus status = 3;
+  string summary = 4;
+  repeated string artifact_refs = 5 [json_name = "artifact_refs"];
+  optional string cost_snapshot_json = 6 [json_name = "cost_snapshot_json"];
+  optional string review_json = 7 [json_name = "review_json"];
+  string created_at = 8 [json_name = "created_at"];
+  optional OpenMontageCheckpoint checkpoint = 9;
+  repeated OpenMontageArtifactPayload artifact_payloads = 10 [json_name = "artifact_payloads"];
+  optional string checkpoint_json = 11 [json_name = "checkpoint_json"];
+}
+
+message OpenMontageDecision {
+  uint64 sequence = 1;
+  string category = 2;
+  string summary = 3;
+  optional string selected_option = 4 [json_name = "selected_option"];
+  optional string options_json = 5 [json_name = "options_json"];
+  optional string confidence = 6;
+  string created_at = 7 [json_name = "created_at"];
+}
+
+message OpenMontageApprovalRequest {
+  string approval_id = 1 [json_name = "approval_id"];
+  string stage = 2;
+  string decision_category = 3 [json_name = "decision_category"];
+  string prompt = 4;
+  optional string options_json = 5 [json_name = "options_json"];
+  optional string expires_at = 6 [json_name = "expires_at"];
+}
+
+message OpenMontageApprovalDecision {
+  string job_id = 1 [json_name = "job_id"];
+  string approval_id = 2 [json_name = "approval_id"];
+  string actor_id = 3 [json_name = "actor_id"];
+  string decision = 4;
+  optional string comment = 5;
+  string decided_at = 6 [json_name = "decided_at"];
+  optional string metadata_json = 7 [json_name = "metadata_json"];
+}
+
+message OpenMontageJobSnapshot {
+  OpenMontageProtocolVersion version = 1;
+  OpenMontageJobRef job = 2;
+  OpenMontageJobStatus status = 3;
+  string pipeline = 4;
+  string current_stage = 5 [json_name = "current_stage"];
+  uint32 progress_pct = 6 [json_name = "progress_pct"];
+  repeated OpenMontageStageCheckpoint checkpoints = 7;
+  repeated OpenMontageDecision decisions = 8;
+  repeated OpenMontageApprovalRequest approvals = 9;
+  repeated OpenMontageArtifact artifacts = 10;
+  optional OpenMontageError error = 11;
+  optional string metrics_json = 12 [json_name = "metrics_json"];
+  string updated_at = 13 [json_name = "updated_at"];
+  optional OpenMontagePreflightSnapshot preflight = 14;
+  optional OpenMontagePipelineManifest pipeline_manifest = 15 [json_name = "pipeline_manifest"];
+  repeated OpenMontageArtifactPayload artifact_payloads = 16 [json_name = "artifact_payloads"];
+  repeated OpenMontageToolResult tool_results = 17 [json_name = "tool_results"];
+  repeated OpenMontageCheckpoint full_checkpoints = 18 [json_name = "full_checkpoints"];
+}
+
+message OpenMontageJobEvent {
+  OpenMontageProtocolVersion version = 1;
+  string event_id = 2 [json_name = "event_id"];
+  uint64 sequence = 3;
+  OpenMontageJobRef job = 4;
+  OpenMontageEventType event_type = 5 [json_name = "event_type"];
+  OpenMontageJobStatus status = 6;
+  string stage = 7;
+  uint32 progress_pct = 8 [json_name = "progress_pct"];
+  optional OpenMontageStageCheckpoint checkpoint = 9;
+  optional OpenMontageApprovalRequest approval = 10;
+  repeated OpenMontageArtifact artifacts = 11;
+  optional OpenMontageError error = 12;
+  optional string event_json = 13 [json_name = "event_json"];
+  string emitted_at = 14 [json_name = "emitted_at"];
+  optional OpenMontageToolInvocation tool_invocation = 15 [json_name = "tool_invocation"];
+  optional OpenMontageToolResult tool_result = 16 [json_name = "tool_result"];
+  repeated OpenMontageArtifactPayload artifact_payloads = 17 [json_name = "artifact_payloads"];
+  optional OpenMontageCheckpoint checkpoint_full = 18 [json_name = "checkpoint_full"];
+  optional OpenMontagePreflightSnapshot preflight = 19;
+}
+
+message OpenMontageCallbackAck {
+  bool received = 1;
+  string event_id = 2 [json_name = "event_id"];
+  uint64 next_expected_sequence = 3 [json_name = "next_expected_sequence"];
+  optional string message = 4;
+}

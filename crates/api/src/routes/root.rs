@@ -84,6 +84,31 @@ pub fn routes(
                 }
             };
 
+        // OpenMontage
+        let openmontage_store =
+            std::sync::Arc::new(crate::repository::openmontage_repository::InMemoryJobStore::new())
+                as std::sync::Arc<
+                    dyn crate::repository::openmontage_repository::OpenMontageJobStore,
+                >;
+        let openmontage_client =
+            match crate::service::openmontage_client::RedisOpenMontageClient::from_env() {
+                Ok(client) => std::sync::Arc::new(client)
+                    as std::sync::Arc<dyn crate::service::openmontage_client::OpenMontageClient>,
+                Err(e) => {
+                    tracing::warn!("OpenMontage Redis client unavailable: {e}, using mock");
+                    std::sync::Arc::new(
+                        crate::service::openmontage_client::MockOpenMontageClient::new(),
+                    )
+                        as std::sync::Arc<dyn crate::service::openmontage_client::OpenMontageClient>
+                }
+            };
+        let openmontage_hub = crate::service::openmontage_stream_hub::OpenMontageStreamHub::new();
+        let openmontage_service = crate::service::openmontage_service::OpenMontageService::new(
+            openmontage_store.clone(),
+            openmontage_client.clone(),
+            openmontage_hub.clone(),
+        );
+
         // /api/v1
         Router::new()
             .nest(
@@ -494,6 +519,26 @@ pub fn routes(
                             .layer(axum::Extension(user_state.clone())),
                     )
                     .with_state(user_state.clone()),
+            )
+            // OpenMontage Internal Callback (no user auth, internal network only)
+            .nest(
+                "/internal/openmontage",
+                crate::routes::openmontage::internal_routes()
+                    .layer(axum::Extension(openmontage_service.clone())),
+            )
+            // OpenMontage Routes (requires auth)
+            .nest(
+                "/openmontage",
+                crate::routes::openmontage::user_routes()
+                    .layer(
+                        ServiceBuilder::new()
+                            .layer(middleware::from_fn_with_state(
+                                user_state.clone(),
+                                auth_middleware::auth,
+                            ))
+                            .layer(axum::Extension(openmontage_service.clone()))
+                            .layer(axum::Extension(user_state.clone())),
+                    ),
             )
     };
 

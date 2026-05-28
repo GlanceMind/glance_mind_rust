@@ -18,6 +18,7 @@ pub mod material_dto;
 pub mod material_folder_dto;
 pub mod notification_dto;
 pub mod novel_dto;
+pub mod openmontage_dto;
 pub mod oss_dto;
 pub mod patrol_dto;
 pub mod promo_code_dto;
