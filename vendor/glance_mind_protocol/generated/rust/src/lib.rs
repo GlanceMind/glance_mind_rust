@@ -1257,8 +1257,7 @@ mod tests {
         assert!(json.contains(r#""status":"failed""#));
         assert!(json.contains(r#""code":"idempotency_conflict""#));
 
-        let parsed: OpenMontageSubmitResponse =
-            serde_json::from_str(&json).expect("deserialize");
+        let parsed: OpenMontageSubmitResponse = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed.status, OpenMontageJobStatus::Failed as i32);
         assert_eq!(
             parsed.error.expect("error").code,
@@ -1344,8 +1343,12 @@ mod tests {
             category: Some("generated".to_string()),
             stability: Some("beta".to_string()),
             compatible_playbooks: vec![],
-            compatible_playbooks_json: Some(r#"{"recommended":["clean-professional"]}"#.to_string()),
-            required_skills: vec!["pipelines/glancemind-marketing-video/executive-producer".to_string()],
+            compatible_playbooks_json: Some(
+                r#"{"recommended":["clean-professional"]}"#.to_string(),
+            ),
+            required_skills: vec![
+                "pipelines/glancemind-marketing-video/executive-producer".to_string()
+            ],
             stages: vec![OpenMontagePipelineStage {
                 name: "proposal".to_string(),
                 agent: None,

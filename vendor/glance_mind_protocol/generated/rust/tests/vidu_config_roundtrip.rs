@@ -13,7 +13,8 @@ fn vidu_config_deserializes_mode_and_quality() {
 
 #[test]
 fn vidu_config_defaults_when_fields_absent() {
-    let json = r#"{"style":"general","movement_amplitude":"auto","bgm":true,"model_version":"viduq2"}"#;
+    let json =
+        r#"{"style":"general","movement_amplitude":"auto","bgm":true,"model_version":"viduq2"}"#;
     let cfg: ViduVideoConfig = serde_json::from_str(json).expect("deserialize legacy");
     assert_eq!(cfg.mode, "");
     assert_eq!(cfg.quality, "");
