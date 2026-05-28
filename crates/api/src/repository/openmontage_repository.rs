@@ -390,66 +390,461 @@ impl OpenMontageJobStore for InMemoryJobStore {
 }
 
 // ============================================================================
-// Postgres Implementation (stub for part 3 — full impl deferred to production readiness)
+// Postgres Implementation
 // ============================================================================
 
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
+use glance_mind_db::entity::openmontage::{
+    NewOpenmontageAsset, NewOpenmontageJob, NewOpenmontageJobEvent, OpenmontageAsset,
+    OpenmontageJob, OpenmontageJobEvent, UpdateOpenmontageJob,
+};
 
 #[derive(Clone)]
 pub struct PgJobStore {
-    _pool: Pool<ConnectionManager<PgConnection>>,
+    pool: Pool<ConnectionManager<PgConnection>>,
 }
 
 impl PgJobStore {
     pub fn new(pool: Pool<ConnectionManager<PgConnection>>) -> Self {
-        Self { _pool: pool }
+        Self { pool }
+    }
+
+    fn get_conn(&self) -> Result<r2d2::PooledConnection<ConnectionManager<PgConnection>>, String> {
+        self.pool.get().map_err(|e| format!("Pool error: {}", e))
     }
 }
 
 impl OpenMontageJobStore for PgJobStore {
-    fn create_job(&self, _new_job: NewJob) -> Result<Job, String> {
-        Err("PgJobStore not yet implemented - use InMemoryJobStore for tests".to_string())
+    fn create_job(&self, new_job: NewJob) -> Result<Job, String> {
+        use glance_mind_db::schema::gm_openmontage_jobs::dsl::*;
+
+        let mut conn = self.get_conn()?;
+
+        let new_db_job = NewOpenmontageJob {
+            job_id: new_job.job_id.clone(),
+            project_id: new_job.project_id.clone(),
+            user_id: new_job.user_id,
+            tenant_id: new_job.tenant_id.clone(),
+            request_id: new_job.request_id.clone(),
+            idempotency_key: new_job.idempotency_key.clone(),
+            pipeline: new_job.pipeline.clone(),
+            input_mode: new_job.input_mode.clone(),
+            status: new_job.status.clone(),
+            snapshot_json: new_job.snapshot_json.clone(),
+        };
+
+        let db_job: OpenmontageJob = diesel::insert_into(gm_openmontage_jobs)
+            .values(&new_db_job)
+            .returning(OpenmontageJob::as_select())
+            .get_result(&mut conn)
+            .map_err(|e| format!("Insert error: {}", e))?;
+
+        Ok(Job {
+            id: db_job.id,
+            job_id: db_job.job_id,
+            project_id: db_job.project_id,
+            user_id: db_job.user_id,
+            tenant_id: db_job.tenant_id,
+            request_id: db_job.request_id,
+            idempotency_key: db_job.idempotency_key,
+            pipeline: db_job.pipeline,
+            input_mode: db_job.input_mode,
+            status: db_job.status,
+            cancel_requested: db_job.cancel_requested,
+            current_stage: db_job.current_stage,
+            progress_pct: db_job.progress_pct,
+            render_runtime: db_job.render_runtime,
+            approval_policy: db_job.approval_policy,
+            budget_limit_usd: db_job
+                .budget_limit_usd
+                .map(|bd| bd.to_string().parse::<f64>().unwrap_or(0.0)),
+            last_event_sequence: db_job.last_event_sequence,
+            next_event_sequence: db_job.next_event_sequence,
+            sync_required: db_job.sync_required,
+            snapshot_json: db_job.snapshot_json,
+            error_json: db_job.error_json,
+            created_at: db_job.created_at,
+            updated_at: db_job.updated_at,
+        })
     }
 
-    fn get_job(&self, _job_id: &str) -> Result<Option<Job>, String> {
-        Err("PgJobStore not yet implemented".to_string())
+    fn get_job(&self, job_id_param: &str) -> Result<Option<Job>, String> {
+        use glance_mind_db::schema::gm_openmontage_jobs::dsl::*;
+
+        let mut conn = self.get_conn()?;
+
+        let db_job: Option<OpenmontageJob> = gm_openmontage_jobs
+            .filter(job_id.eq(job_id_param))
+            .select(OpenmontageJob::as_select())
+            .first(&mut conn)
+            .optional()
+            .map_err(|e| format!("Query error: {}", e))?;
+
+        Ok(db_job.map(|db_job| Job {
+            id: db_job.id,
+            job_id: db_job.job_id,
+            project_id: db_job.project_id,
+            user_id: db_job.user_id,
+            tenant_id: db_job.tenant_id,
+            request_id: db_job.request_id,
+            idempotency_key: db_job.idempotency_key,
+            pipeline: db_job.pipeline,
+            input_mode: db_job.input_mode,
+            status: db_job.status,
+            cancel_requested: db_job.cancel_requested,
+            current_stage: db_job.current_stage,
+            progress_pct: db_job.progress_pct,
+            render_runtime: db_job.render_runtime,
+            approval_policy: db_job.approval_policy,
+            budget_limit_usd: db_job
+                .budget_limit_usd
+                .map(|bd| bd.to_string().parse::<f64>().unwrap_or(0.0)),
+            last_event_sequence: db_job.last_event_sequence,
+            next_event_sequence: db_job.next_event_sequence,
+            sync_required: db_job.sync_required,
+            snapshot_json: db_job.snapshot_json,
+            error_json: db_job.error_json,
+            created_at: db_job.created_at,
+            updated_at: db_job.updated_at,
+        }))
     }
 
-    fn find_by_idempotency(&self, _key: &str) -> Result<Option<Job>, String> {
-        Err("PgJobStore not yet implemented".to_string())
+    fn find_by_idempotency(&self, key: &str) -> Result<Option<Job>, String> {
+        use glance_mind_db::schema::gm_openmontage_jobs::dsl::*;
+
+        let mut conn = self.get_conn()?;
+
+        let db_job: Option<OpenmontageJob> = gm_openmontage_jobs
+            .filter(idempotency_key.eq(key))
+            .select(OpenmontageJob::as_select())
+            .first(&mut conn)
+            .optional()
+            .map_err(|e| format!("Query error: {}", e))?;
+
+        Ok(db_job.map(|db_job| Job {
+            id: db_job.id,
+            job_id: db_job.job_id,
+            project_id: db_job.project_id,
+            user_id: db_job.user_id,
+            tenant_id: db_job.tenant_id,
+            request_id: db_job.request_id,
+            idempotency_key: db_job.idempotency_key,
+            pipeline: db_job.pipeline,
+            input_mode: db_job.input_mode,
+            status: db_job.status,
+            cancel_requested: db_job.cancel_requested,
+            current_stage: db_job.current_stage,
+            progress_pct: db_job.progress_pct,
+            render_runtime: db_job.render_runtime,
+            approval_policy: db_job.approval_policy,
+            budget_limit_usd: db_job
+                .budget_limit_usd
+                .map(|bd| bd.to_string().parse::<f64>().unwrap_or(0.0)),
+            last_event_sequence: db_job.last_event_sequence,
+            next_event_sequence: db_job.next_event_sequence,
+            sync_required: db_job.sync_required,
+            snapshot_json: db_job.snapshot_json,
+            error_json: db_job.error_json,
+            created_at: db_job.created_at,
+            updated_at: db_job.updated_at,
+        }))
     }
 
-    fn append_event(&self, _event: NewJobEvent) -> Result<AppendResult, String> {
-        Err("PgJobStore not yet implemented".to_string())
+    fn append_event(&self, event: NewJobEvent) -> Result<AppendResult, String> {
+        use glance_mind_db::schema::gm_openmontage_job_events::dsl::*;
+        use glance_mind_db::schema::gm_openmontage_jobs;
+
+        let mut conn = self.get_conn()?;
+
+        // First, get the current job's next_event_sequence
+        let current_job: OpenmontageJob = gm_openmontage_jobs::table
+            .filter(gm_openmontage_jobs::job_id.eq(&event.job_id))
+            .select(OpenmontageJob::as_select())
+            .first(&mut conn)
+            .map_err(|e| format!("Job not found: {}", e))?;
+
+        let gap = event.sequence > current_job.next_event_sequence;
+
+        // Try to insert event with ON CONFLICT DO NOTHING
+        let new_db_event = NewOpenmontageJobEvent {
+            job_id: event.job_id.clone(),
+            sequence: event.sequence,
+            event_id: event.event_id.clone(),
+            event_type: event.event_type.clone(),
+            status: event.status.clone(),
+            stage: None,
+            progress_pct: None,
+            event_json: event.event_json.clone(),
+            emitted_at: Some(chrono::Utc::now()),
+        };
+
+        let insert_result = diesel::insert_into(gm_openmontage_job_events)
+            .values(&new_db_event)
+            .on_conflict((job_id, sequence))
+            .do_nothing()
+            .execute(&mut conn)
+            .map_err(|e| format!("Insert event error: {}", e))?;
+
+        let inserted = insert_result > 0;
+
+        if !inserted {
+            // Check if it was duplicate event_id at different sequence
+            let existing_count: i64 = gm_openmontage_job_events
+                .filter(event_id.eq(&event.event_id))
+                .filter(job_id.eq(&event.job_id))
+                .count()
+                .get_result(&mut conn)
+                .map_err(|e| format!("Check duplicate error: {}", e))?;
+
+            if existing_count > 0 {
+                // Duplicate event_id, return not inserted
+                return Ok(AppendResult {
+                    inserted: false,
+                    gap: false,
+                });
+            }
+        }
+
+        // Update job metadata if inserted
+        if inserted {
+            let update = UpdateOpenmontageJob {
+                last_event_sequence: Some(event.sequence),
+                next_event_sequence: Some(event.sequence + 1),
+                updated_at: Some(chrono::Utc::now()),
+                sync_required: if gap { Some(true) } else { None },
+                status: event.status.clone(),
+                ..Default::default()
+            };
+
+            diesel::update(gm_openmontage_jobs::table)
+                .filter(gm_openmontage_jobs::job_id.eq(&event.job_id))
+                .set(&update)
+                .execute(&mut conn)
+                .map_err(|e| format!("Update job error: {}", e))?;
+        }
+
+        Ok(AppendResult { inserted, gap })
     }
 
     fn list_events(
         &self,
-        _job_id: &str,
-        _after_sequence: i64,
-        _limit: i64,
+        job_id_param: &str,
+        after_sequence: i64,
+        limit: i64,
     ) -> Result<Vec<JobEvent>, String> {
-        Err("PgJobStore not yet implemented".to_string())
+        use glance_mind_db::schema::gm_openmontage_job_events::dsl::*;
+
+        let mut conn = self.get_conn()?;
+
+        let db_events: Vec<OpenmontageJobEvent> = gm_openmontage_job_events
+            .filter(job_id.eq(job_id_param))
+            .filter(sequence.gt(after_sequence))
+            .order(sequence.asc())
+            .limit(limit)
+            .select(OpenmontageJobEvent::as_select())
+            .load(&mut conn)
+            .map_err(|e| format!("List events error: {}", e))?;
+
+        Ok(db_events
+            .into_iter()
+            .map(|e| JobEvent {
+                id: e.id,
+                job_id: e.job_id,
+                sequence: e.sequence,
+                event_id: e.event_id,
+                event_type: e.event_type,
+                status: e.status,
+                stage: e.stage,
+                progress_pct: e.progress_pct,
+                event_json: e.event_json,
+                emitted_at: e.emitted_at,
+                created_at: e.created_at,
+            })
+            .collect())
     }
 
-    fn update_from_event(&self, _event: &NewJobEvent) -> Result<(), String> {
-        Err("PgJobStore not yet implemented".to_string())
+    fn update_from_event(&self, event: &NewJobEvent) -> Result<(), String> {
+        use glance_mind_db::schema::gm_openmontage_jobs::dsl::*;
+
+        let mut conn = self.get_conn()?;
+
+        conn.transaction::<_, diesel::result::Error, _>(|conn| {
+            // Read current job state
+            let current_job: OpenmontageJob = gm_openmontage_jobs
+                .filter(job_id.eq(&event.job_id))
+                .select(OpenmontageJob::as_select())
+                .first(conn)?;
+
+            let mut update = UpdateOpenmontageJob::default();
+
+            // Update status
+            if let Some(ref status_val) = event.status {
+                let mut final_status = status_val.clone();
+
+                // If status is "completed", require primary_video artifact
+                if status_val == "completed" {
+                    if let Some(artifacts) =
+                        event.event_json.get("artifacts").and_then(|v| v.as_array())
+                    {
+                        let has_primary_video = artifacts.iter().any(|a| {
+                            a.get("role")
+                                .and_then(|r| r.as_str())
+                                .map(|r| r == "primary_video")
+                                .unwrap_or(false)
+                        });
+
+                        if !has_primary_video {
+                            final_status = "degraded".to_string();
+                        }
+                    } else {
+                        final_status = "degraded".to_string();
+                    }
+                }
+
+                update.status = Some(final_status);
+            }
+
+            // Extract stage from event_json
+            if let Some(stage_val) = event.event_json.get("stage").and_then(|v| v.as_str()) {
+                update.current_stage = Some(stage_val.to_string());
+            }
+
+            // Extract progress_pct from event_json
+            if let Some(progress_val) = event.event_json.get("progress").and_then(|v| v.as_i64()) {
+                update.progress_pct = Some(progress_val as i32);
+            }
+
+            // Update snapshot_json with event data
+            update.snapshot_json = Some(event.event_json.clone());
+
+            // Detect gap and set sync_required
+            let gap = event.sequence > current_job.next_event_sequence;
+            if gap {
+                update.sync_required = Some(true);
+            }
+
+            // Advance next_event_sequence only if contiguous
+            if event.sequence == current_job.next_event_sequence {
+                update.next_event_sequence = Some(event.sequence + 1);
+            }
+
+            // Always update last_event_sequence
+            update.last_event_sequence = Some(event.sequence);
+            update.updated_at = Some(chrono::Utc::now());
+
+            diesel::update(gm_openmontage_jobs.filter(job_id.eq(&event.job_id)))
+                .set(&update)
+                .execute(conn)?;
+
+            Ok(())
+        })
+        .map_err(|e| format!("Transaction error: {}", e))
     }
 
-    fn set_status(&self, _job_id: &str, _status: &str) -> Result<(), String> {
-        Err("PgJobStore not yet implemented".to_string())
+    fn set_status(&self, job_id_param: &str, status_val: &str) -> Result<(), String> {
+        use glance_mind_db::schema::gm_openmontage_jobs::dsl::*;
+
+        let mut conn = self.get_conn()?;
+
+        let update = UpdateOpenmontageJob {
+            status: Some(status_val.to_string()),
+            updated_at: Some(chrono::Utc::now()),
+            ..Default::default()
+        };
+
+        diesel::update(gm_openmontage_jobs.filter(job_id.eq(job_id_param)))
+            .set(&update)
+            .execute(&mut conn)
+            .map_err(|e| format!("Set status error: {}", e))?;
+
+        Ok(())
     }
 
-    fn set_cancel_requested(&self, _job_id: &str) -> Result<(), String> {
-        Err("PgJobStore not yet implemented".to_string())
+    fn set_cancel_requested(&self, job_id_param: &str) -> Result<(), String> {
+        use glance_mind_db::schema::gm_openmontage_jobs::dsl::*;
+
+        let mut conn = self.get_conn()?;
+
+        let update = UpdateOpenmontageJob {
+            cancel_requested: Some(true),
+            updated_at: Some(chrono::Utc::now()),
+            ..Default::default()
+        };
+
+        diesel::update(gm_openmontage_jobs.filter(job_id.eq(job_id_param)))
+            .set(&update)
+            .execute(&mut conn)
+            .map_err(|e| format!("Set cancel_requested error: {}", e))?;
+
+        Ok(())
     }
 
-    fn get_asset(&self, _asset_id: &str) -> Result<Option<Asset>, String> {
-        Err("PgJobStore not yet implemented".to_string())
+    fn get_asset(&self, asset_id_param: &str) -> Result<Option<Asset>, String> {
+        use glance_mind_db::schema::gm_openmontage_assets::dsl::*;
+
+        let mut conn = self.get_conn()?;
+
+        let db_asset: Option<OpenmontageAsset> = gm_openmontage_assets
+            .filter(asset_id.eq(asset_id_param))
+            .select(OpenmontageAsset::as_select())
+            .first(&mut conn)
+            .optional()
+            .map_err(|e| format!("Get asset error: {}", e))?;
+
+        Ok(db_asset.map(|a| Asset {
+            id: a.id,
+            asset_id: a.asset_id,
+            user_id: a.user_id,
+            kind: a.kind,
+            role: a.role,
+            uri: a.uri,
+            mime_type: a.mime_type,
+            bytes: a.bytes,
+            width_px: a.width_px,
+            height_px: a.height_px,
+            duration_ms: a.duration_ms,
+            created_at: a.created_at,
+        }))
     }
 
-    fn insert_asset(&self, _asset: NewAsset) -> Result<Asset, String> {
-        Err("PgJobStore not yet implemented".to_string())
+    fn insert_asset(&self, new_asset: NewAsset) -> Result<Asset, String> {
+        use glance_mind_db::schema::gm_openmontage_assets::dsl::*;
+
+        let mut conn = self.get_conn()?;
+
+        let new_db_asset = NewOpenmontageAsset {
+            asset_id: new_asset.asset_id.clone(),
+            user_id: new_asset.user_id,
+            kind: new_asset.kind.clone(),
+            role: new_asset.role.clone(),
+            uri: new_asset.uri.clone(),
+            mime_type: new_asset.mime_type.clone(),
+            bytes: new_asset.bytes,
+            width_px: new_asset.width_px,
+            height_px: new_asset.height_px,
+            duration_ms: new_asset.duration_ms,
+        };
+
+        let db_asset: OpenmontageAsset = diesel::insert_into(gm_openmontage_assets)
+            .values(&new_db_asset)
+            .returning(OpenmontageAsset::as_select())
+            .get_result(&mut conn)
+            .map_err(|e| format!("Insert asset error: {}", e))?;
+
+        Ok(Asset {
+            id: db_asset.id,
+            asset_id: db_asset.asset_id,
+            user_id: db_asset.user_id,
+            kind: db_asset.kind,
+            role: db_asset.role,
+            uri: db_asset.uri,
+            mime_type: db_asset.mime_type,
+            bytes: db_asset.bytes,
+            width_px: db_asset.width_px,
+            height_px: db_asset.height_px,
+            duration_ms: db_asset.duration_ms,
+            created_at: db_asset.created_at,
+        })
     }
 }
