@@ -79,8 +79,11 @@ BEGIN
     WHERE user_id = p_user_id;
 
     -- Record freeze transaction
-    INSERT INTO gm_wallet_transactions (user_id, amount, type, description, reference_id)
-    VALUES (p_user_id, -p_amount, 'freeze', 'Seedance video generation budget freeze', p_ref_id);
+    -- Mirror fn_freeze_budget: canonical uppercase type + reference_type so
+    -- billing reconciliation/conservation (which filter type='FREEZE' AND
+    -- reference_type='aipub_plan') see Seedance freezes like every other provider.
+    INSERT INTO gm_wallet_transactions (user_id, amount, type, reference_id, reference_type, description)
+    VALUES (p_user_id, -p_amount, 'FREEZE', p_ref_id, p_ref_type, 'Seedance video generation budget freeze');
 
     -- Atomic plan update
     IF p_ref_type = 'aipub_plan' AND p_ref_id IS NOT NULL THEN
