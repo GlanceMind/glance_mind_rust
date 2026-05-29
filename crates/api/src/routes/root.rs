@@ -74,11 +74,10 @@ pub fn routes(
             };
 
         // OpenMontage
-        let openmontage_store =
-            std::sync::Arc::new(crate::repository::openmontage_repository::InMemoryJobStore::new())
-                as std::sync::Arc<
-                    dyn crate::repository::openmontage_repository::OpenMontageJobStore,
-                >;
+        let openmontage_store = std::sync::Arc::new(
+            crate::repository::openmontage_repository::PgJobStore::new(db_conn.pool.clone()),
+        )
+            as std::sync::Arc<dyn crate::repository::openmontage_repository::OpenMontageJobStore>;
         let openmontage_client =
             match crate::service::openmontage_client::RedisOpenMontageClient::from_env() {
                 Ok(client) => std::sync::Arc::new(client)

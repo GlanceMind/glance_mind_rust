@@ -1,11 +1,7 @@
-//! OpenMontage Database Integration Tests (gated)
+//! OpenMontage Database Integration Tests
 //!
 //! Tests PgJobStore against a real PostgreSQL database.
-//! Skipped unless DATABASE_URL is set.
-//!
-//! ASSERTION-CHANGE-JUSTIFIED: #[ignore] markers required per spec - these are gated integration tests
-//! that require PostgreSQL. They compile but don't run by default. The spec explicitly requires
-//! "gated db/redis integration tests" that skip unless environment is configured.
+//! Requires DATABASE_URL to be set, otherwise tests skip gracefully.
 
 #![cfg(test)]
 
@@ -24,7 +20,6 @@ fn get_test_pool() -> Option<Pool<ConnectionManager<PgConnection>>> {
 }
 
 #[test]
-#[ignore]
 fn pg_store_round_trips_job_and_events() {
     let pool = match get_test_pool() {
         Some(p) => p,
@@ -158,7 +153,6 @@ fn pg_store_round_trips_job_and_events() {
 }
 
 #[test]
-#[ignore]
 fn pg_store_update_from_event_extracts_fields() {
     let pool = match get_test_pool() {
         Some(p) => p,
@@ -215,7 +209,6 @@ fn pg_store_update_from_event_extracts_fields() {
 }
 
 #[test]
-#[ignore]
 fn pg_store_update_from_event_requires_primary_video_for_completed() {
     let pool = match get_test_pool() {
         Some(p) => p,
@@ -306,7 +299,6 @@ fn pg_store_update_from_event_requires_primary_video_for_completed() {
 }
 
 #[test]
-#[ignore]
 fn pg_store_idempotency_key_enforced() {
     let pool = match get_test_pool() {
         Some(p) => p,
@@ -354,7 +346,6 @@ fn pg_store_idempotency_key_enforced() {
 }
 
 #[test]
-#[ignore]
 fn pg_store_asset_round_trip() {
     let pool = match get_test_pool() {
         Some(p) => p,
@@ -399,7 +390,6 @@ fn pg_store_asset_round_trip() {
 }
 
 #[test]
-#[ignore]
 fn pg_store_set_cancel_requested() {
     let pool = match get_test_pool() {
         Some(p) => p,
@@ -440,4 +430,102 @@ fn pg_store_set_cancel_requested() {
         .expect("get job")
         .expect("job exists");
     assert!(job.cancel_requested);
+}
+
+#[test]
+fn pg_store_reconstructs_all_terminal_states() {
+    let pool = match get_test_pool() {
+        Some(p) => p,
+        None => {
+            eprintln!("DATABASE_URL not set, skipping test");
+            return;
+        }
+    };
+
+    let terminal_states = vec![
+        ("succeeded", "completed", true), // completed with primary_video -> succeeded (actual status is "completed" in DB)
+        ("failed", "failed", false),
+        ("degraded", "degraded", false),
+        ("cancelled", "cancelled", false),
+    ];
+
+    for (test_name, status, with_primary_video) in terminal_states {
+        let store = PgJobStore::new(pool.clone());
+        let job_id = format!("terminal-{}-{}", test_name, uuid::Uuid::new_v4());
+
+        // Create job
+        store
+            .create_job(NewJob {
+                job_id: job_id.clone(),
+                project_id: format!("omx-{}", job_id),
+                user_id: 100,
+                tenant_id: "test-tenant".to_string(),
+                request_id: format!("req-{}", test_name),
+                idempotency_key: format!("idem-{}-{}", test_name, uuid::Uuid::new_v4()),
+                pipeline: "animated-explainer".to_string(),
+                input_mode: None,
+                status: "queued".to_string(),
+                snapshot_json: json!({}),
+            })
+            .expect("create job");
+
+        // Append event to drive to terminal state
+        let event_json = if status == "completed" {
+            if with_primary_video {
+                json!({
+                    "artifacts": [
+                        {
+                            "artifact_id": "final-video",
+                            "role": "primary_video",
+                            "uri": "/path/to/final.mp4"
+                        }
+                    ]
+                })
+            } else {
+                json!({
+                    "artifacts": []
+                })
+            }
+        } else {
+            json!({})
+        };
+
+        let event = NewJobEvent {
+            job_id: job_id.clone(),
+            sequence: 1,
+            event_id: format!("evt-{}", uuid::Uuid::new_v4()),
+            event_type: format!("job_{}", status),
+            status: Some(status.to_string()),
+            event_json,
+        };
+
+        store.append_event(event.clone()).expect("append event");
+        store.update_from_event(&event).expect("update from event");
+
+        // Verify status persisted
+        let job = store
+            .get_job(&job_id)
+            .expect("get job")
+            .expect("job exists");
+        assert_eq!(
+            job.status, status,
+            "Terminal state {} should persist",
+            test_name
+        );
+
+        // Reopen store from same DATABASE_URL (simulates restart)
+        let reopened_store = PgJobStore::new(pool.clone());
+
+        // Assert status reconstructed
+        let reopened_job = reopened_store
+            .get_job(&job_id)
+            .expect("get job after reopen")
+            .expect("job exists after reopen");
+
+        assert_eq!(
+            reopened_job.status, status,
+            "Terminal state {} should survive reopen",
+            test_name
+        );
+    }
 }
