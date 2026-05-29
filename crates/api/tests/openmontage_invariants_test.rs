@@ -370,63 +370,63 @@ async fn t2_8_ingest_event_mutates_status_via_update_from_event() {
 
 #[test]
 fn t2_8_arch_guard_no_second_status_assignment() {
-    // Arch guard: use `rg` to assert no second assignment to `.status` exists outside update_from_event.
-    // We'll run `rg` in the service/handler directories to find `.status =` assignments.
+    // Arch guard: scan Rust sources to assert no second assignment to `.status` exists outside update_from_event.
+    // We scan service/handler directories recursively to find `.status =` assignments.
 
+    use std::fs;
     use std::path::Path;
 
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let service_dir = Path::new(manifest_dir).join("src/service");
     let handler_dir = Path::new(manifest_dir).join("src/handler");
 
-    let rg_output = std::process::Command::new("rg")
-        .args(&[
-            r"\.status\s*=",
-            "--type",
-            "rust",
-            "--line-number",
-            service_dir.to_str().unwrap(),
-            handler_dir.to_str().unwrap(),
-        ])
-        .output()
-        .expect("Failed to run rg");
+    // Collect all .rs files recursively
+    let mut suspicious_matches = Vec::new();
 
-    let stdout = String::from_utf8_lossy(&rg_output.stdout);
-    eprintln!("T2.8 rg output:\n{}", stdout);
+    for dir in &[service_dir, handler_dir] {
+        for_each_rust_file(dir, &mut |path| {
+            // Only examine openmontage files
+            let path_str = path.to_string_lossy();
+            if !path_str.contains("openmontage") {
+                return;
+            }
 
-    // Parse the output to find assignments
-    let lines: Vec<&str> = stdout.lines().collect();
+            if let Ok(content) = fs::read_to_string(path) {
+                for (lineno, line) in content.lines().enumerate() {
+                    // Look for `.status =` or `.status=` (assignment)
+                    if (line.contains(".status =") || line.contains(".status="))
+                        // Exclude comparisons
+                        && !line.contains("== ")
+                        && !line.contains("!= ")
+                        // Exclude update_from_event context
+                        && !line.contains("update_from_event")
+                        // Exclude set_status (the known second writer for cancel)
+                        && !line.contains("set_status")
+                        // Exclude struct field init (status:)
+                        && !line.contains("status:")
+                        // Exclude comments
+                        && !line.trim().starts_with("//")
+                    {
+                        suspicious_matches.push(format!(
+                            "{}:{}:{}",
+                            path_str,
+                            lineno + 1,
+                            line.trim()
+                        ));
+                    }
+                }
+            }
+        });
+    }
 
-    // Filter out lines in update_from_event (openmontage_repository.rs or openmontage_service.rs)
-    // and set_status (which is the allowed exception for cancel_job).
-    // Also exclude comparisons (==), SQL WHERE clauses, and non-openmontage files.
-    let suspicious_lines: Vec<&str> = lines
-        .iter()
-        .filter(|line| {
-            // Only care about openmontage files (not novel_service, aipub_service, etc.)
-            line.contains("openmontage") &&
-            // Exclude comparisons (if job.status == "...")
-            !line.contains("== ") && !line.contains("!= ") &&
-            // Exclude update_from_event context
-            !line.contains("update_from_event") &&
-            // Exclude set_status (the known second writer for cancel)
-            !line.contains("set_status") &&
-            // Exclude assignments in NewJob/UpdateJob structs (field init, not mutation)
-            !line.contains("status:") &&
-            // Exclude comments
-            !line.contains("//")
-        })
-        .copied()
-        .collect();
-
-    if !suspicious_lines.is_empty() {
+    if !suspicious_matches.is_empty() {
         eprintln!("T2.8 FINDING: Found unexpected .status assignments:");
-        for line in &suspicious_lines {
-            eprintln!("  {}", line);
+        for m in &suspicious_matches {
+            eprintln!("  {}", m);
         }
         panic!(
             "T2.8 VIOLATION: Found {} unexpected .status assignment(s) outside update_from_event and set_status",
-            suspicious_lines.len()
+            suspicious_matches.len()
         );
     } else {
         eprintln!(
@@ -438,59 +438,55 @@ fn t2_8_arch_guard_no_second_status_assignment() {
 #[test]
 fn t2_8_cancel_redis_key_only_written_by_cancel_handler() {
     // Verify that the cancel redis key is only written by the cancel handler (via client.set_cancel_flag).
-    // We'll use `rg` to search for "set_cancel_flag" calls.
+    // We scan Rust sources for "set_cancel_flag" calls.
 
+    use std::fs;
     use std::path::Path;
 
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let service_dir = Path::new(manifest_dir).join("src/service");
     let handler_dir = Path::new(manifest_dir).join("src/handler");
 
-    let rg_output = std::process::Command::new("rg")
-        .args(&[
-            r"set_cancel_flag",
-            "--type",
-            "rust",
-            "--line-number",
-            service_dir.to_str().unwrap(),
-            handler_dir.to_str().unwrap(),
-        ])
-        .output()
-        .expect("Failed to run rg");
+    // Collect all set_cancel_flag calls (not trait defs or comments)
+    let mut call_matches = Vec::new();
 
-    let stdout = String::from_utf8_lossy(&rg_output.stdout);
-    eprintln!("T2.8 set_cancel_flag rg output:\n{}", stdout);
+    for dir in &[service_dir, handler_dir] {
+        for_each_rust_file(dir, &mut |path| {
+            if let Ok(content) = fs::read_to_string(path) {
+                for (lineno, line) in content.lines().enumerate() {
+                    if line.contains("set_cancel_flag(")
+                        && !line.contains("fn set_cancel_flag") // trait def
+                        && !line.trim().starts_with("//")
+                    // comments
+                    {
+                        call_matches.push(format!(
+                            "{}:{}:{}",
+                            path.to_string_lossy(),
+                            lineno + 1,
+                            line.trim()
+                        ));
+                    }
+                }
+            }
+        });
+    }
 
-    let lines: Vec<&str> = stdout.lines().collect();
-
-    // We expect exactly one call in cancel_job (openmontage_service.rs line 220)
-    // and the trait definition + implementations (which don't count as calls).
-    let call_lines: Vec<&str> = lines
-        .iter()
-        .filter(|line| {
-            line.contains("set_cancel_flag(") &&
-            !line.contains("fn set_cancel_flag") && // trait def
-            !line.contains("//") // comments
-        })
-        .copied()
-        .collect();
-
-    if call_lines.len() != 1 {
+    if call_matches.len() != 1 {
         eprintln!(
             "T2.8 FINDING: Expected exactly 1 call to set_cancel_flag, found {}:",
-            call_lines.len()
+            call_matches.len()
         );
-        for line in &call_lines {
-            eprintln!("  {}", line);
+        for m in &call_matches {
+            eprintln!("  {}", m);
         }
         panic!(
             "T2.8 VIOLATION: set_cancel_flag should only be called from cancel_job, found {} calls",
-            call_lines.len()
+            call_matches.len()
         );
     }
 
     // Verify it's in cancel_job context
-    let cancel_line = call_lines[0];
+    let cancel_line = &call_matches[0];
     if !cancel_line.contains("openmontage_service") {
         panic!(
             "T2.8 VIOLATION: set_cancel_flag called outside openmontage_service: {}",
@@ -499,4 +495,34 @@ fn t2_8_cancel_redis_key_only_written_by_cancel_handler() {
     }
 
     eprintln!("T2.8 PASS: set_cancel_flag is only called from cancel_job.");
+}
+
+// ============================================================================
+// Helper: recursive .rs file walker (std only, no external deps)
+// ============================================================================
+
+fn for_each_rust_file<F>(dir: &std::path::Path, callback: &mut F)
+where
+    F: FnMut(&std::path::Path),
+{
+    use std::fs;
+
+    if !dir.exists() {
+        return;
+    }
+
+    let mut stack = vec![dir.to_path_buf()];
+
+    while let Some(current) = stack.pop() {
+        if let Ok(entries) = fs::read_dir(current) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                    callback(&path);
+                }
+            }
+        }
+    }
 }
