@@ -18,7 +18,9 @@ env:
 jobs:
   openmontage-api-tests:
     name: OpenMontage API Tests
-    runs-on: self-hosted
+    # GitHub-hosted: isolated VM + fresh Docker per run (avoids self-hosted
+    # runner port/leaked-container contention for the PG/Redis service ports).
+    runs-on: ubuntu-latest
     services:
       db:
         image: postgres:15-alpine
@@ -43,7 +45,6 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
-    environment: ci-env
     steps:
       - uses: actions/checkout@v4
 
@@ -115,4 +116,3 @@ jobs:
           DATABASE_URL: postgres://aihub_user:aihub_password@localhost:15432/aihub_db
           REDIS_URL: redis://localhost:6379
           RUST_BACKTRACE: 1
-          JWT_SECRET: ${{ vars.JWT_SECRET }}
