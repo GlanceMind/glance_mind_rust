@@ -85,11 +85,20 @@ pub fn routes(
             };
 
         // OpenMontage
+        // B02: select the persistent Pg-backed store when a DATABASE_URL is
+        // configured (prod), else the in-memory store (dev/test). An explicit
+        // OPENMONTAGE_STORE_MODE=postgres|memory overrides the default. This
+        // replaces the previous hardwired InMemoryJobStore, which silently lost
+        // every job/event on restart and left the entire Pg store dead code.
+        let openmontage_store_cfg =
+            crate::repository::openmontage_repository::OpenMontageStoreConfig {
+                database_url: std::env::var("DATABASE_URL").ok(),
+                store_mode: std::env::var("OPENMONTAGE_STORE_MODE").ok(),
+            };
         let openmontage_store =
-            std::sync::Arc::new(crate::repository::openmontage_repository::InMemoryJobStore::new())
-                as std::sync::Arc<
-                    dyn crate::repository::openmontage_repository::OpenMontageJobStore,
-                >;
+            crate::repository::openmontage_repository::build_openmontage_job_store(
+                &openmontage_store_cfg,
+            );
         let openmontage_client =
             match crate::service::openmontage_client::RedisOpenMontageClient::from_env() {
                 Ok(client) => std::sync::Arc::new(client)
