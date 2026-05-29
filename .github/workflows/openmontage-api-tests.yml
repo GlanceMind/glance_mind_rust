@@ -111,6 +111,7 @@ jobs:
             --test openmontage_facade_test \
             --test openmontage_assets_test \
             --test openmontage_asset_validation_test \
+            --test openmontage_client_runtime_test \
             -- --include-ignored
         env:
           DATABASE_URL: postgres://aihub_user:aihub_password@localhost:15432/aihub_db
