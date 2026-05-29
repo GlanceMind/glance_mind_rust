@@ -20,34 +20,40 @@
 //!
 //! The fixer MUST add, in `crate::repository::openmontage_repository`:
 //!
-//!   1. A trait method on `OpenMontageJobStore`:
-//!          fn backend_name(&self) -> &'static str;
-//!      with impls returning:
-//!          InMemoryJobStore -> "memory"
-//!          PgJobStore       -> "postgres"
+//! 1. A trait method on `OpenMontageJobStore`:
 //!
-//!   2. A backend-selection config + constructor:
-//!          pub struct OpenMontageStoreConfig {
-//!              /// Some(url) when a Postgres DATABASE_URL is configured (prod).
-//!              pub database_url: Option<String>,
-//!              /// Optional explicit override: "postgres" | "memory".
-//!              /// (e.g. read from an OPENMONTAGE_STORE / STORE_MODE env var)
-//!              pub store_mode: Option<String>,
-//!          }
+//! ```ignore
+//! fn backend_name(&self) -> &'static str;
+//! // with impls returning:
+//! //   InMemoryJobStore -> "memory"
+//! //   PgJobStore       -> "postgres"
+//! ```
 //!
-//!          pub fn build_openmontage_job_store(
-//!              cfg: &OpenMontageStoreConfig,
-//!          ) -> Arc<dyn OpenMontageJobStore>;
+//! 2. A backend-selection config + constructor:
 //!
-//!      Selection rule the fixer must satisfy:
-//!        - store_mode == Some("postgres")  -> Pg   (explicit prod override)
-//!        - store_mode == Some("memory")    -> memory (explicit dev override)
-//!        - else if database_url.is_some()  -> Pg   (prod default)
-//!        - else                            -> memory (dev/test default)
+//! ```ignore
+//! pub struct OpenMontageStoreConfig {
+//!     /// Some(url) when a Postgres DATABASE_URL is configured (prod).
+//!     pub database_url: Option<String>,
+//!     /// Optional explicit override: "postgres" | "memory".
+//!     /// (e.g. read from an OPENMONTAGE_STORE / STORE_MODE env var)
+//!     pub store_mode: Option<String>,
+//! }
 //!
-//!   3. `routes::root::routes` MUST construct the OpenMontage store via
-//!      `build_openmontage_job_store(..)` (derived from the real env /
-//!      `Database` config) instead of always `InMemoryJobStore::new()`.
+//! pub fn build_openmontage_job_store(
+//!     cfg: &OpenMontageStoreConfig,
+//! ) -> Arc<dyn OpenMontageJobStore>;
+//! ```
+//!
+//!    Selection rule the fixer must satisfy:
+//!    - store_mode == Some("postgres")  -> Pg   (explicit prod override)
+//!    - store_mode == Some("memory")    -> memory (explicit dev override)
+//!    - else if database_url.is_some()  -> Pg   (prod default)
+//!    - else                            -> memory (dev/test default)
+//!
+//! 3. `routes::root::routes` MUST construct the OpenMontage store via
+//!    `build_openmontage_job_store(..)` (derived from the real env /
+//!    `Database` config) instead of always `InMemoryJobStore::new()`.
 //!
 //! NOTE on DB-free determinism: `r2d2::Pool::builder().build()` is lazy and
 //! does NOT open a TCP connection at build time, so the Pg branch can be
