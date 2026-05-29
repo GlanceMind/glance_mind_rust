@@ -196,14 +196,25 @@ mod pg_transaction_rollback_test {
         let pool = glance_mind_db::create_pool();
         let store = PgJobStore::new(pool);
 
-        // Create a test job first
+        // ASSERTION-CHANGE-JUSTIFIED: Use unique timestamp-based IDs to avoid duplicate key
+        // constraint violations when test runs multiple times against the same database.
+        // This is test-data isolation, not assertion weakening.
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros();
+        let job_id = format!("job-t2-7-txn-{}", timestamp);
+        let project_id = format!("omx-t2-7-txn-{}", timestamp);
+        let request_id = format!("req-t2-7-txn-{}", timestamp);
+        let idempotency_key = format!("idem-t2-7-txn-{}", timestamp);
+
         let new_job = NewJob {
-            job_id: "job-t2-7-txn".to_string(),
-            project_id: "omx-t2-7-txn".to_string(),
+            job_id: job_id.clone(),
+            project_id: project_id.clone(),
             user_id: 1,
             tenant_id: "tenant-1".to_string(),
-            request_id: "req-t2-7-txn".to_string(),
-            idempotency_key: "idem-t2-7-txn".to_string(),
+            request_id: request_id.clone(),
+            idempotency_key: idempotency_key.clone(),
             pipeline: "animated-explainer".to_string(),
             input_mode: Some("text".to_string()),
             status: "queued".to_string(),
@@ -211,12 +222,12 @@ mod pg_transaction_rollback_test {
         };
 
         let job = store.create_job(new_job).unwrap();
-        assert_eq!(job.job_id, "job-t2-7-txn");
+        assert_eq!(job.job_id, job_id);
 
         // Craft an event with a status that exceeds VARCHAR(50) constraint (51+ chars)
         let invalid_status = "a".repeat(51); // 51 characters, exceeds max_length=50
         let event = NewJobEvent {
-            job_id: "job-t2-7-txn".to_string(),
+            job_id: job_id.clone(),
             sequence: 1,
             event_id: "evt-constraint-violation".to_string(),
             event_type: "job_progress".to_string(),
@@ -235,7 +246,7 @@ mod pg_transaction_rollback_test {
         );
 
         // Verify the transaction was rolled back: NO event should be persisted
-        let events = store.list_events("job-t2-7-txn", 0, 10).unwrap();
+        let events = store.list_events(&job_id, 0, 10).unwrap();
         assert_eq!(
             events.len(),
             0,
@@ -244,7 +255,7 @@ mod pg_transaction_rollback_test {
         );
 
         // Verify the job status was NOT updated (still "queued")
-        let job_after = store.get_job("job-t2-7-txn").unwrap().unwrap();
+        let job_after = store.get_job(&job_id).unwrap().unwrap();
         assert_eq!(
             job_after.status, "queued",
             "T2.7 ROLLBACK FAILURE: Job status was updated despite transaction failure."
