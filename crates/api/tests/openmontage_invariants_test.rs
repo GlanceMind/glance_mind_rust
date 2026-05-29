@@ -119,48 +119,6 @@ fn t2_6_enqueue_failure_returns_error_not_success_snapshot() {
     // For this test, we rely on the service implementation to NOT persist if enqueue fails.
 }
 
-#[test]
-fn t2_6_red_evidence_enqueue_failure_perturbed() {
-    // RED evidence: perturb create_job to simulate enqueue failure AFTER job insert.
-    // We'll test the CURRENT behavior (which may be the bug) to capture RED.
-
-    let store = Arc::new(InMemoryJobStore::new());
-    let client = Arc::new(FailingEnqueueClient::new());
-    let hub = OpenMontageStreamHub::new();
-    let service = OpenMontageService::new(store.clone(), client.clone(), hub);
-
-    let dto = CreateJobDto {
-        title: "RED Evidence".to_string(),
-        prompt: "Capture RED state".to_string(),
-        target_platform: "tiktok".to_string(),
-        ..Default::default()
-    };
-
-    let result = service.create_job(1, "test-tenant", dto);
-
-    // RED expectation: if create_job currently returns Ok(snapshot) with status="queued"
-    // even when enqueue fails, that's the bug we're exposing.
-    if result.is_ok() {
-        let snapshot = result.unwrap();
-        eprintln!(
-            "T2.6 RED CAPTURED: create_job returned success with status={} when enqueue failed!",
-            snapshot.status
-        );
-        panic!(
-            "T2.6 BUG DETECTED: create_job returned Ok with status='{}' when enqueue failed. \
-             This is a silent failure mode. Expected Err.",
-            snapshot.status
-        );
-    } else {
-        // If it returns Err, the service is already correctly handling enqueue failure.
-        eprintln!(
-            "T2.6 RED NOT CAPTURED: create_job already returns Err on enqueue failure (correct behavior). \
-             Error: {}",
-            result.unwrap_err()
-        );
-    }
-}
-
 // ============================================================================
 // T2.7: Store write failure rolls back (no partial job/orphan event)
 // ============================================================================
@@ -219,42 +177,84 @@ fn t2_7_in_memory_store_is_non_transactional() {
     );
 }
 
-#[test]
-fn t2_7_pg_store_append_event_is_transactional() {
-    // This test verifies that PgJobStore's `append_event` uses a transaction,
-    // so a mid-write failure would rollback. We can't easily force a mid-write failure
-    // in the test harness, but we can inspect the implementation.
+#[cfg(test)]
+mod pg_transaction_rollback_test {
+    use super::*;
+    use glance_mind_api::repository::openmontage_repository::PgJobStore;
 
-    // The PgJobStore::append_event implementation does NOT explicitly wrap in a transaction.
-    // However, Diesel's `execute` calls are atomic per statement. If the event insert fails,
-    // the job update won't execute. BUT if the event insert succeeds and the job update fails,
-    // the event WILL be persisted (orphaned).
+    #[test]
+    fn t2_7_pg_store_append_event_is_transactional() {
+        // This test verifies that PgJobStore::append_event wraps event insert + job update
+        // in a transaction, so a failure in the job update step rolls back the event insert.
 
-    // Real rollback requires wrapping both operations in `conn.transaction::<_, _, _>(|conn| { ... })`.
-    // Let's check the source code:
+        // Strategy: craft a NewJobEvent with a status field that exceeds the DB constraint
+        // (VARCHAR(50) in schema.rs). The event insert will succeed, but when the transaction
+        // tries to update the job with this invalid status, it should fail and roll back BOTH.
 
-    // Looking at openmontage_repository.rs lines 554-627 (append_event):
-    // - Line 561-565: reads current_job (separate query)
-    // - Line 582-587: inserts event with ON CONFLICT DO NOTHING
-    // - Line 610-624: updates job metadata
-    // These are separate statements, NOT wrapped in an explicit transaction.
+        // Setup: connect to the test database via pool
+        std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for this test");
+        let pool = glance_mind_db::create_pool();
+        let store = PgJobStore::new(pool);
 
-    // Diesel's default behavior: each statement auto-commits (Postgres default if not in explicit txn).
-    // If event insert succeeds but job update fails, the event is orphaned.
+        // Create a test job first
+        let new_job = NewJob {
+            job_id: "job-t2-7-txn".to_string(),
+            project_id: "omx-t2-7-txn".to_string(),
+            user_id: 1,
+            tenant_id: "tenant-1".to_string(),
+            request_id: "req-t2-7-txn".to_string(),
+            idempotency_key: "idem-t2-7-txn".to_string(),
+            pipeline: "animated-explainer".to_string(),
+            input_mode: Some("text".to_string()),
+            status: "queued".to_string(),
+            snapshot_json: serde_json::json!({"title": "T2.7 Transaction Test"}),
+        };
 
-    eprintln!(
-        "T2.7 FINDING: PgJobStore::append_event is NOT transactional. \
-         Event insert + job update are separate auto-commit statements. \
-         A failure in the job update step would orphan the event. \
-         Recommendation: wrap in conn.transaction() for atomicity."
-    );
+        let job = store.create_job(new_job).unwrap();
+        assert_eq!(job.job_id, "job-t2-7-txn");
 
-    // Since we can't run a true Postgres integration test here (no DATABASE_URL in this test),
-    // we document the finding. A full test would:
-    // 1. Force a constraint violation in the UPDATE step (e.g., set an invalid value).
-    // 2. Assert the event was NOT inserted (rolled back).
+        // Craft an event with a status that exceeds VARCHAR(50) constraint (51+ chars)
+        let invalid_status = "a".repeat(51); // 51 characters, exceeds max_length=50
+        let event = NewJobEvent {
+            job_id: "job-t2-7-txn".to_string(),
+            sequence: 1,
+            event_id: "evt-constraint-violation".to_string(),
+            event_type: "job_progress".to_string(),
+            status: Some(invalid_status.clone()),
+            event_json: serde_json::json!({"stage": "assets"}),
+        };
 
-    // For now, this test serves as DONE_WITH_CONCERNS documentation.
+        // Attempt to append the event (should fail due to constraint violation in UPDATE)
+        let append_result = store.append_event(event.clone());
+
+        // Assert: append_event returns an error (transaction rolled back)
+        assert!(
+            append_result.is_err(),
+            "T2.7 FAILURE: append_event should fail when status exceeds DB constraint. Result: {:?}",
+            append_result
+        );
+
+        // Verify the transaction was rolled back: NO event should be persisted
+        let events = store.list_events("job-t2-7-txn", 0, 10).unwrap();
+        assert_eq!(
+            events.len(),
+            0,
+            "T2.7 ROLLBACK FAILURE: Event was persisted despite transaction failure. \
+             This means append_event is NOT transactional (orphaned event)."
+        );
+
+        // Verify the job status was NOT updated (still "queued")
+        let job_after = store.get_job("job-t2-7-txn").unwrap().unwrap();
+        assert_eq!(
+            job_after.status, "queued",
+            "T2.7 ROLLBACK FAILURE: Job status was updated despite transaction failure."
+        );
+
+        eprintln!(
+            "T2.7 PASS: append_event is transactional. \
+             Constraint violation in job update rolled back the event insert."
+        );
+    }
 }
 
 // ============================================================================
@@ -362,8 +362,11 @@ fn t2_8_arch_guard_no_second_status_assignment() {
     // Arch guard: use `rg` to assert no second assignment to `.status` exists outside update_from_event.
     // We'll run `rg` in the service/handler directories to find `.status =` assignments.
 
-    let service_dir = "/Users/jacksoom/programer/aihub/glance_mind_rust/.claude/worktrees/m2-rust-api/crates/api/src/service";
-    let handler_dir = "/Users/jacksoom/programer/aihub/glance_mind_rust/.claude/worktrees/m2-rust-api/crates/api/src/handler";
+    use std::path::Path;
+
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let service_dir = Path::new(manifest_dir).join("src/service");
+    let handler_dir = Path::new(manifest_dir).join("src/handler");
 
     let rg_output = std::process::Command::new("rg")
         .args(&[
@@ -371,8 +374,8 @@ fn t2_8_arch_guard_no_second_status_assignment() {
             "--type",
             "rust",
             "--line-number",
-            service_dir,
-            handler_dir,
+            service_dir.to_str().unwrap(),
+            handler_dir.to_str().unwrap(),
         ])
         .output()
         .expect("Failed to run rg");
@@ -426,8 +429,11 @@ fn t2_8_cancel_redis_key_only_written_by_cancel_handler() {
     // Verify that the cancel redis key is only written by the cancel handler (via client.set_cancel_flag).
     // We'll use `rg` to search for "set_cancel_flag" calls.
 
-    let service_dir = "/Users/jacksoom/programer/aihub/glance_mind_rust/.claude/worktrees/m2-rust-api/crates/api/src/service";
-    let handler_dir = "/Users/jacksoom/programer/aihub/glance_mind_rust/.claude/worktrees/m2-rust-api/crates/api/src/handler";
+    use std::path::Path;
+
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let service_dir = Path::new(manifest_dir).join("src/service");
+    let handler_dir = Path::new(manifest_dir).join("src/handler");
 
     let rg_output = std::process::Command::new("rg")
         .args(&[
@@ -435,8 +441,8 @@ fn t2_8_cancel_redis_key_only_written_by_cancel_handler() {
             "--type",
             "rust",
             "--line-number",
-            service_dir,
-            handler_dir,
+            service_dir.to_str().unwrap(),
+            handler_dir.to_str().unwrap(),
         ])
         .output()
         .expect("Failed to run rg");
