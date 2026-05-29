@@ -520,7 +520,8 @@ pub fn routes(
                     )
                     .with_state(user_state.clone()),
             )
-            // OpenMontage Internal Callback (no user auth, internal network only)
+            // OpenMontage Internal Callback (no JWT; guarded by X-Internal-Token
+            // shared-secret middleware inside internal_routes() — see B01)
             .nest(
                 "/internal/openmontage",
                 crate::routes::openmontage::internal_routes()
