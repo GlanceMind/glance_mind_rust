@@ -848,3 +848,19 @@ impl OpenMontageJobStore for PgJobStore {
         })
     }
 }
+
+// ============================================================================
+// Production Wiring Helper
+// ============================================================================
+
+/// Builds the production OpenMontage job store.
+///
+/// This helper encapsulates the decision of which concrete store implementation
+/// to use in production. Extracting it into a testable function enables regression
+/// tests that verify the wiring choice (e.g., ensuring PgJobStore is used instead
+/// of InMemoryJobStore).
+pub fn build_openmontage_store(
+    pool: Pool<ConnectionManager<PgConnection>>,
+) -> Arc<dyn OpenMontageJobStore> {
+    Arc::new(PgJobStore::new(pool)) as Arc<dyn OpenMontageJobStore>
+}

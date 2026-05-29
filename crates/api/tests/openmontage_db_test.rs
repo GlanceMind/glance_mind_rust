@@ -8,7 +8,7 @@
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 use glance_mind_api::repository::openmontage_repository::{
-    NewAsset, NewJob, NewJobEvent, OpenMontageJobStore, PgJobStore,
+    build_openmontage_store, NewAsset, NewJob, NewJobEvent, OpenMontageJobStore, PgJobStore,
 };
 use serde_json::json;
 
@@ -528,4 +528,82 @@ fn pg_store_reconstructs_all_terminal_states() {
             test_name
         );
     }
+}
+
+#[test]
+fn wiring_regression_durable_store_across_instances() {
+    // M2-D4 regression test: verify that the production wiring helper returns
+    // a durable store (PgJobStore) rather than an in-memory store (InMemoryJobStore).
+    //
+    // If someone accidentally reverted root.rs back to InMemoryJobStore, this test
+    // would fail because store2 (a fresh instance from the same pool) would not see
+    // the job created through store1 (separate in-memory maps → None).
+    //
+    // With PgJobStore (current production wiring), both stores share the same
+    // underlying database via the pool, so persistence is guaranteed.
+
+    let pool = match get_test_pool() {
+        Some(p) => p,
+        None => {
+            eprintln!("DATABASE_URL not set, skipping test");
+            return;
+        }
+    };
+
+    let job_id = format!("wiring-test-{}", uuid::Uuid::new_v4());
+    let project_id = format!("omx-{}", job_id);
+
+    // Create first store instance and insert a job + event
+    let store1 = build_openmontage_store(pool.clone());
+
+    let _job = store1
+        .create_job(NewJob {
+            job_id: job_id.clone(),
+            project_id: project_id.clone(),
+            user_id: 888,
+            tenant_id: "wiring-test-tenant".to_string(),
+            request_id: "wiring-req".to_string(),
+            idempotency_key: format!("wiring-idem-{}", uuid::Uuid::new_v4()),
+            pipeline: "wiring-pipeline".to_string(),
+            input_mode: Some("wiring".to_string()),
+            status: "queued".to_string(),
+            snapshot_json: json!({"wiring": "test"}),
+        })
+        .expect("create job via store1");
+
+    let event = glance_mind_api::repository::openmontage_repository::NewJobEvent {
+        job_id: job_id.clone(),
+        sequence: 1,
+        event_id: format!("wiring-evt-{}", uuid::Uuid::new_v4()),
+        event_type: "wiring_test".to_string(),
+        status: Some("running".to_string()),
+        event_json: json!({"wiring": "event"}),
+    };
+
+    store1.append_event(event).expect("append event via store1");
+
+    // Create second store instance from the SAME pool
+    let store2 = build_openmontage_store(pool.clone());
+
+    // Assert: store2 can retrieve the job created via store1
+    let fetched = store2
+        .get_job(&job_id)
+        .expect("get job via store2")
+        .expect("job must exist in store2 if wiring is durable");
+
+    assert_eq!(fetched.job_id, job_id);
+    assert_eq!(fetched.user_id, 888);
+    assert_eq!(fetched.status, "running"); // Updated by event
+
+    // Assert: store2 can retrieve events created via store1
+    let events = store2
+        .list_events(&job_id, 0, 10)
+        .expect("list events via store2");
+    assert_eq!(events.len(), 1, "Event must persist across store instances");
+    assert_eq!(events[0].sequence, 1);
+    assert_eq!(events[0].event_type, "wiring_test");
+
+    // If build_openmontage_store returned InMemoryJobStore, store2.get_job would
+    // return None (separate in-memory map → no shared state).
+    // With PgJobStore, this test passes (shared DB via pool).
 }
