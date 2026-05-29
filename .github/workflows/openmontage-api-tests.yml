@@ -1,0 +1,112 @@
+name: OpenMontage API Tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  openmontage-api-tests:
+    name: OpenMontage API Tests
+    runs-on: self-hosted
+    services:
+      db:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: aihub_user
+          POSTGRES_PASSWORD: aihub_password
+          POSTGRES_DB: aihub_db
+        ports:
+          - 15432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    environment: ci-env
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev protobuf-compiler libpq-dev postgresql-client
+
+      - name: Apply database migrations
+        # Run each up.sql in sort order via psql (multi-pass to handle dependency ordering).
+        # This mirrors crates/db/docker/run-migrations.sh and is used instead of
+        # `diesel migration run` because some historical migrations reset search_path
+        # in ways that break Diesel's own __diesel_schema_migrations tracking table.
+        run: |
+          set -uo pipefail
+          export PGPASSWORD=aihub_password
+
+          mapfile -t pending < <(find crates/db/migrations -name "up.sql" | sort)
+
+          pass=1
+          while [ ${#pending[@]} -gt 0 ]; do
+            echo "--- Migration pass ${pass} (${#pending[@]} files) ---"
+            progress=0
+            next_pending=()
+            for migration in "${pending[@]}"; do
+              name=$(basename "$(dirname "$migration")")
+              if psql -v ON_ERROR_STOP=1 -1 -h localhost -p 15432 -U aihub_user -d aihub_db -f "$migration" > /dev/null 2>&1; then
+                echo "  OK: $name"
+                progress=$((progress + 1))
+              else
+                next_pending+=("$migration")
+              fi
+            done
+            if [ ${#next_pending[@]} -eq 0 ]; then break; fi
+            if [ "$progress" -eq 0 ]; then
+              echo "ERROR: No progress in pass ${pass}. Remaining:"
+              for m in "${next_pending[@]}"; do echo "  $(basename "$(dirname "$m")")"; done
+              exit 1
+            fi
+            pending=("${next_pending[@]}")
+            pass=$((pass + 1))
+          done
+
+          echo "All migrations applied."
+
+          # Seed test data (users with id=1 etc. required by FK constraints in tests)
+          psql -h localhost -p 15432 -U aihub_user -d aihub_db \
+            -f crates/db/docker/init-test-data.sql > /dev/null
+          echo "Test seed data applied."
+
+      - name: Run OpenMontage API Tests
+        run: |
+          cargo test -p glance_mind_api \
+            --test openmontage_db_test \
+            --test openmontage_invariants_test \
+            --test openmontage_callback_test \
+            --test openmontage_enqueue_test \
+            --test openmontage_facade_test \
+            --test openmontage_assets_test \
+            --test openmontage_asset_validation_test \
+            -- --include-ignored
+        env:
+          DATABASE_URL: postgres://aihub_user:aihub_password@localhost:15432/aihub_db
+          REDIS_URL: redis://localhost:6379
+          RUST_BACKTRACE: 1
+          JWT_SECRET: ${{ vars.JWT_SECRET }}
