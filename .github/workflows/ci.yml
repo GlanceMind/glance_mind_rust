@@ -8,6 +8,15 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Same OOM guardrails as harness.yml: this job builds the full workspace
+  # (clippy + tests) on the same constrained self-hosted runner. Trim debuginfo
+  # to line tables, disable incremental, and cap parallel codegen so a debug
+  # link step can't exhaust memory and drop the runner. (The test step also
+  # passes --jobs 1, so its build stays single-threaded regardless.)
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "1"
+  CARGO_PROFILE_TEST_DEBUG: "1"
+  CARGO_BUILD_JOBS: "2"
 
 jobs:
   test:

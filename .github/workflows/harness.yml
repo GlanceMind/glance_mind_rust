@@ -12,6 +12,16 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Keep the debug build from OOM-killing the constrained self-hosted runner
+  # (this job previously knocked front-p1 offline mid-build). Debuginfo is the
+  # dominant link-time memory input — drop it to line tables (still keeps
+  # backtrace line numbers); disable incremental (memory/disk churn with no CI
+  # benefit); cap parallel codegen so peak RSS stays bounded. None of these
+  # change test outcomes.
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "1"
+  CARGO_PROFILE_TEST_DEBUG: "1"
+  CARGO_BUILD_JOBS: "2"
 
 jobs:
   harness-api-db:
