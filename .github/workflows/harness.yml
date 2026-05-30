@@ -41,8 +41,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pkg-config libssl-dev protobuf-compiler libpq-dev
 
-      - name: Cache Cargo artifacts
-        uses: Swatinem/rust-cache@v2
-
+      # No GitHub Actions cache here: this self-hosted runner cannot reach the
+      # cache backend, so the post-job save hangs at 0 MB/s and wedges the runner.
+      # CARGO_HOME (~/.cargo) already persists between jobs on the host, so the
+      # crate registry stays warm without the remote cache.
       - name: Run API DB harness
         run: make harness-api-db

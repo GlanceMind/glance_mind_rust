@@ -46,9 +46,10 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
-
+      # No GitHub Actions cache: this self-hosted runner cannot reach the cache
+      # backend, so the post-job save hangs at 0 MB/s and wedges the runner.
+      # CARGO_HOME (~/.cargo) persists between jobs on the host, keeping the
+      # crate registry warm without the remote cache.
       - name: Install native build dependencies
         run: |
           sudo apt-get update
