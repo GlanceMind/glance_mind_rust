@@ -557,74 +557,74 @@ impl OpenMontageJobStore for PgJobStore {
 
         let mut conn = self.get_conn()?;
 
-        // First, get the current job's next_event_sequence
-        let current_job: OpenmontageJob = gm_openmontage_jobs::table
-            .filter(gm_openmontage_jobs::job_id.eq(&event.job_id))
-            .select(OpenmontageJob::as_select())
-            .first(&mut conn)
-            .map_err(|e| format!("Job not found: {}", e))?;
+        // Wrap event insert + job update in a transaction for atomicity
+        conn.transaction::<AppendResult, diesel::result::Error, _>(|conn| {
+            // First, get the current job's next_event_sequence
+            let current_job: OpenmontageJob = gm_openmontage_jobs::table
+                .filter(gm_openmontage_jobs::job_id.eq(&event.job_id))
+                .select(OpenmontageJob::as_select())
+                .first(conn)?;
 
-        let gap = event.sequence > current_job.next_event_sequence;
+            let gap = event.sequence > current_job.next_event_sequence;
 
-        // Try to insert event with ON CONFLICT DO NOTHING
-        let new_db_event = NewOpenmontageJobEvent {
-            job_id: event.job_id.clone(),
-            sequence: event.sequence,
-            event_id: event.event_id.clone(),
-            event_type: event.event_type.clone(),
-            status: event.status.clone(),
-            stage: None,
-            progress_pct: None,
-            event_json: event.event_json.clone(),
-            emitted_at: Some(chrono::Utc::now()),
-        };
-
-        let insert_result = diesel::insert_into(gm_openmontage_job_events)
-            .values(&new_db_event)
-            .on_conflict((job_id, sequence))
-            .do_nothing()
-            .execute(&mut conn)
-            .map_err(|e| format!("Insert event error: {}", e))?;
-
-        let inserted = insert_result > 0;
-
-        if !inserted {
-            // Check if it was duplicate event_id at different sequence
-            let existing_count: i64 = gm_openmontage_job_events
-                .filter(event_id.eq(&event.event_id))
-                .filter(job_id.eq(&event.job_id))
-                .count()
-                .get_result(&mut conn)
-                .map_err(|e| format!("Check duplicate error: {}", e))?;
-
-            if existing_count > 0 {
-                // Duplicate event_id, return not inserted
-                return Ok(AppendResult {
-                    inserted: false,
-                    gap: false,
-                });
-            }
-        }
-
-        // Update job metadata if inserted
-        if inserted {
-            let update = UpdateOpenmontageJob {
-                last_event_sequence: Some(event.sequence),
-                next_event_sequence: Some(event.sequence + 1),
-                updated_at: Some(chrono::Utc::now()),
-                sync_required: if gap { Some(true) } else { None },
+            // Try to insert event with ON CONFLICT DO NOTHING
+            let new_db_event = NewOpenmontageJobEvent {
+                job_id: event.job_id.clone(),
+                sequence: event.sequence,
+                event_id: event.event_id.clone(),
+                event_type: event.event_type.clone(),
                 status: event.status.clone(),
-                ..Default::default()
+                stage: None,
+                progress_pct: None,
+                event_json: event.event_json.clone(),
+                emitted_at: Some(chrono::Utc::now()),
             };
 
-            diesel::update(gm_openmontage_jobs::table)
-                .filter(gm_openmontage_jobs::job_id.eq(&event.job_id))
-                .set(&update)
-                .execute(&mut conn)
-                .map_err(|e| format!("Update job error: {}", e))?;
-        }
+            let insert_result = diesel::insert_into(gm_openmontage_job_events)
+                .values(&new_db_event)
+                .on_conflict((job_id, sequence))
+                .do_nothing()
+                .execute(conn)?;
 
-        Ok(AppendResult { inserted, gap })
+            let inserted = insert_result > 0;
+
+            if !inserted {
+                // Check if it was duplicate event_id at different sequence
+                let existing_count: i64 = gm_openmontage_job_events
+                    .filter(event_id.eq(&event.event_id))
+                    .filter(job_id.eq(&event.job_id))
+                    .count()
+                    .get_result(conn)?;
+
+                if existing_count > 0 {
+                    // Duplicate event_id, return not inserted
+                    return Ok(AppendResult {
+                        inserted: false,
+                        gap: false,
+                    });
+                }
+            }
+
+            // Update job metadata if inserted
+            if inserted {
+                let update = UpdateOpenmontageJob {
+                    last_event_sequence: Some(event.sequence),
+                    next_event_sequence: Some(event.sequence + 1),
+                    updated_at: Some(chrono::Utc::now()),
+                    sync_required: if gap { Some(true) } else { None },
+                    status: event.status.clone(),
+                    ..Default::default()
+                };
+
+                diesel::update(gm_openmontage_jobs::table)
+                    .filter(gm_openmontage_jobs::job_id.eq(&event.job_id))
+                    .set(&update)
+                    .execute(conn)?;
+            }
+
+            Ok(AppendResult { inserted, gap })
+        })
+        .map_err(|e| format!("Transaction error: {}", e))
     }
 
     fn list_events(
@@ -847,4 +847,20 @@ impl OpenMontageJobStore for PgJobStore {
             created_at: db_asset.created_at,
         })
     }
+}
+
+// ============================================================================
+// Production Wiring Helper
+// ============================================================================
+
+/// Builds the production OpenMontage job store.
+///
+/// This helper encapsulates the decision of which concrete store implementation
+/// to use in production. Extracting it into a testable function enables regression
+/// tests that verify the wiring choice (e.g., ensuring PgJobStore is used instead
+/// of InMemoryJobStore).
+pub fn build_openmontage_store(
+    pool: Pool<ConnectionManager<PgConnection>>,
+) -> Arc<dyn OpenMontageJobStore> {
+    Arc::new(PgJobStore::new(pool)) as Arc<dyn OpenMontageJobStore>
 }
