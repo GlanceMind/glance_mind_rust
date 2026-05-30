@@ -12,11 +12,21 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Keep the debug build from OOM-killing the constrained self-hosted runner
+  # (this job previously knocked front-p1 offline mid-build). Debuginfo is the
+  # dominant link-time memory input — drop it to line tables (still keeps
+  # backtrace line numbers); disable incremental (memory/disk churn with no CI
+  # benefit); cap parallel codegen so peak RSS stays bounded. None of these
+  # change test outcomes.
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "1"
+  CARGO_PROFILE_TEST_DEBUG: "1"
+  CARGO_BUILD_JOBS: "2"
 
 jobs:
   harness-api-db:
     name: API DB Harness
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, front]
     timeout-minutes: 45
 
     steps:
@@ -31,8 +41,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pkg-config libssl-dev protobuf-compiler libpq-dev
 
-      - name: Cache Cargo artifacts
-        uses: Swatinem/rust-cache@v2
-
+      # No GitHub Actions cache here: this self-hosted runner cannot reach the
+      # cache backend, so the post-job save hangs at 0 MB/s and wedges the runner.
+      # CARGO_HOME (~/.cargo) already persists between jobs on the host, so the
+      # crate registry stays warm without the remote cache.
       - name: Run API DB harness
         run: make harness-api-db

@@ -8,11 +8,20 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Same OOM guardrails as harness.yml: this job builds the full workspace
+  # (clippy + tests) on the same constrained self-hosted runner. Trim debuginfo
+  # to line tables, disable incremental, and cap parallel codegen so a debug
+  # link step can't exhaust memory and drop the runner. (The test step also
+  # passes --jobs 1, so its build stays single-threaded regardless.)
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "1"
+  CARGO_PROFILE_TEST_DEBUG: "1"
+  CARGO_BUILD_JOBS: "2"
 
 jobs:
   test:
     name: Test
-    runs-on: self-hosted
+    runs-on: [self-hosted, front]
     services:
       db:
         image: postgres:15-alpine
@@ -37,9 +46,10 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
-
+      # No GitHub Actions cache: this self-hosted runner cannot reach the cache
+      # backend, so the post-job save hangs at 0 MB/s and wedges the runner.
+      # CARGO_HOME (~/.cargo) persists between jobs on the host, keeping the
+      # crate registry warm without the remote cache.
       - name: Install native build dependencies
         run: |
           sudo apt-get update
