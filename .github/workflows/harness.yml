@@ -16,7 +16,7 @@ env:
 jobs:
   harness-api-db:
     name: API DB Harness
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, front]
     timeout-minutes: 45
 
     steps:
