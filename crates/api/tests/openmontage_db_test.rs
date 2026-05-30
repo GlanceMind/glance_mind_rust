@@ -12,7 +12,8 @@
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 use glance_mind_api::repository::openmontage_repository::{
-    NewAsset, NewJob, NewJobEvent, OpenMontageJobStore, PgJobStore,
+    build_openmontage_job_store, NewAsset, NewJob, NewJobEvent, OpenMontageJobStore,
+    OpenMontageStoreConfig, PgJobStore,
 };
 use serde_json::json;
 
@@ -21,6 +22,83 @@ fn get_test_pool() -> Option<Pool<ConnectionManager<PgConnection>>> {
 
     let manager = ConnectionManager::<PgConnection>::new(database_url);
     Pool::builder().build(manager).ok()
+}
+
+/// B02 persistence-across-restart contract (gated; requires DATABASE_URL).
+///
+/// Builds the OpenMontage store the SAME way production must (via
+/// `build_openmontage_job_store` with a prod-like config), creates a job,
+/// then rebuilds the store on the SAME database to simulate a process
+/// restart and asserts the job is still retrievable.
+///
+/// RED today: `root.rs` always uses `InMemoryJobStore`, and (until the fixer
+/// adds the seam) `build_openmontage_job_store` does not exist. With an
+/// in-memory backend the rebuilt store starts empty, so the second
+/// `get_job` returns `None` -> `expected Some(job), got None`.
+///
+/// ASSERTION-CHANGE-JUSTIFIED: This adds a NEW gated integration test; it does
+/// NOT weaken or alter any existing assertion. The `#[ignore]` is required per
+/// the B02 spec: this test needs a real PostgreSQL and must skip unless
+/// DATABASE_URL is set, matching the six pre-existing `#[ignore]` tests in this
+/// file (see the file-level justification at the top).
+#[test]
+#[ignore]
+fn prod_store_persists_job_across_simulated_restart() {
+    let database_url = match std::env::var("DATABASE_URL") {
+        Ok(url) => url,
+        Err(_) => {
+            eprintln!("DATABASE_URL not set, skipping test");
+            return;
+        }
+    };
+
+    // Build store #1 exactly as production must: prod-like config with a
+    // DATABASE_URL present selects the Pg backend.
+    let cfg = OpenMontageStoreConfig {
+        database_url: Some(database_url.clone()),
+        store_mode: None,
+    };
+    let store1 = build_openmontage_job_store(&cfg);
+    assert_eq!(
+        store1.backend_name(),
+        "postgres",
+        "prod-like config must select the Pg-backed store"
+    );
+
+    let job_id = format!("restart-job-{}", uuid::Uuid::new_v4());
+    store1
+        .create_job(NewJob {
+            job_id: job_id.clone(),
+            project_id: format!("omx-{}", job_id),
+            user_id: 4242,
+            tenant_id: "restart-tenant".to_string(),
+            request_id: "req-restart".to_string(),
+            idempotency_key: format!("idem-{}", uuid::Uuid::new_v4()),
+            pipeline: "animated-explainer".to_string(),
+            input_mode: Some("text".to_string()),
+            status: "queued".to_string(),
+            snapshot_json: json!({"title": "Survives restart"}),
+        })
+        .expect("create job on store #1");
+
+    // Simulate a process restart: drop the first store and build a brand-new
+    // one against the SAME database via the SAME selection path.
+    drop(store1);
+    let store2 = build_openmontage_job_store(&cfg);
+
+    let fetched = store2
+        .get_job(&job_id)
+        .expect("get job on store #2 (after restart)");
+
+    assert!(
+        fetched.is_some(),
+        "job must persist across a process restart when prod uses the \
+         Pg-backed store; got None (in-memory store loses all jobs) (B02)"
+    );
+    let fetched = fetched.unwrap();
+    assert_eq!(fetched.job_id, job_id);
+    assert_eq!(fetched.user_id, 4242);
+    assert_eq!(fetched.status, "queued");
 }
 
 #[test]

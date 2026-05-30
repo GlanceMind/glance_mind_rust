@@ -4,11 +4,13 @@
 //! Internal routes (I1) use X-Internal-Token header auth.
 
 use axum::{
+    middleware,
     routing::{get, post},
     Router,
 };
 
 use crate::handler::openmontage_handler;
+use crate::middleware::internal_auth;
 
 /// User-facing routes (mounted under /api/v1/openmontage)
 pub fn user_routes() -> Router {
@@ -31,6 +33,14 @@ pub fn user_routes() -> Router {
 }
 
 /// Internal routes (mounted under /api/v1/internal/openmontage)
+///
+/// Guarded by the `X-Internal-Token` shared-secret middleware (B01): the token
+/// must equal the `OPENMONTAGE_INTERNAL_TOKEN` env var, else the request is
+/// rejected with a raw `401 Unauthorized`. Applied here (rather than at the
+/// `/internal/openmontage` nest) so every mount of `internal_routes()` is
+/// guarded.
 pub fn internal_routes() -> Router {
-    Router::new().route("/callback", post(openmontage_handler::ingest_callback))
+    Router::new()
+        .route("/callback", post(openmontage_handler::ingest_callback))
+        .layer(middleware::from_fn(internal_auth::require_internal_token))
 }

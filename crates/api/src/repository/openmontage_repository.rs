@@ -118,6 +118,12 @@ pub struct NewAsset {
 
 /// Job store trait
 pub trait OpenMontageJobStore: Send + Sync {
+    /// Stable identifier for the backing store implementation.
+    ///
+    /// `"memory"` for the in-memory store, `"postgres"` for the Pg-backed
+    /// store. MUST be cheap and MUST NOT touch the database (used by the
+    /// backend-selection wiring tests with an unconnected lazy pool).
+    fn backend_name(&self) -> &'static str;
     fn create_job(&self, job: NewJob) -> Result<Job, String>;
     fn get_job(&self, job_id: &str) -> Result<Option<Job>, String>;
     fn find_by_idempotency(&self, key: &str) -> Result<Option<Job>, String>;
@@ -133,6 +139,57 @@ pub trait OpenMontageJobStore: Send + Sync {
     fn set_cancel_requested(&self, job_id: &str) -> Result<(), String>;
     fn get_asset(&self, asset_id: &str) -> Result<Option<Asset>, String>;
     fn insert_asset(&self, asset: NewAsset) -> Result<Asset, String>;
+}
+
+// ============================================================================
+// Backend Selection (B02)
+// ============================================================================
+
+/// Configuration that selects which `OpenMontageJobStore` backend to build.
+///
+/// Production must persist jobs across restarts, so when a Postgres
+/// `DATABASE_URL` is configured the Pg-backed store is selected. Dev/test may
+/// fall back to the in-memory store.
+#[derive(Debug, Clone, Default)]
+pub struct OpenMontageStoreConfig {
+    /// `Some(url)` when a Postgres `DATABASE_URL` is configured (prod default).
+    pub database_url: Option<String>,
+    /// Optional explicit override: `"postgres"` | `"memory"`.
+    /// Typically read from the `OPENMONTAGE_STORE_MODE` env var.
+    pub store_mode: Option<String>,
+}
+
+/// Build the OpenMontage job store from the given configuration.
+///
+/// Selection rule:
+///   - `store_mode == Some("postgres")` -> Pg   (explicit prod override)
+///   - `store_mode == Some("memory")`   -> memory (explicit dev override)
+///   - else if `database_url.is_some()` -> Pg   (prod default)
+///   - else                             -> memory (dev/test default)
+///
+/// The Pg branch builds the r2d2 pool LAZILY via `build_unchecked`, which does
+/// NOT open or wait for any connection at build time (unlike `build`, which
+/// calls `wait_for_initialization` and would fail/block on an unreachable DB).
+/// This keeps construction — and `backend_name()` — DB-free, so it is safe to
+/// call during routing setup and from wiring tests with an unconnected URL.
+/// The first real query (`pool.get()`) dials the connection on demand.
+pub fn build_openmontage_job_store(cfg: &OpenMontageStoreConfig) -> Arc<dyn OpenMontageJobStore> {
+    let use_postgres = match cfg.store_mode.as_deref() {
+        Some("postgres") => true,
+        Some("memory") => false,
+        // Any other (or absent) explicit mode falls back to the
+        // DATABASE_URL-driven default.
+        _ => cfg.database_url.is_some(),
+    };
+
+    if use_postgres {
+        let database_url = cfg.database_url.clone().unwrap_or_default();
+        let manager = ConnectionManager::<PgConnection>::new(database_url);
+        let pool = Pool::builder().build_unchecked(manager);
+        Arc::new(PgJobStore::new(pool))
+    } else {
+        Arc::new(InMemoryJobStore::new())
+    }
 }
 
 // ============================================================================
@@ -176,6 +233,10 @@ impl Default for InMemoryJobStore {
 }
 
 impl OpenMontageJobStore for InMemoryJobStore {
+    fn backend_name(&self) -> &'static str {
+        "memory"
+    }
+
     fn create_job(&self, new_job: NewJob) -> Result<Job, String> {
         let mut data = self.data.lock().unwrap();
 
@@ -416,6 +477,10 @@ impl PgJobStore {
 }
 
 impl OpenMontageJobStore for PgJobStore {
+    fn backend_name(&self) -> &'static str {
+        "postgres"
+    }
+
     fn create_job(&self, new_job: NewJob) -> Result<Job, String> {
         use glance_mind_db::schema::gm_openmontage_jobs::dsl::*;
 
