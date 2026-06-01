@@ -70,17 +70,26 @@ impl RedisOpenMontageClient {
     /// client works fine on a runtime worker thread (same pattern used by
     /// `lib.rs::init_redis`).
     fn rpush_envelope(&self, envelope: WorkerEnvelope) -> Result<(), String> {
+        let job_id = envelope.job_id.clone();
+        let task_id = envelope.task_id.clone();
         let payload =
             serde_json::to_string(&envelope).map_err(|e| format!("serialize envelope: {}", e))?;
         let mut conn = self
             .client
             .get_connection()
             .map_err(|e| format!("Redis connection error: {}", e))?;
-        let _: i64 = redis::cmd("RPUSH")
+        let queue_len: i64 = redis::cmd("RPUSH")
             .arg(OPENMONTAGE_QUEUE_KEY)
             .arg(payload)
             .query(&mut conn)
             .map_err(|e| format!("Redis RPUSH error: {}", e))?;
+        tracing::info!(
+            %job_id,
+            %task_id,
+            queue = OPENMONTAGE_QUEUE_KEY,
+            queue_len,
+            "openmontage enqueue: RPUSH ok"
+        );
         Ok(())
     }
 

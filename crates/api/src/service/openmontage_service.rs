@@ -162,6 +162,7 @@ impl OpenMontageService {
             enqueued_at: chrono::Utc::now().to_rfc3339(),
         };
 
+        tracing::info!(job_id = %job_id, "openmontage create_job: enqueueing run envelope");
         self.client.enqueue_run(envelope)?;
 
         Ok(JobSnapshotDto {
