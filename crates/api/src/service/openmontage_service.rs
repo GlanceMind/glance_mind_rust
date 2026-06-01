@@ -243,6 +243,26 @@ impl OpenMontageService {
             .get_job(job_id)?
             .ok_or_else(|| "Job not found".to_string())?;
 
+        // Reconstruct the run request so the worker can continue the pipeline
+        // past the approval gate. The python worker's engine.resume() promotes
+        // the `resume_from_stage` checkpoint and then re-drives run(), which
+        // loads the manifest from request["pipeline"]. The previous values —
+        // an empty request_json and a None resume_from_stage — made the worker
+        // reject the envelope outright ("resume_from_stage is required when
+        // kind='resume'"), so approvals never advanced the job.
+        let mut resume_request = job.snapshot_json.clone();
+        match resume_request.as_object_mut() {
+            Some(obj) => {
+                obj.insert(
+                    "pipeline".to_string(),
+                    serde_json::Value::String(job.pipeline.clone()),
+                );
+            }
+            None => {
+                resume_request = serde_json::json!({ "pipeline": job.pipeline });
+            }
+        }
+
         // Enqueue resume with approval decision
         let envelope = WorkerEnvelope {
             task_id: Uuid::new_v4().to_string(),
@@ -251,8 +271,9 @@ impl OpenMontageService {
             attempt: 1,
             max_attempts: 3,
             kind: "resume".to_string(),
-            request_json: serde_json::json!({}), // empty for resume
-            resume_from_stage: None,             // worker will infer from checkpoint
+            request_json: resume_request,
+            // The stage being approved; the worker promotes its checkpoint.
+            resume_from_stage: job.current_stage.clone(),
             approval_decision_json: Some(serde_json::to_value(&approval).unwrap()),
             start_sequence: job.next_event_sequence,
             enqueued_at: chrono::Utc::now().to_rfc3339(),
