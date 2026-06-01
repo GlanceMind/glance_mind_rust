@@ -5,6 +5,10 @@
 //! resumed questionnaire submission — into either a ready [`ProductBrief`] or a
 //! follow-up [`QuestionnairePayload`] asking for the missing fields.
 
+use std::collections::BTreeMap;
+
+use serde_json::Value;
+
 use crate::dto::audientry_dto::ProductBrief;
 use crate::service::ai_chat::types::{
     QuestionnaireControl, QuestionnaireField, QuestionnairePayload, QuestionnaireSubmission,
@@ -15,6 +19,41 @@ use crate::service::ai_chat::types::{
 /// (e.g. "tell me about audientry") is not intercepted.
 pub fn is_audientry_command(content: &str) -> bool {
     content.trim_start().starts_with("/audientry")
+}
+
+/// Field keys recognised on the `audientry` LLM tool call. Mirrors the tool's
+/// JSON-schema `properties` in `tool_registry.rs`.
+const AUDIENTRY_TOOL_ARG_KEYS: [&str; 4] =
+    ["product_name", "description", "landing_page_url", "locale"];
+
+/// Adapt an `audientry` LLM tool call's JSON arguments into a synthetic
+/// [`QuestionnaireSubmission`] with `intent == "audientry"`.
+///
+/// The natural-language tool is only advertised to the LLM as a fallback; its
+/// execution is *not* wired into the generic tool dispatcher (that path returns
+/// "Unknown tool: audientry"). Instead we funnel the call through the same
+/// deterministic entry point as the `/audientry` slash command by reusing
+/// [`parse_audientry_input`]'s resolution-order #1 (questionnaire answers). Any
+/// string-valued arg key the tool recognises is copied verbatim into `answers`;
+/// missing required fields naturally fall through to the follow-up questionnaire.
+pub fn audientry_submission_from_tool_args(params: &Value) -> QuestionnaireSubmission {
+    let mut answers: BTreeMap<String, Value> = BTreeMap::new();
+    for key in AUDIENTRY_TOOL_ARG_KEYS {
+        if let Some(v) = params.get(key) {
+            if let Some(s) = v.as_str() {
+                if !s.trim().is_empty() {
+                    answers.insert(key.to_string(), Value::String(s.to_string()));
+                }
+            }
+        }
+    }
+    QuestionnaireSubmission {
+        questionnaire_id: Some("audientry_brief".into()),
+        intent: "audientry".into(),
+        answers,
+        auto_filled: BTreeMap::new(),
+        display_message: None,
+    }
 }
 
 /// Outcome of parsing audientry input.
@@ -198,5 +237,63 @@ mod tests {
         assert!(is_audientry_command("/audientry Sleep Tea\nherbal tea"));
         assert!(is_audientry_command("  /audientry"));
         assert!(!is_audientry_command("tell me about audientry"));
+    }
+
+    #[test]
+    fn tool_args_complete_brief_via_submission() {
+        // The NL `audientry` tool call (advertised as a fallback) must route
+        // through the same deterministic path as `/audientry`. Its args become a
+        // synthetic submission that parse resolution-order #1 turns into a brief,
+        // preserving the optional landing_page_url and locale fields.
+        let params = serde_json::json!({
+            "product_name": "Sleep Tea",
+            "description": "herbal tea for faster sleep onset",
+            "landing_page_url": "https://example.com/sleep-tea",
+            "locale": "zh-CN"
+        });
+        let sub = audientry_submission_from_tool_args(&params);
+        assert_eq!(sub.intent, "audientry");
+        match parse_audientry_input("", Some(&sub)) {
+            AudientryParse::Ready(b) => {
+                assert_eq!(b.name, "Sleep Tea");
+                assert!(b.description.to_lowercase().contains("herbal"));
+                assert_eq!(
+                    b.landing_page_url.as_deref(),
+                    Some("https://example.com/sleep-tea")
+                );
+                assert_eq!(b.locale, "zh-CN");
+            }
+            _ => panic!("expected Ready brief from complete tool args"),
+        }
+    }
+
+    #[test]
+    fn tool_args_missing_description_requests_questionnaire() {
+        // Required fields absent → graceful follow-up questionnaire, never an
+        // "Unknown tool" error.
+        let params = serde_json::json!({ "product_name": "Sleep Tea" });
+        let sub = audientry_submission_from_tool_args(&params);
+        assert!(matches!(
+            parse_audientry_input("", Some(&sub)),
+            AudientryParse::NeedInput(_)
+        ));
+    }
+
+    #[test]
+    fn tool_args_ignore_blank_optional_fields() {
+        // A blank landing_page_url must not become Some("") on the brief.
+        let params = serde_json::json!({
+            "product_name": "Sleep Tea",
+            "description": "herbal sleep tea",
+            "landing_page_url": "   "
+        });
+        let sub = audientry_submission_from_tool_args(&params);
+        match parse_audientry_input("", Some(&sub)) {
+            AudientryParse::Ready(b) => {
+                assert_eq!(b.landing_page_url, None);
+                assert_eq!(b.locale, "en-US");
+            }
+            _ => panic!("expected Ready brief"),
+        }
     }
 }
