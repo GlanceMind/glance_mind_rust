@@ -5,7 +5,8 @@ use crate::dto::audientry_dto::{AudientryWorkerTaskEnvelope, ProductBrief};
 use crate::dto::common::PageResponse;
 use crate::error::api_error::ApiError;
 use crate::service::ai_chat::audientry_input::{
-    is_audientry_command, parse_audientry_input, AudientryParse,
+    audientry_submission_from_tool_args, is_audientry_command, parse_audientry_input,
+    AudientryParse,
 };
 use crate::service::ai_chat::*;
 use crate::service::audientry_relay::relay_job_events;
@@ -1546,6 +1547,31 @@ impl AiChatService {
 
             if let Some(ref tool_calls) = assembled_tool_calls {
                 if !tool_calls.is_empty() {
+                    // Natural-language fallback for audientry. The `audientry`
+                    // tool is advertised to the LLM, but its execution is only
+                    // wired through the deterministic `/audientry` entry point
+                    // (`handle_audientry`). Without this, the call falls through
+                    // to the generic dispatcher and returns
+                    // "Unknown tool: audientry". Route it to the same handler by
+                    // adapting the tool args into a synthetic submission; the
+                    // handler owns the terminal SSE message, so we hand off the
+                    // stream and return.
+                    if let Some(tc) = tool_calls.iter().find(|tc| tc.function.name == "audientry") {
+                        let params: Value =
+                            serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                        let sub = audientry_submission_from_tool_args(&params);
+                        return self
+                            .handle_audientry(
+                                conv_id,
+                                user_id,
+                                "",
+                                Some(&sub),
+                                audientry_dispatcher.clone(),
+                                tx.clone(),
+                            )
+                            .await;
+                    }
+
                     self.persist_assistant_tool_calls(
                         conv_id,
                         &text_content,
