@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use uuid::Uuid;
 
 // =============================================================================
 // Plan Entity - 发布计划
@@ -52,6 +53,9 @@ pub struct AipubPlan {
     /// NULL = publish immediately. Merged into task.content.schedule
     /// at task derivation time (same pattern as `behavior`).
     pub schedule: Option<JsonValue>,
+    /// Module D2: the task-template draft this plan was created from
+    /// (NULL for plans created outside the assistant draft flow).
+    pub source_draft_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Insertable)]

@@ -94,6 +94,16 @@ pub enum ApiError {
     #[error("Promo code usage limit reached")]
     PromoCodeUsageLimitReached,
 
+    // ============ Business Errors - Task-Template Draft (Module D2) ============
+    #[error("This draft has expired")]
+    DraftExpired,
+
+    #[error("This draft cannot be acted on in its current state")]
+    DraftNotActionable,
+
+    #[error("The requested template is unavailable")]
+    TemplateUnavailable,
+
     // ============ Business Errors - Batch Create (Module C) ============
     #[error("Multiple items are not supported yet")]
     MultiItemNotSupported,
@@ -187,6 +197,11 @@ impl ApiError {
             ApiError::PromoCodeExpired => ErrorCode::PromoCodeExpired,
             ApiError::PromoCodeAlreadyUsed => ErrorCode::PromoCodeAlreadyUsed,
             ApiError::PromoCodeUsageLimitReached => ErrorCode::PromoCodeUsageLimitReached,
+
+            // Task-template draft (Module D2)
+            ApiError::DraftExpired => ErrorCode::DraftExpired,
+            ApiError::DraftNotActionable => ErrorCode::DraftNotActionable,
+            ApiError::TemplateUnavailable => ErrorCode::TemplateUnavailable,
 
             // Batch create (Module C)
             ApiError::MultiItemNotSupported => ErrorCode::MultiItemNotSupported,

@@ -89,6 +89,12 @@ pub enum ErrorCode {
     /// Promo code usage limit reached
     PromoCodeUsageLimitReached = 4403,
 
+    /// Task-template draft: the draft has passed its TTL and can no longer be acted on
+    DraftExpired = 4500,
+    /// Task-template draft: the draft is not in a state that permits this action
+    DraftNotActionable = 4501,
+    /// Task-template draft: the requested template/sample is unavailable
+    TemplateUnavailable = 4502,
     /// Batch create: more than one item supplied (single-item MVP only)
     MultiItemNotSupported = 4503,
     /// Batch create: a batch with this idempotency key is still in progress
@@ -172,6 +178,11 @@ impl ErrorCode {
             ErrorCode::PromoCodeAlreadyUsed => "Promo code already used",
             ErrorCode::PromoCodeUsageLimitReached => "Promo code usage limit reached",
 
+            // Business logic errors - Task-template draft
+            ErrorCode::DraftExpired => "This draft has expired",
+            ErrorCode::DraftNotActionable => "This draft cannot be acted on in its current state",
+            ErrorCode::TemplateUnavailable => "The requested template is unavailable",
+
             // Business logic errors - Batch create
             ErrorCode::MultiItemNotSupported => "Multiple items are not supported yet",
             ErrorCode::BatchInProgress => "A batch with this idempotency key is still in progress",
@@ -220,6 +231,9 @@ impl ErrorCode {
 
             // Business logic errors - Permission related
             ErrorCode::PermissionDenied => "Feature not enabled, please contact support",
+            ErrorCode::DraftExpired => "该草稿已过期，请重新生成",
+            ErrorCode::DraftNotActionable => "该草稿当前状态不支持此操作",
+            ErrorCode::TemplateUnavailable => "所请求的模板暂不可用",
             ErrorCode::MultiItemNotSupported => "Batch create only supports a single item",
             ErrorCode::BatchInProgress => "A batch with this idempotency key is still in progress",
 
@@ -282,6 +296,10 @@ impl ErrorCode {
             ErrorCode::PermissionDenied => StatusCode::FORBIDDEN,
             ErrorCode::InsufficientBalance => StatusCode::PAYMENT_REQUIRED,
 
+            // Task-template draft
+            ErrorCode::DraftExpired => StatusCode::GONE,
+            ErrorCode::DraftNotActionable => StatusCode::CONFLICT,
+
             // Batch create
             ErrorCode::BatchInProgress => StatusCode::CONFLICT,
 
@@ -297,10 +315,66 @@ impl ErrorCode {
             | ErrorCode::PromoCodeExpired
             | ErrorCode::PromoCodeAlreadyUsed
             | ErrorCode::PromoCodeUsageLimitReached
+            | ErrorCode::TemplateUnavailable
             | ErrorCode::MultiItemNotSupported => StatusCode::BAD_REQUEST,
 
             // Server errors and third-party service errors
             _ => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+}
+
+// NOTE: `impl From<i32> for ErrorCode` lives in `unified_response.rs` (the
+// canonical numeric round-trip). The draft codes 4500-4502 are registered
+// there.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+
+    /// The task-template draft error codes map to the documented HTTP statuses
+    /// (DraftExpired→410 Gone, DraftNotActionable→409 Conflict,
+    /// TemplateUnavailable→400 Bad Request) and each carries a non-empty Chinese
+    /// message. This pins the public error contract for Module D2.
+    #[test]
+    fn draft_errors_map_to_status() {
+        assert_eq!(
+            ErrorCode::DraftExpired.http_status(),
+            StatusCode::GONE,
+            "DraftExpired must map to 410 Gone"
+        );
+        assert_eq!(
+            ErrorCode::DraftNotActionable.http_status(),
+            StatusCode::CONFLICT,
+            "DraftNotActionable must map to 409 Conflict"
+        );
+        assert_eq!(
+            ErrorCode::TemplateUnavailable.http_status(),
+            StatusCode::BAD_REQUEST,
+            "TemplateUnavailable must map to 400 Bad Request"
+        );
+
+        // Stable numeric codes.
+        assert_eq!(ErrorCode::DraftExpired.code(), 4500);
+        assert_eq!(ErrorCode::DraftNotActionable.code(), 4501);
+        assert_eq!(ErrorCode::TemplateUnavailable.code(), 4502);
+
+        // Round-trip through From<i32>.
+        assert_eq!(ErrorCode::from(4500), ErrorCode::DraftExpired);
+        assert_eq!(ErrorCode::from(4501), ErrorCode::DraftNotActionable);
+        assert_eq!(ErrorCode::from(4502), ErrorCode::TemplateUnavailable);
+
+        // Each draft error must carry a non-empty Chinese message.
+        for code in [
+            ErrorCode::DraftExpired,
+            ErrorCode::DraftNotActionable,
+            ErrorCode::TemplateUnavailable,
+        ] {
+            assert!(
+                !code.message_cn().is_empty(),
+                "{code:?} must have a non-empty Chinese message"
+            );
         }
     }
 }
