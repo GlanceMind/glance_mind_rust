@@ -1986,5 +1986,127 @@ class TestCampaignDatabaseState:
             print(f"  Campaign {row['id']} ({row['name']}): {row['template_count']} templates")
 
 
+class TestCampaignValidReplyInvariant:
+    """Real-Postgres invariant guard for R002/R004.
+
+    Locks the contract the web captured-content list depends on: the headline
+    `stats.replies` (a global aggregate) must equal the sum of per-post
+    `valid_comment_count` over ALL crawler-results pages, even when the only
+    comment-bearing post sorts onto a non-first server page.
+
+    Honesty note (anti-gaming, per plan 02-backend-invariant-guard.md §"Honesty
+    note"): the backend is already correct, so this is a characterization +
+    regression guard, NOT a backend RED->GREEN bug fix. Assertion 2 documents
+    the bug *shape* (a single-page sum is 0 while the headline is 3); assertion 3
+    is the invariant that is GREEN on today's correct backend and must stay green.
+    """
+
+    def _create_owned_campaign(self, auth_client, db_cursor, platform_id, suffix):
+        # Reuse the established cross-platform helper (and its region/model
+        # resolution) rather than duplicating it; this mirrors the in-file
+        # pattern of instantiating a sibling test class (see
+        # TestCampaignTemplates._create_fresh_campaign -> TestCampaignCRUD()).
+        return TestCampaignPlatformRouting()._create_owned_campaign(
+            auth_client, db_cursor, platform_id, suffix
+        )
+
+    def test_sum_valid_comment_count_across_pages_equals_stats_replies(
+        self, auth_client, db_cursor, db_connection
+    ):
+        suffix = uuid.uuid4().hex[:8]
+        campaign_id = self._create_owned_campaign(
+            auth_client, db_cursor, PLATFORM_FACEBOOK, suffix
+        )
+
+        # One crawler task for this campaign (FK target for the posts).
+        db_cursor.execute(
+            """
+            INSERT INTO gm_crawler_tasks (
+                campaign_id, keywords, max_count, process_count, status,
+                search_offset, search_limit
+            )
+            VALUES (%s, ARRAY[%s], 50, 0, 'completed', 0, 20)
+            RETURNING id
+            """,
+            (campaign_id, f"valid-reply-invariant-{suffix}"),
+        )
+        task_id = db_cursor.fetchone()["id"]
+
+        # 12 Facebook posts (> default page_size 10 => >=2 server pages). The
+        # endpoint orders created_at DESC, so give each post an explicit,
+        # distinct created_at. i=11 is the OLDEST -> sorts last -> page 2.
+        post_ids = []
+        for i in range(12):  # i=11 is OLDEST -> sorts last under created_at DESC -> page 2
+            db_cursor.execute(
+                """
+                INSERT INTO gm_agent_facebook_posts
+                  (task_id, campaign_id, facebook_post_id, post_type, url, message,
+                   timestamp, posted_at, reactions_count, comments_count, author_name, created_at)
+                VALUES (%s,%s,%s,'photo',%s,%s, 1705300000, NOW(), 0, %s, %s, NOW() - (%s * interval '1 minute'))
+                RETURNING id
+                """,
+                (
+                    task_id,
+                    campaign_id,
+                    f"fb_post_{suffix}_{i}",
+                    f"https://facebook.com/p/{suffix}/{i}",
+                    f"post {i}",
+                    (3 if i == 11 else 0),
+                    f"author_{i}",
+                    i,
+                ),
+            )
+            post_ids.append(db_cursor.fetchone()["id"])
+
+        comment_post_id = post_ids[11]  # the oldest post (page 2)
+        for c in range(3):
+            db_cursor.execute(
+                """
+                INSERT INTO gm_agent_facebook_comments
+                  (post_db_id, campaign_id, facebook_comment_id, comment_text, reason, suggested_reply, status)
+                VALUES (%s,%s,%s,%s,'r','reply',3)
+                """,
+                (comment_post_id, campaign_id, f"fb_cmt_{suffix}_{c}", f"comment {c}"),
+            )
+        db_connection.commit()
+
+        # Assertion 1: headline aggregate.
+        detail_resp = auth_client.get(f"/api/v1/campaigns/{campaign_id}")
+        assert_response_success(detail_resp)
+        detail = extract_data(detail_resp.json())
+        assert detail["stats"]["replies"] == 3
+
+        # Assertion 2 (characterization, GREEN-now): the comment-bearing post is
+        # OFF page 1, so a single-page sum is 0 while the headline is 3. This
+        # documents *why* summing one server page mismatches the headline. It
+        # would only go RED if a backend regression moved the post onto page 1.
+        page1_resp = auth_client.get(
+            f"/api/v1/campaigns/{campaign_id}/crawler-results",
+            params={"page": 1, "page_size": 10},
+        )
+        assert_response_success(page1_resp)
+        page1 = extract_data(page1_resp.json())
+        assert len(page1["list"]) == 10
+        assert sum(item["valid_comment_count"] for item in page1["list"]) == 0
+
+        # Assertion 3 (invariant / fix target): walk ALL pages and reconcile the
+        # per-post sum with the headline. Explicit page loop -- do NOT single-fetch.
+        all_items, page = [], 1
+        while True:
+            resp = auth_client.get(
+                f"/api/v1/campaigns/{campaign_id}/crawler-results",
+                params={"page": page, "page_size": 10},
+            )
+            assert_response_success(resp)
+            data = extract_data(resp.json())
+            all_items.extend(data["list"])
+            if page >= data["total_pages"]:
+                break
+            page += 1
+        assert len(all_items) == 12  # all posts reachable
+        assert sum(it["valid_comment_count"] for it in all_items) == 3
+        assert sum(it["valid_comment_count"] for it in all_items) == detail["stats"]["replies"]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
