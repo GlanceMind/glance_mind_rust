@@ -7,7 +7,7 @@
 //! naming the offending key.
 
 use super::super::completeness::DraftConfig;
-use super::super::task_spec::TaskKind;
+use super::super::task_spec::{FieldKind, Importance, TaskConfigSpec, TaskKind};
 
 /// Check that `config` satisfies the Required portion of the spec for `kind`.
 ///
@@ -15,14 +15,70 @@ use super::super::task_spec::TaskKind;
 /// non-null, and type-correct; otherwise `Err(messages)` where each message
 /// names a single offending key.
 ///
-/// This is a deliberately-WRONG skeleton stub: it accepts everything, so the RED
-/// tests that expect rejection of missing / wrong-typed configs fail on
-/// assertions.
+/// The spec is built via [`TaskConfigSpec::for_kind`] using a [`DraftConfig`]
+/// derived from `config` itself (so aipub conditional-Required keys resolve from
+/// the config's own `plan_type`). Dotted keys (e.g. `ai_input.content_prompt`)
+/// resolve into nested objects. Recommended / Optional keys are NOT required for
+/// validity.
 pub fn against_spec(config: &serde_json::Value, kind: TaskKind) -> Result<(), Vec<String>> {
-    // WRONG STUB: never inspects `config`, always reports valid. The real
-    // implementation must resolve the spec and check presence + type per key.
-    let _ = (config, kind, DraftConfig::default());
-    Ok(())
+    let draft = DraftConfig::from_value(config.clone());
+    let spec = TaskConfigSpec::for_kind(kind, &draft);
+
+    let mut errors = Vec::new();
+    for field in spec.fields.iter() {
+        if !matches!(field.importance, Importance::Required) {
+            continue;
+        }
+
+        let Some(value) = resolve_key(config, field.key) else {
+            errors.push(format!("missing required key `{}`", field.key));
+            continue;
+        };
+
+        if value.is_null() {
+            errors.push(format!("required key `{}` is null", field.key));
+            continue;
+        }
+
+        if !type_matches(value, field.kind) {
+            errors.push(format!(
+                "required key `{}` has the wrong type (expected {:?})",
+                field.key, field.kind
+            ));
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+/// Resolve a (possibly dotted) key into a nested config object.
+///
+/// A key containing `.` is a path: the segment before the first `.` names a
+/// nested object, the remainder names a field within it (recursively). Flat keys
+/// are looked up directly. Returns `None` if any segment is absent or a
+/// non-object is encountered mid-path.
+fn resolve_key<'a>(config: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
+    let mut current = config;
+    for segment in key.split('.') {
+        current = current.as_object()?.get(segment)?;
+    }
+    Some(current)
+}
+
+/// Whether `value`'s JSON type satisfies the given [`FieldKind`].
+fn type_matches(value: &serde_json::Value, kind: FieldKind) -> bool {
+    match kind {
+        // Accept any JSON number that is an integer (i64 or u64). Reject floats
+        // and string-encoded numbers.
+        FieldKind::Int => value.is_i64() || value.is_u64(),
+        FieldKind::String | FieldKind::Enum => value.is_string(),
+        FieldKind::Bool => value.is_boolean(),
+        FieldKind::Json => true,
+    }
 }
 
 #[cfg(test)]

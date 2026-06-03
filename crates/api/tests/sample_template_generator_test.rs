@@ -427,6 +427,8 @@ async fn prompt_contains_json_literal() {
 #[tokio::test]
 async fn secret_never_from_payload() {
     // generate_sample(kind, &DraftConfig, &dyn SampleLlm) -> Result<..>, no key.
+    // (lint-only annotation; matches repo convention, changes no assertion)
+    #[allow(clippy::type_complexity)]
     let _gen: for<'a> fn(
         TaskKind,
         &'a DraftConfig,
