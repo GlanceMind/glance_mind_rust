@@ -10,9 +10,11 @@
 //! inspects the draft.
 
 use super::completeness::DraftConfig;
+use serde::{Deserialize, Serialize};
 
 /// Which kind of task config we are validating.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TaskKind {
     /// Social-monitor campaign (`CampaignCreateDto`).
     Campaign,
@@ -21,7 +23,8 @@ pub enum TaskKind {
 }
 
 /// How important a field is to a complete config.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Importance {
     /// Must be present; absence blocks submission.
     Required,
@@ -33,7 +36,8 @@ pub enum Importance {
 
 /// The wire/value shape of a field. Serialized later as the wire `type`; kept
 /// simple here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FieldKind {
     String,
     Int,
