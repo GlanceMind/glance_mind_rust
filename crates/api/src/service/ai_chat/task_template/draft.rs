@@ -25,7 +25,7 @@
 use crate::error::api_error::ApiError;
 use crate::service::ai_chat::task_spec::TaskKind;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use uuid::Uuid;
@@ -175,12 +175,15 @@ impl<S: DraftStore> DraftService<S> {
         draft_config: JsonValue,
         sample_source: &str,
     ) -> Result<TemplateDraft, ApiError> {
-        // WRONG STUB (Module D2 RED): inserts the proposed draft but does NOT
-        // supersede prior proposed drafts. The real impl must call
-        // `supersede_prior_proposed(conv_id, kind, except = new.id)`.
+        // Insert the fresh `proposed` draft, then supersede every PRIOR proposed
+        // draft for the same (conv, kind) so a conversation only ever has one
+        // live proposal per kind. The new draft is excluded by id.
         let draft = self
             .store
             .insert_proposed(conv_id, msg_id, user_id, kind, draft_config, sample_source)
+            .await?;
+        self.store
+            .supersede_prior_proposed(conv_id, kind, draft.id)
             .await?;
         Ok(draft)
     }
@@ -201,15 +204,42 @@ impl<S: DraftStore> DraftService<S> {
         user_id: i32,
         now: DateTime<Utc>,
     ) -> Result<TemplateDraft, ApiError> {
-        // WRONG STUB (Module D2 RED): returns whatever `get` finds with NO
-        // expiry check, NO state-machine check, and NO CAS to `confirming`.
-        // The real impl must expire-if-stale, reject non-proposed drafts with
-        // DraftNotActionable, and CAS proposed -> confirming (admitting exactly
-        // one concurrent caller).
-        let _ = (now, self.ttl_hours);
-        match self.store.get(draft_id, user_id).await? {
-            Some(draft) => Ok(draft),
-            None => Err(ApiError::NotFound("draft not found".to_string())),
+        let draft = match self.store.get(draft_id, user_id).await? {
+            Some(d) => d,
+            None => return Err(ApiError::NotFound("draft not found".to_string())),
+        };
+
+        // Expire-if-stale: a `proposed` draft past its TTL is transitioned to
+        // `expired` (best-effort CAS) and rejected.
+        if draft.status == DraftStatus::Proposed && self.is_stale(&draft, now) {
+            let _ = self
+                .store
+                .cas_status(draft_id, DraftStatus::Proposed, DraftStatus::Expired)
+                .await?;
+            return Err(ApiError::DraftExpired);
+        }
+
+        // Only a `proposed` draft can begin a confirm.
+        if draft.status != DraftStatus::Proposed {
+            return Err(ApiError::DraftNotActionable);
+        }
+
+        // CAS proposed -> confirming. Exactly one concurrent caller wins.
+        let won = self
+            .store
+            .cas_status(draft_id, DraftStatus::Proposed, DraftStatus::Confirming)
+            .await?;
+
+        // Re-read the post-CAS state regardless of who won, so we report the
+        // truth (the winner sees `confirming`; the loser sees whatever the
+        // winner moved it to).
+        let current = self.store.get(draft_id, user_id).await?;
+        if won {
+            current.ok_or_else(|| ApiError::NotFound("draft not found".to_string()))
+        } else {
+            // Someone else won the CAS (or it raced into a terminal state):
+            // this caller cannot act on it.
+            Err(ApiError::DraftNotActionable)
         }
     }
 
@@ -221,19 +251,19 @@ impl<S: DraftStore> DraftService<S> {
         created_entity_id: i32,
         result: JsonValue,
     ) -> Result<(), ApiError> {
-        // WRONG STUB (Module D2 RED): no-op. The real impl must call
-        // `store.finish_confirmed(...)` to move confirming -> confirmed and
-        // persist the entity id + result.
-        let _ = (draft_id, created_entity_id, result);
-        Ok(())
+        // Move confirming -> confirmed, stamping the created entity id + result.
+        self.store
+            .finish_confirmed(draft_id, created_entity_id, result)
+            .await
     }
 
     /// Revert a confirm when entity creation failed: `confirming -> proposed`,
     /// so the user can retry.
     pub async fn revert_confirm(&self, draft_id: Uuid) -> Result<(), ApiError> {
-        // WRONG STUB (Module D2 RED): no-op. The real impl must CAS
-        // confirming -> proposed.
-        let _ = draft_id;
+        // CAS confirming -> proposed. (A non-confirming draft is a no-op CAS.)
+        self.store
+            .cas_status(draft_id, DraftStatus::Confirming, DraftStatus::Proposed)
+            .await?;
         Ok(())
     }
 
@@ -246,10 +276,262 @@ impl<S: DraftStore> DraftService<S> {
         user_id: i32,
         now: DateTime<Utc>,
     ) -> Result<(), ApiError> {
-        // WRONG STUB (Module D2 RED): unconditionally reports success without
-        // touching the store. The real impl must get + expire-if-stale + CAS
-        // proposed -> cancelled, and reject terminal drafts.
-        let _ = (draft_id, user_id, now, self.ttl_hours);
+        let draft = match self.store.get(draft_id, user_id).await? {
+            Some(d) => d,
+            None => return Err(ApiError::NotFound("draft not found".to_string())),
+        };
+
+        // Expire-if-stale: a `proposed` draft past its TTL is expired and is no
+        // longer cancellable.
+        if draft.status == DraftStatus::Proposed && self.is_stale(&draft, now) {
+            let _ = self
+                .store
+                .cas_status(draft_id, DraftStatus::Proposed, DraftStatus::Expired)
+                .await?;
+            return Err(ApiError::DraftExpired);
+        }
+
+        // Only a `proposed` draft can be cancelled; anything terminal (or
+        // confirming) is not actionable.
+        if draft.status != DraftStatus::Proposed {
+            return Err(ApiError::DraftNotActionable);
+        }
+
+        // CAS proposed -> cancelled. If the CAS loses (someone moved it first),
+        // the draft is no longer actionable for this caller.
+        let won = self
+            .store
+            .cas_status(draft_id, DraftStatus::Proposed, DraftStatus::Cancelled)
+            .await?;
+        if won {
+            Ok(())
+        } else {
+            Err(ApiError::DraftNotActionable)
+        }
+    }
+
+    /// A `proposed` draft is stale once its `created_at` predates the TTL window
+    /// ending at `now` (i.e. `created_at < now - ttl_hours`).
+    fn is_stale(&self, draft: &TemplateDraft, now: DateTime<Utc>) -> bool {
+        draft.created_at < now - Duration::hours(self.ttl_hours)
+    }
+}
+
+/// The canonical DB `task_kind` string for a [`TaskKind`] (matches the
+/// `task_kind IN ('campaign','publish_plan')` CHECK constraint).
+fn task_kind_db_str(kind: TaskKind) -> &'static str {
+    match kind {
+        TaskKind::Campaign => "campaign",
+        TaskKind::PublishPlan => "publish_plan",
+    }
+}
+
+/// Parse a DB `task_kind` string back into a [`TaskKind`]. Returns an error for
+/// any value outside the known set (which the CHECK constraint should preclude).
+fn task_kind_from_db(s: &str) -> Result<TaskKind, ApiError> {
+    match s {
+        "campaign" => Ok(TaskKind::Campaign),
+        "publish_plan" => Ok(TaskKind::PublishPlan),
+        other => Err(ApiError::DatabaseError(format!(
+            "unknown task_kind in draft row: {other}"
+        ))),
+    }
+}
+
+// ===========================================================================
+// Diesel-backed prod store.
+//
+// The deterministic unit suite (`draft_lifecycle_test.rs`) does NOT use this —
+// it constructs `DraftService` with its own in-memory CAS fake. The DB-backed
+// integration suite (`draft_lifecycle_db_test.rs`) exercises the real schema.
+// ===========================================================================
+
+use crate::config::database::DBPool;
+use diesel::prelude::*;
+use glance_mind_db::entity::ai_task_template_draft::{NewTaskTemplateDraft, TaskTemplateDraft};
+
+/// Diesel-backed draft store (prod).
+#[derive(Clone)]
+pub struct DieselDraftStore {
+    pool: DBPool,
+}
+
+impl DieselDraftStore {
+    pub fn new(pool: DBPool) -> Self {
+        Self { pool }
+    }
+
+    /// Map a persisted row into the service-layer [`TemplateDraft`].
+    fn row_to_draft(row: TaskTemplateDraft) -> Result<TemplateDraft, ApiError> {
+        let task_kind = task_kind_from_db(&row.task_kind)?;
+        let status = DraftStatus::from_wire(&row.status).ok_or_else(|| {
+            ApiError::DatabaseError(format!("unknown draft status in row: {}", row.status))
+        })?;
+        Ok(TemplateDraft {
+            id: row.id,
+            conversation_id: row.conversation_id,
+            message_id: row.message_id,
+            user_id: row.user_id,
+            task_kind,
+            draft_config: row.draft_config,
+            sample_source: row.sample_source,
+            status,
+            created_entity_id: row.created_entity_id,
+            created_at: row.created_at,
+        })
+    }
+}
+
+#[async_trait]
+impl DraftStore for DieselDraftStore {
+    async fn insert_proposed(
+        &self,
+        conv_id: i32,
+        msg_id: Option<i32>,
+        user_id: i32,
+        kind: TaskKind,
+        draft_config: JsonValue,
+        sample_source: &str,
+    ) -> Result<TemplateDraft, ApiError> {
+        use glance_mind_db::schema::gm_ai_task_template_drafts;
+
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+
+        // INSERT RETURNING the fresh row. `status` defaults to 'proposed' at the
+        // DB level (omitted from `NewTaskTemplateDraft`).
+        let row: TaskTemplateDraft = diesel::insert_into(gm_ai_task_template_drafts::table)
+            .values(&NewTaskTemplateDraft {
+                conversation_id: conv_id,
+                message_id: msg_id,
+                user_id,
+                task_kind: task_kind_db_str(kind).to_string(),
+                draft_config,
+                sample_source: sample_source.to_string(),
+            })
+            .returning(TaskTemplateDraft::as_returning())
+            .get_result(&mut conn)
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+
+        Self::row_to_draft(row)
+    }
+
+    async fn supersede_prior_proposed(
+        &self,
+        conv_id: i32,
+        kind: TaskKind,
+        except_id: Uuid,
+    ) -> Result<u64, ApiError> {
+        use glance_mind_db::schema::gm_ai_task_template_drafts::dsl;
+
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+
+        // UPDATE ... SET status='superseded'
+        //   WHERE conversation_id=? AND task_kind=? AND status='proposed' AND id<>except
+        let n = diesel::update(
+            dsl::gm_ai_task_template_drafts
+                .filter(dsl::conversation_id.eq(conv_id))
+                .filter(dsl::task_kind.eq(task_kind_db_str(kind)))
+                .filter(dsl::status.eq(DraftStatus::Proposed.as_str()))
+                .filter(dsl::id.ne(except_id)),
+        )
+        .set((
+            dsl::status.eq(DraftStatus::Superseded.as_str()),
+            dsl::updated_at.eq(chrono::Utc::now()),
+        ))
+        .execute(&mut conn)
+        .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+
+        Ok(n as u64)
+    }
+
+    async fn get(&self, draft_id: Uuid, user_id: i32) -> Result<Option<TemplateDraft>, ApiError> {
+        use glance_mind_db::schema::gm_ai_task_template_drafts::dsl;
+
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+
+        // SELECT by id, scoped to the owning user.
+        let row: Option<TaskTemplateDraft> = dsl::gm_ai_task_template_drafts
+            .filter(dsl::id.eq(draft_id))
+            .filter(dsl::user_id.eq(user_id))
+            .select(TaskTemplateDraft::as_select())
+            .first(&mut conn)
+            .optional()
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+
+        match row {
+            Some(r) => Ok(Some(Self::row_to_draft(r)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn cas_status(
+        &self,
+        draft_id: Uuid,
+        from: DraftStatus,
+        to: DraftStatus,
+    ) -> Result<bool, ApiError> {
+        use glance_mind_db::schema::gm_ai_task_template_drafts::dsl;
+
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+
+        // UPDATE ... SET status=to, updated_at=now() WHERE id=? AND status=from.
+        // Exactly one row is affected iff the draft was in `from`.
+        let affected = diesel::update(
+            dsl::gm_ai_task_template_drafts
+                .filter(dsl::id.eq(draft_id))
+                .filter(dsl::status.eq(from.as_str())),
+        )
+        .set((
+            dsl::status.eq(to.as_str()),
+            dsl::updated_at.eq(chrono::Utc::now()),
+        ))
+        .execute(&mut conn)
+        .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+
+        Ok(affected == 1)
+    }
+
+    async fn finish_confirmed(
+        &self,
+        draft_id: Uuid,
+        created_entity_id: i32,
+        result: JsonValue,
+    ) -> Result<(), ApiError> {
+        use glance_mind_db::schema::gm_ai_task_template_drafts::dsl;
+
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+
+        // UPDATE ... SET status='confirmed', created_entity_id=?, result=?,
+        //   updated_at=now() WHERE id=? AND status='confirming'.
+        diesel::update(
+            dsl::gm_ai_task_template_drafts
+                .filter(dsl::id.eq(draft_id))
+                .filter(dsl::status.eq(DraftStatus::Confirming.as_str())),
+        )
+        .set((
+            dsl::status.eq(DraftStatus::Confirmed.as_str()),
+            dsl::created_entity_id.eq(Some(created_entity_id)),
+            dsl::result.eq(Some(result)),
+            dsl::updated_at.eq(chrono::Utc::now()),
+        ))
+        .execute(&mut conn)
+        .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+
         Ok(())
     }
 }
