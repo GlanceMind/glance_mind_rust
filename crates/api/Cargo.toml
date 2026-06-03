@@ -98,3 +98,4 @@ md5 = "0.7"
 tower.workspace = true
 hyper = { version = "0.14", features = ["full"] }
 mime = "0.3.16"
+proptest = "1"
