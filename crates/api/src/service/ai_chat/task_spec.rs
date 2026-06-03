@@ -8,10 +8,6 @@
 //! Conditional-required fields (e.g. publish-plan fields gated by `plan_type`)
 //! are resolved at spec-construction time via [`TaskConfigSpec::for_kind`], which
 //! inspects the draft.
-//!
-//! NOTE (Module A skeleton): the method bodies below are deliberately-WRONG
-//! compiling stubs. The TEST-AUTHOR owns the assertions; a different engineer
-//! implements the real logic to make the RED tests GREEN.
 
 use super::completeness::DraftConfig;
 

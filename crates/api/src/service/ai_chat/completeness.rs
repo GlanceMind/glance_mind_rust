@@ -7,10 +7,6 @@
 //! `evaluate_with_threshold` is PURE: it performs no I/O, reads no clock, and uses
 //! no randomness. `evaluate` is the thin wrapper that reads the threshold env var
 //! once and delegates. `missing_threshold` resolves the env var default.
-//!
-//! NOTE (Module A skeleton): the function bodies below are deliberately-WRONG
-//! compiling stubs. The TEST-AUTHOR owns the assertions; a different engineer
-//! implements the real logic to make the RED tests GREEN.
 
 use super::task_spec::{FieldKind, FieldSpec, Importance, TaskConfigSpec, TaskKind};
 
@@ -415,6 +411,72 @@ mod tests {
         assert!(
             !high.should_offer_template,
             "threshold 12 on sparse draft must NOT offer template, got {high:?}"
+        );
+    }
+
+    // --- Nested-key (`ai_input.content_prompt`) coverage for publish_plan ---
+    // Covers the dotted-path `resolve` branch (shipped untested per the code-quality
+    // review). Spec: `ai_input.content_prompt` is a nested Recommended key, present
+    // only when the `ai_input` object holds a non-empty `content_prompt` string.
+    // A non-walking implementation would mark the present-case below as missing.
+
+    #[test]
+    fn aipub_nested_content_prompt_present_when_leaf_set() {
+        let d = draft(json!({
+            "platform_id": 1, "content_type": "post", "group_id": 7,
+            "ai_input": { "content_prompt": "make a fun launch post" }
+        }));
+        let r = evaluate_with_threshold(TaskKind::PublishPlan, &d, 3);
+        assert!(
+            r.present.iter().any(|k| k == "ai_input.content_prompt"),
+            "nested ai_input.content_prompt must be detected present, got {r:?}"
+        );
+        assert!(
+            !r.missing_recommended
+                .iter()
+                .any(|k| k == "ai_input.content_prompt"),
+            "nested key must not be simultaneously present and missing, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn aipub_nested_content_prompt_missing_when_ai_input_absent() {
+        let d = draft(json!({ "platform_id": 1, "content_type": "post", "group_id": 7 }));
+        let r = evaluate_with_threshold(TaskKind::PublishPlan, &d, 3);
+        assert!(
+            r.missing_recommended
+                .iter()
+                .any(|k| k == "ai_input.content_prompt"),
+            "absent nested key must be in missing_recommended, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn aipub_nested_content_prompt_missing_when_parent_not_object() {
+        let d = draft(
+            json!({ "platform_id": 1, "content_type": "post", "group_id": 7, "ai_input": 5 }),
+        );
+        let r = evaluate_with_threshold(TaskKind::PublishPlan, &d, 3);
+        assert!(
+            r.missing_recommended
+                .iter()
+                .any(|k| k == "ai_input.content_prompt"),
+            "a non-object ai_input must leave the nested key missing, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn aipub_nested_content_prompt_missing_when_leaf_blank() {
+        let d = draft(json!({
+            "platform_id": 1, "content_type": "post", "group_id": 7,
+            "ai_input": { "content_prompt": "   " }
+        }));
+        let r = evaluate_with_threshold(TaskKind::PublishPlan, &d, 3);
+        assert!(
+            r.missing_recommended
+                .iter()
+                .any(|k| k == "ai_input.content_prompt"),
+            "a blank nested leaf must be treated as missing, got {r:?}"
         );
     }
 }
