@@ -1,8 +1,32 @@
+use crate::service::ai_chat::task_template::EditedField;
 use crate::service::ai_chat::QuestionnaireSubmission;
 use chrono::{DateTime, Utc};
 use glance_mind_db::entity::ai_chat::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+// ── Module D3: task-template confirm/regenerate request DTOs ─────────────────
+
+/// Body of `POST /ai-chat/conversations/:id/task-template/:draft_id/confirm`.
+///
+/// The desktop submits the (possibly edited) template card fields. The backend
+/// derives `task_kind` from the persisted draft, projects `edited_fields` into a
+/// `CampaignCreateDto` / `CreatePlanDto`, forces `mode=atomic`, and uses
+/// `idempotency_key = draft_id`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConfirmTaskTemplateDto {
+    /// The edited card fields. Keys may be dotted (`ai_input.content_prompt`).
+    #[serde(default)]
+    pub edited_fields: Vec<EditedField>,
+}
+
+/// Body of `POST /ai-chat/conversations/:id/task-template/:draft_id/regenerate`.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct RegenerateTaskTemplateDto {
+    /// Optional free-text hint to steer the re-generation.
+    #[serde(default)]
+    pub hint: Option<String>,
+}
 
 // ── Request DTOs ────────────────────────────────────────────
 

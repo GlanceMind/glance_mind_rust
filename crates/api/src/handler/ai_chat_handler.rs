@@ -186,6 +186,90 @@ pub async fn update_plan_step(
     Ok(api_ok!(step))
 }
 
+// ── Module D3: task-template confirm / regenerate / cancel handlers ──────────
+//
+// These are compile-level wiring stubs. The full SSE/HTTP behaviour (CAS the
+// draft, project the edited fields, stream `step_*` / `plan_completed`) is
+// exercised by the live pytest integration test (`test_ai_template_api.py`),
+// NOT by these handlers in the RED phase. The implementer completes the bodies.
+
+/// POST /ai-chat/conversations/:id/task-template/:draft_id/confirm
+///
+/// Submit the edited template → CAS draft `proposed -> confirming` → project
+/// fields → batch-create → stream `step_*` / `plan_completed`.
+pub async fn confirm_task_template(
+    Extension(user): Extension<User>,
+    Extension(state): Extension<UserState>,
+    Path((conv_id, draft_id)): Path<(i32, uuid::Uuid)>,
+    Json(req): Json<ConfirmTaskTemplateDto>,
+) -> Result<impl IntoResponse, ApiError> {
+    use crate::service::ai_chat::task_template::{confirm_orchestrate, DieselDraftStore};
+    use crate::service::batch_task_service::DispatchSingleTaskCreator;
+
+    // Ownership check on the conversation (mirrors confirm_plan).
+    state.ai_chat_service.get_conversation(conv_id, user.id)?;
+
+    let drafts = crate::service::ai_chat::task_template::DraftService::new(
+        DieselDraftStore::new(state.db.pool.clone()),
+        24,
+    );
+    let creator = DispatchSingleTaskCreator::new(state.clone());
+
+    let result = confirm_orchestrate(
+        &drafts,
+        &creator,
+        draft_id,
+        user.id,
+        req.edited_fields,
+        chrono::Utc::now(),
+    )
+    .await?;
+
+    Ok(api_ok!(result))
+}
+
+/// POST /ai-chat/conversations/:id/task-template/:draft_id/regenerate
+///
+/// Re-run sample generation (optional `hint`) → emit a fresh
+/// `task_template_generating` + `task_template_proposed`.
+pub async fn regenerate_task_template(
+    Extension(user): Extension<User>,
+    Extension(state): Extension<UserState>,
+    Path((conv_id, draft_id)): Path<(i32, uuid::Uuid)>,
+    Json(req): Json<RegenerateTaskTemplateDto>,
+) -> Result<impl IntoResponse, ApiError> {
+    // STUB: ownership-check then echo back the ids. The real regeneration flow
+    // (supersede the old draft, generate + propose a new one, stream SSE) is
+    // completed by the implementer and verified by the live pytest.
+    state.ai_chat_service.get_conversation(conv_id, user.id)?;
+    let _ = (draft_id, req.hint);
+    Ok(api_ok!(serde_json::json!({
+        "draft_id": draft_id,
+        "regenerated": false
+    })))
+}
+
+/// POST /ai-chat/conversations/:id/task-template/:draft_id/cancel
+///
+/// Discard the draft (status → cancelled).
+pub async fn cancel_task_template(
+    Extension(user): Extension<User>,
+    Extension(state): Extension<UserState>,
+    Path((conv_id, draft_id)): Path<(i32, uuid::Uuid)>,
+) -> Result<impl IntoResponse, ApiError> {
+    use crate::service::ai_chat::task_template::{DieselDraftStore, DraftService};
+
+    state.ai_chat_service.get_conversation(conv_id, user.id)?;
+
+    let drafts = DraftService::new(DieselDraftStore::new(state.db.pool.clone()), 24);
+    drafts.cancel(draft_id, user.id, chrono::Utc::now()).await?;
+
+    Ok(api_ok!(serde_json::json!({
+        "draft_id": draft_id,
+        "status": "cancelled"
+    })))
+}
+
 fn event_name(event: &SseEvent) -> &'static str {
     match event {
         SseEvent::MessageStart { .. } => "message_start",
