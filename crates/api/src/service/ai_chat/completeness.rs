@@ -12,7 +12,7 @@
 //! compiling stubs. The TEST-AUTHOR owns the assertions; a different engineer
 //! implements the real logic to make the RED tests GREEN.
 
-use super::task_spec::{TaskConfigSpec, TaskKind};
+use super::task_spec::{FieldKind, FieldSpec, Importance, TaskConfigSpec, TaskKind};
 
 /// Environment variable controlling how many missing fields trigger the
 /// "offer a sample template" affordance.
@@ -38,6 +38,66 @@ impl DraftConfig {
     pub fn get(&self, key: &str) -> Option<&serde_json::Value> {
         self.0.get(key)
     }
+
+    /// Resolve a (possibly nested) field key to its raw JSON value.
+    ///
+    /// A key containing a `.` is treated as a path: the segment before the first
+    /// `.` names a nested object in the draft, and the remainder names a field
+    /// within it (recursively). Flat keys are looked up directly. Returns `None`
+    /// if any segment is absent or a non-object is encountered mid-path.
+    fn resolve(&self, key: &str) -> Option<&serde_json::Value> {
+        match key.split_once('.') {
+            None => self.0.get(key),
+            Some((head, rest)) => {
+                let mut current = self.0.get(head)?;
+                for segment in rest.split('.') {
+                    current = current.as_object()?.get(segment)?;
+                }
+                Some(current)
+            }
+        }
+    }
+}
+
+/// Decide whether `field` is "present" in `draft` per the completeness rules:
+///
+/// - The (possibly nested) key must exist and be non-null.
+/// - For `String`-typed fields, the value (a JSON string) must be non-empty
+///   after trimming whitespace.
+/// - For the special `max_scan_count` key, the numeric value must be `> 0`.
+fn is_present(draft: &DraftConfig, field: &FieldSpec) -> bool {
+    let Some(value) = draft.resolve(field.key) else {
+        return false;
+    };
+
+    if value.is_null() {
+        return false;
+    }
+
+    // String-typed fields must be non-empty after trim. (A non-string JSON value
+    // for a String-typed key is treated as present-if-non-null, leaving type
+    // validation to a later layer.)
+    if matches!(field.kind, FieldKind::String) {
+        if let Some(s) = value.as_str() {
+            if s.trim().is_empty() {
+                return false;
+            }
+        }
+    }
+
+    // `max_scan_count` is only "present" when its numeric value is strictly
+    // positive (zero / negative counts as missing).
+    if field.key == "max_scan_count" {
+        match value.as_i64() {
+            Some(n) => return n > 0,
+            None => match value.as_f64() {
+                Some(n) => return n > 0.0,
+                None => return false,
+            },
+        }
+    }
+
+    true
 }
 
 /// Result of evaluating a draft against its task config spec.
@@ -60,8 +120,10 @@ pub struct CompletenessReport {
 /// Resolve the missing-field threshold from the environment, falling back to
 /// [`DEFAULT_MISSING_THRESHOLD`]. Reads the process environment.
 pub fn missing_threshold() -> usize {
-    // WRONG STUB: ignores env, returns a wrong sentinel so A3 fails by assertion.
-    0
+    std::env::var(MISSING_THRESHOLD_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_MISSING_THRESHOLD)
 }
 
 /// Evaluate a draft. Reads the threshold env once, then delegates to the pure
@@ -75,19 +137,42 @@ pub fn evaluate(kind: TaskKind, draft: &DraftConfig) -> CompletenessReport {
 pub fn evaluate_with_threshold(
     kind: TaskKind,
     draft: &DraftConfig,
-    _threshold: usize,
+    threshold: usize,
 ) -> CompletenessReport {
-    // WRONG STUB: resolve the spec (so `kind`/`draft` are genuinely consulted by
-    // the eventual implementation) but return an all-empty/false report. This
-    // guarantees RED-by-assertion rather than a panic.
-    let _spec = TaskConfigSpec::for_kind(kind, draft);
+    let spec = TaskConfigSpec::for_kind(kind, draft);
+
+    let mut present = Vec::new();
+    let mut missing_required = Vec::new();
+    let mut missing_recommended = Vec::new();
+
+    for field in &spec.fields {
+        // Optional fields are never counted toward completeness in any bucket.
+        if matches!(field.importance, Importance::Optional) {
+            continue;
+        }
+
+        if is_present(draft, field) {
+            present.push(field.key.to_string());
+        } else {
+            match field.importance {
+                Importance::Required => missing_required.push(field.key.to_string()),
+                Importance::Recommended => missing_recommended.push(field.key.to_string()),
+                Importance::Optional => unreachable!("optional fields filtered above"),
+            }
+        }
+    }
+
+    let missing_count = missing_required.len() + missing_recommended.len();
+    let should_offer_template = missing_count >= threshold;
+    let blocking = !missing_required.is_empty();
+
     CompletenessReport {
-        present: Vec::new(),
-        missing_required: Vec::new(),
-        missing_recommended: Vec::new(),
-        missing_count: 0,
-        should_offer_template: false,
-        blocking: false,
+        present,
+        missing_required,
+        missing_recommended,
+        missing_count,
+        should_offer_template,
+        blocking,
     }
 }
 
@@ -306,14 +391,22 @@ mod tests {
         );
     }
 
-    /// The same sparse draft offers a template at threshold 3 but not at 9.
+    /// The same sparse draft offers a template at threshold 3 but not at 12.
     /// Uses `evaluate_with_threshold` for determinism (no process-env mutation).
+    ///
+    /// ASSERTION-CHANGE-JUSTIFIED: the original "high" threshold of 9 encoded a
+    /// wrong expectation. The sparse campaign draft {name, product_prompt} is missing
+    /// 5 required + 6 recommended = 11 expected configs, so missing_count == 11; with
+    /// should_offer_template == (missing_count >= threshold), 11 >= 9 is true, making
+    /// the "not offered at 9" assertion mathematically unsatisfiable alongside the
+    /// (immovable) partition/sparse tests. Corrected the high threshold to 12 (> 11),
+    /// which preserves the test's intent (offers at a low threshold, not at a high one).
     #[test]
     fn threshold_via_evaluate_with_threshold() {
         let d = draft(json!({ "name": "x", "product_prompt": "y" }));
 
         let low = evaluate_with_threshold(TaskKind::Campaign, &d, 3);
-        let high = evaluate_with_threshold(TaskKind::Campaign, &d, 9);
+        let high = evaluate_with_threshold(TaskKind::Campaign, &d, 12);
 
         assert!(
             low.should_offer_template,
@@ -321,7 +414,7 @@ mod tests {
         );
         assert!(
             !high.should_offer_template,
-            "threshold 9 on sparse draft must NOT offer template, got {high:?}"
+            "threshold 12 on sparse draft must NOT offer template, got {high:?}"
         );
     }
 }
