@@ -47,6 +47,39 @@ pub fn audientry_audit_row(user_id: i32, conversation_id: i32, success: bool) ->
 /// Wall-clock cap (seconds) for an audientry relay before it is considered timed out.
 const AUDIENTRY_MAX_SECS: u64 = 600;
 
+/// Drain the per-job relay channel, forwarding each event to the SSE client and
+/// capturing the terminal `AudientryReport` payload for durable persistence.
+///
+/// Robustness invariant (prod conv 66 → assistant msg 547): once the client
+/// disconnects (`tx.send` errors) we STOP forwarding but KEEP draining `relay_rx`
+/// until the relay task ends, so a terminal report the worker publishes *after*
+/// the disconnect is still captured. Breaking out of the loop on the first send
+/// error — as the original code did — loses the completed report because the
+/// `AudientryReport` event typically arrives on a later channel read, leaving the
+/// durable assistant message with `tool_calls = null` even though the worker
+/// finished. The front (`findAudientryReportInMessages`) then cannot rebuild the
+/// report card on reload.
+///
+/// Returns the captured report JSON (the last `AudientryReport` data seen), if any.
+async fn drain_relay_to_client(
+    mut relay_rx: mpsc::Receiver<SseEvent>,
+    tx: &mpsc::Sender<SseEvent>,
+) -> Option<Value> {
+    let mut report_json: Option<Value> = None;
+    let mut client_gone = false;
+    while let Some(ev) = relay_rx.recv().await {
+        if let SseEvent::AudientryReport { data } = &ev {
+            report_json = Some(data.clone());
+        }
+        // Client gone → stop forwarding, but keep draining so the terminal report
+        // is still captured for durable persistence.
+        if !client_gone && tx.send(ev).await.is_err() {
+            client_gone = true;
+        }
+    }
+    report_json
+}
+
 fn default_contract_version() -> String {
     "2026-04-29".into()
 }
@@ -1207,23 +1240,17 @@ impl AiChatService {
             Ok(()) => {
                 // forward the job's phase/report stream through an internal channel so we
                 // can both re-emit each event to the client AND capture the terminal
-                // report json for durable persistence.
-                let (relay_tx, mut relay_rx) = mpsc::channel::<SseEvent>(64);
+                // report json for durable persistence. The drain keeps capturing the
+                // report even if the client disconnects mid-stream (see
+                // `drain_relay_to_client`).
+                let (relay_tx, relay_rx) = mpsc::channel::<SseEvent>(64);
                 let relay_handle = tokio::spawn(relay_job_events(
                     dispatcher.client(),
                     job_id.clone(),
                     relay_tx,
                     Duration::from_secs(AUDIENTRY_MAX_SECS),
                 ));
-                while let Some(ev) = relay_rx.recv().await {
-                    if let SseEvent::AudientryReport { data } = &ev {
-                        report_json = Some(data.clone());
-                    }
-                    // client gone → stop forwarding (the relay also notices and exits).
-                    if tx.send(ev).await.is_err() {
-                        break;
-                    }
-                }
+                report_json = drain_relay_to_client(relay_rx, &tx).await;
                 match relay_handle.await {
                     Ok(Ok(terminal)) => terminal,
                     Ok(Err(e)) => {
@@ -2302,6 +2329,59 @@ mod tests {
         assert_eq!(
             friendly,
             "AI 模型服务暂时不可用，请稍后重试或切换到其他模型。"
+        );
+    }
+
+    /// Regression for the prod incident (conv 66 → assistant msg 547): the SSE
+    /// client (headless browser) dropped the stream ~90s into a ~499s audientry
+    /// run. The worker still published the terminal report, but the relay-drain
+    /// loop had already `break`ed on the first `tx.send` error, so the completed
+    /// report was lost from the durable message (`tool_calls = null`).
+    ///
+    /// `drain_relay_to_client` must keep draining after the client disconnects so
+    /// the terminal `AudientryReport` is still captured for persistence.
+    #[tokio::test]
+    async fn audientry_report_captured_when_client_disconnects_mid_stream() {
+        use super::drain_relay_to_client;
+        use crate::service::ai_chat::types::SseEvent;
+        use tokio::sync::mpsc;
+
+        let report = json!({
+            "job_id": "aud_test",
+            "status": "completed",
+            "summary": { "recommended_persona": "p", "headline_strategy": "s" }
+        });
+
+        // Worker stream: a phase event, then the terminal report, then the relay
+        // task ends (channel closes).
+        let (relay_tx, relay_rx) = mpsc::channel::<SseEvent>(64);
+        relay_tx
+            .send(SseEvent::AudientryPhase {
+                data: json!({ "phase": "m01" }),
+            })
+            .await
+            .unwrap();
+        relay_tx
+            .send(SseEvent::AudientryReport {
+                data: report.clone(),
+            })
+            .await
+            .unwrap();
+        drop(relay_tx);
+
+        // Simulate the client having disconnected mid-stream: dropping the
+        // receiver makes every `tx.send` from the drain fail, exactly as when the
+        // browser dropped the SSE before the report arrived.
+        let (client_tx, client_rx) = mpsc::channel::<SseEvent>(64);
+        drop(client_rx);
+
+        let captured = drain_relay_to_client(relay_rx, &client_tx).await;
+
+        assert_eq!(
+            captured,
+            Some(report),
+            "the terminal audientry report must be captured for durable \
+             persistence even when the SSE client disconnected mid-stream"
         );
     }
 }
