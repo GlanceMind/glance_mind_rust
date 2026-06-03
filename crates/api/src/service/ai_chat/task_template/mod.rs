@@ -89,12 +89,8 @@ pub struct EditedField {
 /// 4. Persist the proposal via `drafts.propose(..)` using the sample's source.
 /// 5. Build the SSE event via the redacting constructor
 ///    [`SseEvent::task_template_proposed`] with the persisted draft id, kind,
-///    source, `report.blocking`, `report.missing_*`, and `sample.fields`, and
+///    source, `report.blocking`, the missing keys, and `sample.fields`, and
 ///    return [`InterceptOutcome::Proposed`].
-///
-/// STUB (Module D3 RED): this skeleton ALWAYS returns `Proceed` without
-/// consulting the gate, generating a sample, or persisting a draft. The
-/// implementer replaces the body with the real logic above.
 pub async fn evaluate_create_intercept<S: DraftStore>(
     kind: TaskKind,
     raw_args: &JsonValue,
@@ -104,11 +100,75 @@ pub async fn evaluate_create_intercept<S: DraftStore>(
     msg_id: Option<i32>,
     user_id: i32,
 ) -> Result<InterceptOutcome, ApiError> {
-    // STUB: discard every input and unconditionally proceed. This is wrong on
-    // purpose (the RED tests assert the gate fires for sparse args, persists a
-    // draft, and maps TemplateUnavailable to an error).
-    let _ = (kind, raw_args, llm, drafts, conv_id, msg_id, user_id);
-    Ok(InterceptOutcome::Proceed)
+    // (1) Build the draft from the RAW tool-call args (BEFORE any default
+    // injection by the tool arm). Evaluating the raw args is load-bearing: the
+    // `injected_defaults_do_not_mask_missing` test proves the gate must see what
+    // the user actually supplied, not the post-injection shape.
+    let draft = DraftConfig::from_value(raw_args.clone());
+
+    // (2) Completeness gate. If the request is complete enough to create as-is,
+    // proceed WITHOUT persisting anything.
+    let report = completeness::evaluate(kind, &draft);
+    if !report.should_offer_template {
+        return Ok(InterceptOutcome::Proceed);
+    }
+
+    // (3) The gate fired: generate a spec-valid sample template. A genuinely
+    // unsupported (kind, draft) combo has no preset ⇒ `TemplateUnavailable`,
+    // which we surface as a typed `ApiError` (NOT Proceed, NOT Proposed). No
+    // draft is persisted on this path.
+    let sample = match generate_sample(kind, &draft, llm).await {
+        Ok(s) => s,
+        Err(GenerateError::TemplateUnavailable) => return Err(ApiError::TemplateUnavailable),
+    };
+
+    // (4) Persist the proposal (`proposed`), superseding any prior live proposal
+    // for this conversation+kind. The stored `draft_config` is the RAW args; the
+    // `sample_source` is the generator's provenance as a wire string.
+    let persisted = drafts
+        .propose(
+            conv_id,
+            msg_id,
+            user_id,
+            kind,
+            raw_args.clone(),
+            sample_source_wire_str(sample.source),
+        )
+        .await?;
+
+    // (5) Build the proposed-template SSE event via the redacting constructor.
+    // `missing` is the union of the still-missing required + recommended keys.
+    let missing = merge_missing(&report);
+    let event = SseEvent::task_template_proposed(
+        persisted.id,
+        kind,
+        sample.source,
+        report.blocking,
+        missing,
+        sample.fields,
+    );
+    Ok(InterceptOutcome::Proposed(event))
+}
+
+/// The canonical wire string for a [`SampleSource`] (matches its `snake_case`
+/// serde representation and the `sample_source` column values).
+fn sample_source_wire_str(source: SampleSource) -> &'static str {
+    match source {
+        SampleSource::AiGenerated => "ai_generated",
+        SampleSource::Preset => "preset",
+        SampleSource::Hybrid => "hybrid",
+    }
+}
+
+/// The union of the still-missing keys reported by the completeness gate
+/// (required first, then recommended), used to populate the proposed event's
+/// `missing` list so the UI can flag every unfilled field.
+fn merge_missing(report: &completeness::CompletenessReport) -> Vec<String> {
+    let mut missing =
+        Vec::with_capacity(report.missing_required.len() + report.missing_recommended.len());
+    missing.extend(report.missing_required.iter().cloned());
+    missing.extend(report.missing_recommended.iter().cloned());
+    missing
 }
 
 /// Confirm orchestration: CAS the draft, project edited fields, create, finalize.
@@ -125,9 +185,8 @@ pub async fn evaluate_create_intercept<S: DraftStore>(
 ///      * `Err(e)` ⇒ `drafts.revert_confirm(draft_id)` then return the typed
 ///        error `e`.
 ///
-/// STUB (Module D3 RED): this skeleton returns a vacuous "created" result
-/// WITHOUT calling `begin_confirm`, the projection, the creator, or
-/// `finish_confirm`/`revert_confirm`. It is wrong on purpose.
+/// The originating `draft_id` is also threaded into the create DTO as
+/// `source_draft_id` so the created entity links back to its draft.
 pub async fn confirm_orchestrate<S: DraftStore>(
     drafts: &DraftService<S>,
     creator: &dyn SingleTaskCreator,
@@ -136,22 +195,57 @@ pub async fn confirm_orchestrate<S: DraftStore>(
     edited_fields: Vec<EditedField>,
     now: DateTime<Utc>,
 ) -> Result<BatchCreateResultDto, ApiError> {
-    // STUB: ignore the draft lifecycle and the creator entirely and report a
-    // vacuous success with no created id. The RED tests assert the creator
-    // actually receives a projected DTO, the draft ends `confirmed`, failures
-    // revert to `proposed`, and expired/cancelled drafts are rejected.
-    let _ = (drafts, creator, draft_id, user_id, edited_fields, now);
-    Ok(BatchCreateResultDto {
-        results: vec![BatchItemResult {
-            index: 0,
-            status: "created".to_string(),
-            id: None,
-            error: None,
-        }],
-        created_count: 0,
-        failed_count: 0,
-        atomic_rolled_back: false,
-    })
+    // (1) CAS-admit the draft `proposed -> confirming`. This propagates
+    // `DraftExpired` (stale) / `DraftNotActionable` (terminal or lost race) and
+    // never invokes the creator on those paths. The returned draft carries the
+    // `task_kind` we project + create against.
+    let draft = drafts.begin_confirm(draft_id, user_id, now).await?;
+
+    // (2) Project the user-edited fields into the per-kind create DTO value,
+    // folding dotted keys (`ai_input.content_prompt`) into nested objects.
+    let mut dto_value = project_fields_to_dto(draft.task_kind, &edited_fields);
+
+    // Thread the draft id into the create DTO as `source_draft_id` so the
+    // created entity is linked back to its originating draft
+    // (`gm_campaigns.source_draft_id`, verified by the live pytest). The per-kind
+    // create DTOs accept this via `#[serde(default)]`; serde ignores it on kinds
+    // that do not yet persist the link.
+    if let JsonValue::Object(obj) = &mut dto_value {
+        obj.insert(
+            "source_draft_id".to_string(),
+            JsonValue::String(draft_id.to_string()),
+        );
+    }
+
+    // (3) Create the underlying entity. On success finalize the draft
+    // (`confirming -> confirmed`, stamping the entity id); on failure revert it
+    // (`confirming -> proposed`) so the user can edit + retry, and surface the
+    // creator's typed error verbatim.
+    match creator.create(user_id, draft.task_kind, dto_value).await {
+        Ok(created_id) => {
+            let result_json = serde_json::json!({ "created_entity_id": created_id });
+            drafts
+                .finish_confirm(draft_id, created_id, result_json)
+                .await?;
+            Ok(BatchCreateResultDto {
+                results: vec![BatchItemResult {
+                    index: 0,
+                    status: "created".to_string(),
+                    id: Some(created_id),
+                    error: None,
+                }],
+                created_count: 1,
+                failed_count: 0,
+                atomic_rolled_back: false,
+            })
+        }
+        Err(e) => {
+            // Best-effort revert; the original creator error is the contract
+            // return (a revert failure must not mask it).
+            let _ = drafts.revert_confirm(draft_id).await;
+            Err(e)
+        }
+    }
 }
 
 /// Project a draft's `task_kind` + the user-edited fields into the create-DTO
@@ -160,29 +254,33 @@ pub async fn confirm_orchestrate<S: DraftStore>(
 /// Dotted keys (e.g. `ai_input.content_prompt`) are folded into nested objects
 /// so the resulting value deserializes into the per-kind create DTO
 /// (`CampaignCreateDto` / `CreatePlanDto`).
-///
-/// STUB (Module D3 RED): returns an EMPTY object regardless of input, so the
-/// edited values never reach the creator. The RED tests assert the projected
-/// value carries the edited values (including a nested `ai_input` object).
 pub fn project_fields_to_dto(kind: TaskKind, edited_fields: &[EditedField]) -> JsonValue {
-    // STUB: drop every edited field.
-    let _ = (kind, edited_fields);
-    JsonValue::Object(serde_json::Map::new())
+    // The kind selects the target DTO shape downstream; the projection itself is
+    // kind-agnostic (fold each edited field by its — possibly dotted — key).
+    let _ = kind;
+    let mut root = serde_json::Map::new();
+    for field in edited_fields {
+        insert_dotted(&mut root, &field.key, field.value.clone());
+    }
+    JsonValue::Object(root)
 }
 
-// Touch the gate/generator imports so the skeleton compiles before the
-// implementer wires `generate_sample` / `DraftConfig` / `completeness` /
-// `GenerateError` into the bodies above. (Without this, the unused-import lint
-// would be denied as a warning in CI.)
-#[allow(dead_code)]
-async fn _force_use_of_intercept_deps(
-    kind: TaskKind,
-    raw: JsonValue,
-    llm: &dyn SampleLlm,
-) -> Result<(), GenerateError> {
-    let _ = completeness::missing_threshold();
-    let draft = DraftConfig::from_value(raw);
-    let _report = completeness::evaluate(kind, &draft);
-    let _sample = generate_sample(kind, &draft, llm).await?;
-    Ok(())
+/// Insert `value` under a (possibly dotted) `key` into `root`, creating nested
+/// objects for each dotted segment (`ai_input.content_prompt` ⇒
+/// `{"ai_input": {"content_prompt": value}}`) so the result deserializes into
+/// the per-kind create DTO rather than carrying a flat dotted key.
+fn insert_dotted(root: &mut serde_json::Map<String, JsonValue>, key: &str, value: JsonValue) {
+    match key.split_once('.') {
+        None => {
+            root.insert(key.to_string(), value);
+        }
+        Some((head, rest)) => {
+            let entry = root
+                .entry(head.to_string())
+                .or_insert_with(|| JsonValue::Object(serde_json::Map::new()));
+            if let JsonValue::Object(obj) = entry {
+                insert_dotted(obj, rest, value);
+            }
+        }
+    }
 }

@@ -1872,14 +1872,14 @@ impl ToolRegistry {
                 serde_json::to_value(&group).unwrap_or_default()
             }
             "create_campaign" => {
-                // Module D3 (wiring point): the completeness gate must run on the
-                // RAW `params` HERE, BEFORE the default-injection below, via
-                // `task_template::evaluate_create_intercept(TaskKind::Campaign,
-                // &params, llm, drafts, conv_id, msg_id, user_id)`. If it returns
-                // `InterceptOutcome::Proposed(event)`, the arm must short-circuit:
-                // emit the SSE event and NOT create. Threading `drafts`/`conv_id`/
-                // `tx` through `execute` is completed by the implementer (verified
-                // by the live pytest `test_ai_template_api.py`).
+                // Module D3: the completeness gate runs on the RAW `params` at the
+                // mutation-dispatch site in `AiChatService::send_message`
+                // (`try_intercept_create`), BEFORE this default-injection. If the
+                // gate fires there, it streams `task_template_proposed` and skips
+                // this arm entirely; reaching here means the gate decided
+                // `Proceed` (or this is a non-chat call site), so we create. The
+                // gate is intentionally NOT inside the static `execute` fn (which
+                // lacks `conv_id`/`tx`); see `try_intercept_create`.
                 Self::note_create_intercept_wiring(super::task_spec::TaskKind::Campaign, &params);
                 let mut p = params.clone();
                 if let Some(obj) = p.as_object_mut() {
@@ -1913,11 +1913,11 @@ impl ToolRegistry {
                 serde_json::to_value(&campaign).unwrap_or_default()
             }
             "create_publish_plan" => {
-                // Module D3 (wiring point): run the completeness gate on the RAW
-                // `params` HERE, BEFORE the name back-fill below, via
-                // `task_template::evaluate_create_intercept(TaskKind::PublishPlan,
-                // &params, ...)`; short-circuit to the SSE proposal on a fire.
-                // (Implementer threads `drafts`/`conv_id`/`tx`; live pytest gates.)
+                // Module D3: the completeness gate runs on the RAW `params` at the
+                // mutation-dispatch site (`AiChatService::try_intercept_create`),
+                // BEFORE this name back-fill. Reaching here means the gate decided
+                // `Proceed` (or this is a non-chat call site); see the
+                // `create_campaign` arm above for the rationale.
                 Self::note_create_intercept_wiring(
                     super::task_spec::TaskKind::PublishPlan,
                     &params,

@@ -259,12 +259,23 @@ impl<S: DraftStore> DraftService<S> {
 
     /// Revert a confirm when entity creation failed: `confirming -> proposed`,
     /// so the user can retry.
+    ///
+    /// D2 hardening (review finding): the CAS is `WHERE status='confirming'`. If
+    /// it loses (the draft was concurrently moved out of `confirming`), surface
+    /// that as [`ApiError::DraftNotActionable`] rather than a silent `Ok`, so a
+    /// lost revert is observable. Uses the existing `bool` from `cas_status`, so
+    /// no [`DraftStore`] trait signature changes (the in-memory test fakes are
+    /// unaffected — they only revert a winning `confirming` draft).
     pub async fn revert_confirm(&self, draft_id: Uuid) -> Result<(), ApiError> {
-        // CAS confirming -> proposed. (A non-confirming draft is a no-op CAS.)
-        self.store
+        let won = self
+            .store
             .cas_status(draft_id, DraftStatus::Confirming, DraftStatus::Proposed)
             .await?;
-        Ok(())
+        if won {
+            Ok(())
+        } else {
+            Err(ApiError::DraftNotActionable)
+        }
     }
 
     /// Cancel a draft: expire-if-stale, then `proposed -> cancelled`. A terminal
@@ -518,7 +529,7 @@ impl DraftStore for DieselDraftStore {
 
         // UPDATE ... SET status='confirmed', created_entity_id=?, result=?,
         //   updated_at=now() WHERE id=? AND status='confirming'.
-        diesel::update(
+        let affected = diesel::update(
             dsl::gm_ai_task_template_drafts
                 .filter(dsl::id.eq(draft_id))
                 .filter(dsl::status.eq(DraftStatus::Confirming.as_str())),
@@ -531,6 +542,17 @@ impl DraftStore for DieselDraftStore {
         ))
         .execute(&mut conn)
         .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+
+        // D2 hardening (review finding): the CAS is `WHERE status='confirming'`,
+        // so zero affected rows means the draft was concurrently moved out of
+        // `confirming` (raced revert / second confirm / expiry). Surface that
+        // loss as a typed error instead of silently reporting success — without
+        // changing the trait return type (the in-memory test fakes keep their
+        // `Result<(), ApiError>` signature; they only ever call this on the
+        // winning `confirming` path).
+        if affected == 0 {
+            return Err(ApiError::DraftNotActionable);
+        }
 
         Ok(())
     }

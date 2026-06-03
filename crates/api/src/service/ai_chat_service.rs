@@ -47,6 +47,10 @@ pub fn audientry_audit_row(user_id: i32, conversation_id: i32, success: bool) ->
 /// Wall-clock cap (seconds) for an audientry relay before it is considered timed out.
 const AUDIENTRY_MAX_SECS: u64 = 600;
 
+/// How long a `proposed` task-template draft stays actionable (Module D3 live
+/// wiring). Matches the confirm/cancel handlers' TTL.
+const DRAFT_TTL_HOURS: i64 = 24;
+
 /// Drain the per-job relay channel, forwarding each event to the SSE client and
 /// capturing the terminal `AudientryReport` payload for durable persistence.
 ///
@@ -1679,8 +1683,31 @@ impl AiChatService {
 
                         let params: Value =
                             serde_json::from_str(&tc.function.arguments).unwrap_or_default();
-                        let tool_result =
-                            ToolRegistry::execute(&tc.function.name, params, user_id, state).await;
+
+                        // Module D3 live wiring: for create_campaign /
+                        // create_publish_plan, run the completeness gate on the
+                        // RAW params BEFORE the tool arm's default-injection. If
+                        // the gate fires it streams a `task_template_proposed`
+                        // event and we skip the create, feeding a marker result
+                        // back into the loop; otherwise we proceed normally.
+                        let tool_result = match self
+                            .try_intercept_create(
+                                conv_id,
+                                user_id,
+                                &tc.function.name,
+                                &params,
+                                state,
+                                &tx,
+                            )
+                            .await
+                        {
+                            Ok(Some(proposed_marker)) => Ok(proposed_marker),
+                            Ok(None) => {
+                                ToolRegistry::execute(&tc.function.name, params, user_id, state)
+                                    .await
+                            }
+                            Err(e) => Err(e),
+                        };
                         self.process_tool_result(
                             conv_id,
                             user_id,
@@ -1755,6 +1782,173 @@ impl AiChatService {
         }
 
         self.repo.touch_conversation(conv_id)?;
+        Ok(())
+    }
+
+    /// Module D3 live wiring: run the completeness gate on a create tool's RAW
+    /// arguments BEFORE the tool arm's default-injection.
+    ///
+    /// Returns:
+    /// - `Ok(None)` ⇒ NOT a create tool, OR the gate decided `Proceed`: the
+    ///   caller dispatches `ToolRegistry::execute` as usual.
+    /// - `Ok(Some(synthetic_result))` ⇒ the gate fired: a `proposed` draft was
+    ///   persisted, the `task_template_proposed` SSE event was already streamed
+    ///   to the client, and the create was skipped. The caller feeds
+    ///   `synthetic_result` back through `process_tool_result` so the assistant
+    ///   loop stays coherent (and stops re-attempting the create).
+    /// - `Err(e)` ⇒ generation failed (e.g. `TemplateUnavailable`); the caller
+    ///   surfaces it as a failed tool result.
+    ///
+    /// This is the live seam the deterministic tests exercise via
+    /// `evaluate_create_intercept` directly; here it is threaded with the real
+    /// `DieselDraftStore` + the production `LlmClientSampleLlm`. It runs at the
+    /// mutation-dispatch site (not inside the static `ToolRegistry::execute`) so
+    /// the gate sees the RAW args and so `conv_id` / `tx` are in scope without
+    /// changing the tool-call dispatch signature.
+    async fn try_intercept_create(
+        &self,
+        conv_id: i32,
+        user_id: i32,
+        tool_name: &str,
+        raw_params: &Value,
+        state: &UserState,
+        tx: &mpsc::Sender<SseEvent>,
+    ) -> Result<Option<Value>, ApiError> {
+        let kind = match tool_name {
+            "create_campaign" => task_spec::TaskKind::Campaign,
+            "create_publish_plan" => task_spec::TaskKind::PublishPlan,
+            _ => return Ok(None),
+        };
+
+        let drafts = task_template::DraftService::new(
+            task_template::DieselDraftStore::new(state.db.pool.clone()),
+            DRAFT_TTL_HOURS,
+        );
+        let llm = task_template::LlmClientSampleLlm::from_env();
+
+        match task_template::evaluate_create_intercept(
+            kind, raw_params, &llm, &drafts, conv_id, None, user_id,
+        )
+        .await?
+        {
+            task_template::InterceptOutcome::Proceed => Ok(None),
+            task_template::InterceptOutcome::Proposed(event) => {
+                // Stream the proposed-template event to the client (secret-redacted
+                // by the constructor). The UI renders the editable sample; the
+                // user confirms via the confirm endpoint.
+                let _ = tx.send(event).await;
+                // Feed a compact, non-secret marker back into the assistant loop
+                // so the model knows the create was deferred to template confirm
+                // and does NOT immediately retry the raw create.
+                let kind_str = match kind {
+                    task_spec::TaskKind::Campaign => "campaign",
+                    task_spec::TaskKind::PublishPlan => "publish_plan",
+                };
+                Ok(Some(json!({
+                    "hidden": true,
+                    "status": "template_proposed",
+                    "task_kind": kind_str,
+                    "message": "已生成可编辑的样例模板，等待用户确认后再创建。"
+                })))
+            }
+        }
+    }
+
+    /// Module D3 live wiring: regenerate the sample template for an existing
+    /// `proposed` draft, streaming `task_template_generating` then a fresh
+    /// `task_template_proposed` event.
+    ///
+    /// Re-runs the generator over the draft's stored config (the optional `hint`
+    /// is appended as a free-text steer), proposes a NEW draft (which supersedes
+    /// the prior proposal for this conv+kind), and emits the redacted proposed
+    /// event. The completeness gate is NOT re-run here: regenerate is an explicit
+    /// user action on an already-offered template.
+    pub async fn regenerate_task_template(
+        &self,
+        conv_id: i32,
+        draft_id: uuid::Uuid,
+        user_id: i32,
+        hint: Option<String>,
+        state: &UserState,
+        tx: mpsc::Sender<SseEvent>,
+    ) -> Result<(), ApiError> {
+        use crate::service::ai_chat::completeness::{self, DraftConfig};
+        use crate::service::ai_chat::task_template::{
+            generate_sample, DieselDraftStore, DraftService, DraftStore, GenerateError,
+            LlmClientSampleLlm,
+        };
+
+        let store = DieselDraftStore::new(state.db.pool.clone());
+        let existing = store
+            .get(draft_id, user_id)
+            .await?
+            .ok_or_else(|| ApiError::NotFound("draft not found".to_string()))?;
+
+        let kind = existing.task_kind;
+
+        // Tell the client we are (re)generating.
+        let _ = tx
+            .send(SseEvent::TaskTemplateGenerating {
+                draft_id,
+                task_kind: kind,
+            })
+            .await;
+
+        // Re-seed the generator from the draft's stored config; append the hint
+        // (if any) as a steer field the generator/LLM can read.
+        let mut seed = existing.draft_config.clone();
+        if let (Some(hint), Some(obj)) = (
+            hint.as_ref().filter(|h| !h.trim().is_empty()),
+            seed.as_object_mut(),
+        ) {
+            obj.insert("__regenerate_hint".to_string(), json!(hint));
+        }
+        let draft = DraftConfig::from_value(seed);
+
+        let llm = LlmClientSampleLlm::from_env();
+        let sample = match generate_sample(kind, &draft, &llm).await {
+            Ok(s) => s,
+            Err(GenerateError::TemplateUnavailable) => return Err(ApiError::TemplateUnavailable),
+        };
+
+        // Persist the regenerated proposal (supersedes the prior one) and emit
+        // the redacted proposed event.
+        let drafts = DraftService::new(
+            DieselDraftStore::new(state.db.pool.clone()),
+            DRAFT_TTL_HOURS,
+        );
+        let source_wire = match sample.source {
+            crate::service::ai_chat::task_template::SampleSource::AiGenerated => "ai_generated",
+            crate::service::ai_chat::task_template::SampleSource::Preset => "preset",
+            crate::service::ai_chat::task_template::SampleSource::Hybrid => "hybrid",
+        };
+        let persisted = drafts
+            .propose(
+                conv_id,
+                existing.message_id,
+                user_id,
+                kind,
+                existing.draft_config.clone(),
+                source_wire,
+            )
+            .await?;
+
+        let report = completeness::evaluate(kind, &draft);
+        let mut missing =
+            Vec::with_capacity(report.missing_required.len() + report.missing_recommended.len());
+        missing.extend(report.missing_required.iter().cloned());
+        missing.extend(report.missing_recommended.iter().cloned());
+
+        let event = SseEvent::task_template_proposed(
+            persisted.id,
+            kind,
+            sample.source,
+            report.blocking,
+            missing,
+            sample.fields,
+        );
+        let _ = tx.send(event).await;
+
         Ok(())
     }
 

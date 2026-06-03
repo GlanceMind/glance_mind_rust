@@ -80,4 +80,7 @@ pub struct NewCampaign {
     pub auto_reply_post: Option<bool>,
     pub search_options: Option<JsonValue>,
     pub reply_template_ids: Vec<i32>,
+    /// The assistant task-template draft this campaign was confirmed from
+    /// (Module D3). `None` for campaigns created outside the template flow.
+    pub source_draft_id: Option<Uuid>,
 }

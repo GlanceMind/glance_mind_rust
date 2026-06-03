@@ -237,16 +237,35 @@ pub async fn regenerate_task_template(
     Extension(state): Extension<UserState>,
     Path((conv_id, draft_id)): Path<(i32, uuid::Uuid)>,
     Json(req): Json<RegenerateTaskTemplateDto>,
-) -> Result<impl IntoResponse, ApiError> {
-    // STUB: ownership-check then echo back the ids. The real regeneration flow
-    // (supersede the old draft, generate + propose a new one, stream SSE) is
-    // completed by the implementer and verified by the live pytest.
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    // Ownership check on the conversation (mirrors confirm_task_template).
     state.ai_chat_service.get_conversation(conv_id, user.id)?;
-    let _ = (draft_id, req.hint);
-    Ok(api_ok!(serde_json::json!({
-        "draft_id": draft_id,
-        "regenerated": false
-    })))
+
+    let (tx, rx) = mpsc::channel::<SseEvent>(64);
+    let service = state.ai_chat_service.clone();
+    let user_id = user.id;
+    let hint = req.hint.clone();
+
+    tokio::spawn(async move {
+        if let Err(e) = service
+            .regenerate_task_template(conv_id, draft_id, user_id, hint, &state, tx.clone())
+            .await
+        {
+            let _ = tx
+                .send(SseEvent::Error {
+                    message: e.to_string(),
+                })
+                .await;
+        }
+    });
+
+    let stream = ReceiverStream::new(rx).map(|event| {
+        Ok(Event::default()
+            .event(event_name(&event))
+            .data(event_data(&event)))
+    });
+
+    Ok(Sse::new(stream))
 }
 
 /// POST /ai-chat/conversations/:id/task-template/:draft_id/cancel
