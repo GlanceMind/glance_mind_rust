@@ -16,6 +16,16 @@ pub struct LlmClient {
     request_timeout_secs: u64,
 }
 
+/// The outcome of a JSON-mode chat completion: the raw assistant content string
+/// (expected to be a JSON object, but NOT parsed here) plus the `finish_reason`
+/// of the first choice (e.g. `"stop"`, `"length"`). Callers decide how to map
+/// these to a domain result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JsonModeResponse {
+    pub content: String,
+    pub finish_reason: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
@@ -88,6 +98,39 @@ impl LlmClient {
             api_key: config.api_key,
             base_url: config.base_url,
             model: config.model,
+            request_timeout_secs,
+        }
+    }
+
+    /// Construct an `LlmClient` pointed at an explicit `base_url` / `api_key` /
+    /// `model`, bypassing the environment. Intended for tests that intercept the
+    /// HTTP call (e.g. wiremock). Uses the default request timeout.
+    pub fn with_base_url(
+        base_url: impl Into<String>,
+        api_key: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
+        Self::with_base_url_and_timeout(base_url, api_key, model, DEFAULT_REQUEST_TIMEOUT_SECS)
+    }
+
+    /// Like [`LlmClient::with_base_url`] but with an explicit request timeout (in
+    /// seconds) so tests can force a short budget and exercise the timeout path.
+    pub fn with_base_url_and_timeout(
+        base_url: impl Into<String>,
+        api_key: impl Into<String>,
+        model: impl Into<String>,
+        request_timeout_secs: u64,
+    ) -> Self {
+        let client = Client::builder()
+            .connect_timeout(Duration::from_secs(DEFAULT_CONNECT_TIMEOUT_SECS))
+            .timeout(Duration::from_secs(request_timeout_secs))
+            .build()
+            .expect("Failed to build AI chat HTTP client");
+        Self {
+            client,
+            api_key: api_key.into(),
+            base_url: base_url.into(),
+            model: model.into(),
             request_timeout_secs,
         }
     }
@@ -375,6 +418,50 @@ impl LlmClient {
         Ok((msg, usage))
     }
 
+    /// Build the request body for a JSON-mode (DeepSeek `json_object`) chat
+    /// completion: the configured `model`, a `[system, user]` message pair,
+    /// `response_format: {"type":"json_object"}`, and the requested `max_tokens`.
+    ///
+    /// NOTE (B2 skeleton): this stub intentionally OMITS `response_format` and
+    /// `max_tokens` so the RED unit test `chat_completion_json_body_sets_json_mode_and_max_tokens`
+    /// fails by assertion until the implementer fills in the real body.
+    fn build_json_chat_body(&self, system: &str, user: &str, _max_tokens: u32) -> Value {
+        serde_json::json!({
+            "model": self.model,
+            "messages": [
+                { "role": "system", "content": system },
+                { "role": "user", "content": user },
+            ],
+        })
+    }
+
+    /// Send a single non-streaming JSON-mode chat completion to
+    /// `{base}/chat/completions`, returning the assistant content string plus the
+    /// `finish_reason` of the first choice. The request sets
+    /// `response_format: {"type":"json_object"}` + `max_tokens` + the configured
+    /// `model`. The API key comes only from config/env and is sent as
+    /// `Authorization: Bearer`. Provider error bodies are redacted via
+    /// [`Self::format_provider_error`].
+    ///
+    /// NOTE (B2 skeleton): this stub returns a fixed WRONG value and performs NO
+    /// network I/O, so the boundary tests fail by assertion until implemented.
+    pub async fn chat_completion_json(
+        &self,
+        system: &str,
+        user: &str,
+        max_tokens: u32,
+    ) -> Result<JsonModeResponse, String> {
+        // Build the body so the helper is exercised on the production path too,
+        // then discard it: this stub performs NO network I/O and returns a fixed
+        // WRONG value until the implementer wires the real request + mapping.
+        let _body = self.build_json_chat_body(system, user, max_tokens);
+        let _ = (&self.client, &self.api_key);
+        Ok(JsonModeResponse {
+            content: "STUB_NOT_IMPLEMENTED".to_string(),
+            finish_reason: Some("stop".to_string()),
+        })
+    }
+
     fn format_provider_error(status: reqwest::StatusCode, body: &str) -> String {
         if body.trim().is_empty() {
             return format!("LLM API error {status}");
@@ -510,6 +597,50 @@ mod tests {
 
         assert_eq!(body["model"], "test-model");
         assert!(body.get("stream").is_none());
+    }
+
+    #[test]
+    fn chat_completion_json_body_sets_json_mode_and_max_tokens() {
+        let client = stub_client();
+        let body = client.build_json_chat_body(
+            "You produce json output.",
+            "Give me the json config.",
+            512,
+        );
+
+        // DeepSeek JSON mode: response_format must be {"type":"json_object"}.
+        assert_eq!(
+            body["response_format"]["type"], "json_object",
+            "json-mode body must set response_format.type = json_object; body = {body}"
+        );
+        // The passed max_tokens must be forwarded verbatim.
+        assert_eq!(
+            body["max_tokens"], 512,
+            "json-mode body must forward max_tokens; body = {body}"
+        );
+        // Model comes from config (the stub client's configured model).
+        assert_eq!(
+            body["model"], "test-model",
+            "json-mode body must use the configured model; body = {body}"
+        );
+        // Messages must carry the system + user content and mention json somewhere.
+        let messages = body["messages"]
+            .as_array()
+            .expect("json-mode body must include a messages array");
+        assert!(
+            !messages.is_empty(),
+            "json-mode body must include at least one message; body = {body}"
+        );
+        let any_mentions_json = messages.iter().any(|m| {
+            m["content"]
+                .as_str()
+                .map(|c| c.to_lowercase().contains("json"))
+                .unwrap_or(false)
+        });
+        assert!(
+            any_mentions_json,
+            "a message must contain the literal word \"json\" (DeepSeek json-mode requirement); body = {body}"
+        );
     }
 
     #[test]

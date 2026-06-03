@@ -94,8 +94,14 @@ sha2 = "0.10"
 # XunhuPay SDK (signing)
 md5 = "0.7"
 
+[features]
+# Opt-in live DeepSeek provider tests (real network calls). Gated so the default
+# `cargo test` cannot even compile the live-provider test block.
+live-provider = []
+
 [dev-dependencies]
 tower.workspace = true
 hyper = { version = "0.14", features = ["full"] }
 mime = "0.3.16"
 proptest = "1"
+wiremock = "0.6"
