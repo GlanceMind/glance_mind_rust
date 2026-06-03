@@ -1,3 +1,5 @@
+use super::task_spec::TaskKind;
+use super::task_template::generator::{SampleField, SampleSource};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -205,6 +207,23 @@ pub enum SseEvent {
     AudientryPhase { data: serde_json::Value },
     #[serde(rename = "audientry_report")]
     AudientryReport { data: serde_json::Value },
+    // Module D1: task-template (sample-template) lifecycle SSE events. Emitted
+    // while the assistant generates a draft task config and when it proposes the
+    // resolved sample template for the desktop to render/edit.
+    #[serde(rename = "task_template_generating")]
+    TaskTemplateGenerating {
+        draft_id: uuid::Uuid,
+        task_kind: TaskKind,
+    },
+    #[serde(rename = "task_template_proposed")]
+    TaskTemplateProposed {
+        draft_id: uuid::Uuid,
+        task_kind: TaskKind,
+        sample_source: SampleSource,
+        blocking: bool,
+        missing: Vec<String>,
+        fields: Vec<SampleField>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,6 +236,31 @@ pub struct PlanStepSse {
 }
 
 impl SseEvent {
+    /// Build a [`SseEvent::TaskTemplateProposed`], running every field value
+    /// through [`redact_secret_values`] first (Module D1).
+    ///
+    /// This is THE redacting construction path: any code that emits a proposed
+    /// task template MUST build the event via this constructor (never the bare
+    /// struct literal) so no secret can reach the wire. Because the redaction
+    /// function is a RED stub today, secrets currently pass through unchanged.
+    pub fn task_template_proposed(
+        draft_id: uuid::Uuid,
+        task_kind: TaskKind,
+        sample_source: SampleSource,
+        blocking: bool,
+        missing: Vec<String>,
+        fields: Vec<SampleField>,
+    ) -> Self {
+        Self::TaskTemplateProposed {
+            draft_id,
+            task_kind,
+            sample_source,
+            blocking,
+            missing,
+            fields: redact_secret_values(fields),
+        }
+    }
+
     pub fn to_sse_string(&self) -> String {
         let (event_name, data) = match self {
             Self::MessageStart { message_id } => (
@@ -286,6 +330,58 @@ impl SseEvent {
             Self::Error { message } => ("error", serde_json::json!({ "message": message })),
             Self::AudientryPhase { data } => ("audientry_phase", data.clone()),
             Self::AudientryReport { data } => ("audientry_report", data.clone()),
+            // === Module D1 SKELETON STUBS — DELIBERATELY WRONG ===
+            // These arms compile so the property/fixture tests FAIL ON ASSERTIONS,
+            // not on compile errors. The implementer replaces them with the correct
+            // emit (proper event name, full `fields`, secret redaction run through
+            // `redact_secret_values`). DO NOT rely on this output.
+            Self::TaskTemplateGenerating {
+                draft_id,
+                task_kind,
+            } => (
+                // WRONG event name (should be "task_template_generating").
+                "task_template_generating_STUB",
+                serde_json::json!({ "draft_id": draft_id, "task_kind": task_kind }),
+            ),
+            Self::TaskTemplateProposed {
+                draft_id,
+                task_kind,
+                sample_source,
+                blocking,
+                missing,
+                fields,
+            } => (
+                "task_template_proposed",
+                // DELIBERATELY-WRONG payload (RED): the fields are emitted WITHOUT
+                // any secret redaction (so `prop_no_secret_value_survives_emit`
+                // sees secrets on the wire) AND each field serializes its datatype
+                // under the WRONG wire key `datatype` instead of `type` (so the
+                // fixture-match + roundtrip tests fail on assertions). The
+                // implementer replaces this with the correct emit: run `fields`
+                // through `redact_secret_values` and serialize each `SampleField`
+                // faithfully (datatype under `type` via its `#[serde(rename)]`).
+                serde_json::json!({
+                    "draft_id": draft_id,
+                    "task_kind": task_kind,
+                    "sample_source": sample_source,
+                    "blocking": blocking,
+                    "missing": missing,
+                    "fields": fields
+                        .iter()
+                        .map(|f| serde_json::json!({
+                            "key": f.key,
+                            "label_cn": f.label_cn,
+                            "group": f.group,
+                            "importance": f.importance,
+                            // WRONG wire key (should be "type").
+                            "datatype": f.field_type,
+                            "value": f.value,
+                            "editable": f.editable,
+                            "options": f.options,
+                        }))
+                        .collect::<Vec<_>>(),
+                }),
+            ),
         };
         format!(
             "event: {}\ndata: {}\n\n",
@@ -785,7 +881,42 @@ pub const SENSITIVE_FIELDS: &[&str] = &[
     "api_key",
     "proxy_url",
     "jwt_secret",
+    // Module D1: also cover generic secret-bearing key names so sample-template
+    // field values keyed under any of these are redacted before hitting the wire.
+    // Matching is case-insensitive (see `is_sensitive_field_name`).
+    "token",
+    "secret",
+    "authorization",
+    "password",
 ];
+
+/// Case-insensitive membership test against [`SENSITIVE_FIELDS`].
+///
+/// Module D1 entry point: callers (e.g. the `TaskTemplateProposed` construction
+/// path) use this to decide whether a field value must be masked purely from its
+/// key name, in addition to the content-based scan in [`redact_secret_values`].
+pub fn is_sensitive_field_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    SENSITIVE_FIELDS
+        .iter()
+        .any(|f| f.eq_ignore_ascii_case(&lower))
+}
+
+/// Redaction entry point for emitted sample-template field values (Module D1).
+///
+/// Masks any string `value` whose content matches a known secret shape
+/// (`sk-…`, `Bearer …`, `api_key: …`) AND any value carried under a field whose
+/// `key` is one of [`SENSITIVE_FIELDS`] (case-insensitive). The
+/// `TaskTemplateProposed` construction path MUST run its fields through this so
+/// no secret survives to the SSE wire.
+///
+/// SKELETON STUB (Module D1 RED): returns its input UNCHANGED so the
+/// `prop_no_secret_value_survives_emit` test fails on its assertion. The
+/// implementer replaces this body with the real key-based + content-based
+/// redaction. DO NOT treat this as actually redacting.
+pub fn redact_secret_values(fields: Vec<SampleField>) -> Vec<SampleField> {
+    fields
+}
 
 pub fn redact_sensitive_fields(mut value: Value) -> Value {
     if let Some(obj) = value.as_object_mut() {

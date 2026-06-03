@@ -202,6 +202,8 @@ fn event_name(event: &SseEvent) -> &'static str {
         SseEvent::Error { .. } => "error",
         SseEvent::AudientryPhase { .. } => "audientry_phase",
         SseEvent::AudientryReport { .. } => "audientry_report",
+        SseEvent::TaskTemplateGenerating { .. } => "task_template_generating",
+        SseEvent::TaskTemplateProposed { .. } => "task_template_proposed",
     }
 }
 
