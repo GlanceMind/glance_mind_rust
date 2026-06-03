@@ -20,8 +20,11 @@
 
 use serde_json::Value;
 
-use super::super::llm_client::LlmClient;
+use super::super::llm_client::{JsonChatError, LlmClient};
 use super::generator::{LlmFailure, SampleLlm};
+
+/// HTTP 429 (Too Many Requests) — mapped to [`LlmFailure::RateLimit`].
+const HTTP_TOO_MANY_REQUESTS: u16 = 429;
 
 /// A [`SampleLlm`] implementation that calls the real DeepSeek [`LlmClient`] in
 /// JSON mode.
@@ -72,17 +75,57 @@ impl LlmClientSampleLlm {
 
 #[async_trait::async_trait]
 impl SampleLlm for LlmClientSampleLlm {
-    /// NOTE (B2 skeleton): this stub returns a fixed WRONG value and performs NO
-    /// network I/O / outcome mapping, so the boundary tests fail by assertion
-    /// until the implementer wires it to [`LlmClient::chat_completion_json`] and
-    /// applies the documented HTTP/content → [`LlmFailure`] mapping.
+    /// Run one DeepSeek JSON-mode completion and map the HTTP/content outcome
+    /// onto a [`LlmFailure`] per the module contract:
+    ///
+    /// - non-success status: 429 ⇒ [`LlmFailure::RateLimit`], everything else ⇒
+    ///   [`LlmFailure::Upstream`] (status code only — never the provider body);
+    /// - timeout ⇒ [`LlmFailure::Timeout`]; other transport failure ⇒
+    ///   [`LlmFailure::Other`];
+    /// - HTTP 200 with `finish_reason == "length"` ⇒ [`LlmFailure::Malformed`]
+    ///   (truncated, never `Ok`);
+    /// - HTTP 200 with empty/whitespace content ⇒ [`LlmFailure::Empty`];
+    /// - HTTP 200 with content that parses to a JSON object ⇒ `Ok(Value)`;
+    /// - HTTP 200 with content that is not valid JSON ⇒ [`LlmFailure::Malformed`].
     async fn complete_json(
         &self,
         system: &str,
         user: &str,
         max_tokens: u32,
     ) -> Result<Value, LlmFailure> {
-        let _ = (system, user, max_tokens, &self.client);
-        Ok(serde_json::json!({ "__stub_not_implemented": true }))
+        let response = match self
+            .client
+            .chat_completion_json(system, user, max_tokens)
+            .await
+        {
+            Ok(response) => response,
+            Err(JsonChatError::Status(HTTP_TOO_MANY_REQUESTS)) => {
+                return Err(LlmFailure::RateLimit)
+            }
+            Err(JsonChatError::Status(status)) => return Err(LlmFailure::Upstream(status)),
+            Err(JsonChatError::Timeout) => return Err(LlmFailure::Timeout),
+            Err(JsonChatError::Transport(message)) => return Err(LlmFailure::Other(message)),
+        };
+
+        // A `finish_reason` of "length" signals the model was cut off mid-output;
+        // treat it as truncation (Malformed) even if the partial body parses.
+        if response.finish_reason.as_deref() == Some("length") {
+            return Err(LlmFailure::Malformed(
+                "completion truncated (finish_reason = length)".to_string(),
+            ));
+        }
+
+        let content = response.content.trim();
+        if content.is_empty() {
+            return Err(LlmFailure::Empty);
+        }
+
+        match serde_json::from_str::<Value>(content) {
+            Ok(value) if value.is_object() => Ok(value),
+            // Parsed, but not a JSON object (e.g. a bare string/number/array):
+            // the contract requires a JSON object, so anything else is malformed.
+            Ok(_) => Err(LlmFailure::Malformed("expected a JSON object".to_string())),
+            Err(err) => Err(LlmFailure::Malformed(format!("invalid JSON: {err}"))),
+        }
     }
 }

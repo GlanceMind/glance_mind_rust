@@ -26,6 +26,33 @@ pub struct JsonModeResponse {
     pub finish_reason: Option<String>,
 }
 
+/// A structured failure from [`LlmClient::chat_completion_json`]. Carries only
+/// redaction-safe data: a non-success HTTP status code, a timeout marker, or a
+/// short transport-error string (already run through [`LlmClient::format_request_error`],
+/// which never echoes a provider body/secret). Callers map this onto their own
+/// domain error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JsonChatError {
+    /// The provider returned a non-success HTTP status (the `u16` code only).
+    Status(u16),
+    /// The request exceeded the client's request timeout.
+    Timeout,
+    /// A transport / decode failure (redaction-safe message, no provider body).
+    Transport(String),
+}
+
+impl JsonChatError {
+    /// Classify a `reqwest::Error` into a redaction-safe [`JsonChatError`],
+    /// distinguishing the timeout path so the caller can surface it precisely.
+    fn from_reqwest(client: &LlmClient, error: &reqwest::Error) -> Self {
+        if error.is_timeout() {
+            JsonChatError::Timeout
+        } else {
+            JsonChatError::Transport(client.format_request_error("LLM request failed", error))
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
@@ -421,17 +448,15 @@ impl LlmClient {
     /// Build the request body for a JSON-mode (DeepSeek `json_object`) chat
     /// completion: the configured `model`, a `[system, user]` message pair,
     /// `response_format: {"type":"json_object"}`, and the requested `max_tokens`.
-    ///
-    /// NOTE (B2 skeleton): this stub intentionally OMITS `response_format` and
-    /// `max_tokens` so the RED unit test `chat_completion_json_body_sets_json_mode_and_max_tokens`
-    /// fails by assertion until the implementer fills in the real body.
-    fn build_json_chat_body(&self, system: &str, user: &str, _max_tokens: u32) -> Value {
+    fn build_json_chat_body(&self, system: &str, user: &str, max_tokens: u32) -> Value {
         serde_json::json!({
             "model": self.model,
             "messages": [
                 { "role": "system", "content": system },
                 { "role": "user", "content": user },
             ],
+            "response_format": { "type": "json_object" },
+            "max_tokens": max_tokens,
         })
     }
 
@@ -440,25 +465,61 @@ impl LlmClient {
     /// `finish_reason` of the first choice. The request sets
     /// `response_format: {"type":"json_object"}` + `max_tokens` + the configured
     /// `model`. The API key comes only from config/env and is sent as
-    /// `Authorization: Bearer`. Provider error bodies are redacted via
-    /// [`Self::format_provider_error`].
+    /// `Authorization: Bearer`.
     ///
-    /// NOTE (B2 skeleton): this stub returns a fixed WRONG value and performs NO
-    /// network I/O, so the boundary tests fail by assertion until implemented.
+    /// Errors are returned as a structured [`JsonChatError`] (status code /
+    /// timeout / transport) so callers can map the outcome onto a domain failure
+    /// without parsing strings; any surfaced provider-error string is redacted via
+    /// [`Self::format_provider_error`] and never carries the raw body/secret.
     pub async fn chat_completion_json(
         &self,
         system: &str,
         user: &str,
         max_tokens: u32,
-    ) -> Result<JsonModeResponse, String> {
-        // Build the body so the helper is exercised on the production path too,
-        // then discard it: this stub performs NO network I/O and returns a fixed
-        // WRONG value until the implementer wires the real request + mapping.
-        let _body = self.build_json_chat_body(system, user, max_tokens);
-        let _ = (&self.client, &self.api_key);
+    ) -> Result<JsonModeResponse, JsonChatError> {
+        let url = format!("{}/chat/completions", self.base_url);
+        let body = self.build_json_chat_body(system, user, max_tokens);
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| JsonChatError::from_reqwest(self, &e))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            // Drain the body for redaction-safe diagnostics, then surface ONLY
+            // the status code (the redacted string is not threaded into the
+            // domain error to avoid leaking provider bodies/secrets).
+            let body_text = response.text().await.unwrap_or_default();
+            let _redacted = Self::format_provider_error(status, &body_text);
+            return Err(JsonChatError::Status(status.as_u16()));
+        }
+
+        let result: Value = response
+            .json()
+            .await
+            .map_err(|e| JsonChatError::from_reqwest(self, &e))?;
+
+        let choice = result.get("choices").and_then(|c| c.get(0));
+        let content = choice
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let finish_reason = choice
+            .and_then(|c| c.get("finish_reason"))
+            .and_then(|f| f.as_str())
+            .map(String::from);
+
         Ok(JsonModeResponse {
-            content: "STUB_NOT_IMPLEMENTED".to_string(),
-            finish_reason: Some("stop".to_string()),
+            content,
+            finish_reason,
         })
     }
 
