@@ -6,6 +6,7 @@ pub mod ai_service;
 pub mod aipub_service;
 pub mod audientry_relay;
 pub mod audientry_worker_dispatcher;
+pub mod batch_task_service;
 pub mod behavior_validation;
 pub mod campaign_service;
 pub mod config_service;

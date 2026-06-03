@@ -3,6 +3,7 @@
 //! This module contains all Diesel ORM entity definitions that map to database tables.
 
 pub mod agent;
+pub mod ai_batch_create;
 pub mod ai_chat;
 pub mod ai_model;
 pub mod aipub;
@@ -34,6 +35,7 @@ pub mod wallet_transaction;
 
 // Re-export all entities for convenience
 pub use agent::*;
+pub use ai_batch_create::*;
 pub use ai_chat::*;
 pub use ai_model::*;
 pub use aipub::*;

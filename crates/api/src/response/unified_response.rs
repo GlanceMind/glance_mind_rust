@@ -184,6 +184,8 @@ impl From<i32> for ErrorCode {
             4401 => ErrorCode::PromoCodeExpired,
             4402 => ErrorCode::PromoCodeAlreadyUsed,
             4403 => ErrorCode::PromoCodeUsageLimitReached,
+            4503 => ErrorCode::MultiItemNotSupported,
+            4504 => ErrorCode::BatchInProgress,
             5000 => ErrorCode::AiServiceError,
             5001 => ErrorCode::EmailServiceError,
             5002 => ErrorCode::PaymentServiceError,

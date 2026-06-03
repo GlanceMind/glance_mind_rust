@@ -4,6 +4,7 @@ pub mod ai_chat_handler;
 pub mod ai_handler;
 pub mod aipub_handler;
 pub mod auth_handler;
+pub mod batch_task_handler;
 pub(crate) mod campaign_handler;
 pub(crate) mod config_handler;
 pub(crate) mod crawler_handler;

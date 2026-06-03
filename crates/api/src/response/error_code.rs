@@ -89,6 +89,11 @@ pub enum ErrorCode {
     /// Promo code usage limit reached
     PromoCodeUsageLimitReached = 4403,
 
+    /// Batch create: more than one item supplied (single-item MVP only)
+    MultiItemNotSupported = 4503,
+    /// Batch create: a batch with this idempotency key is still in progress
+    BatchInProgress = 4504,
+
     // ============ Third-party Service Errors (5xxx) ============
     /// AI service error
     AiServiceError = 5000,
@@ -167,6 +172,10 @@ impl ErrorCode {
             ErrorCode::PromoCodeAlreadyUsed => "Promo code already used",
             ErrorCode::PromoCodeUsageLimitReached => "Promo code usage limit reached",
 
+            // Business logic errors - Batch create
+            ErrorCode::MultiItemNotSupported => "Multiple items are not supported yet",
+            ErrorCode::BatchInProgress => "A batch with this idempotency key is still in progress",
+
             // Third-party service errors
             ErrorCode::AiServiceError => "AI service error",
             ErrorCode::EmailServiceError => "Email service error",
@@ -211,6 +220,8 @@ impl ErrorCode {
 
             // Business logic errors - Permission related
             ErrorCode::PermissionDenied => "Feature not enabled, please contact support",
+            ErrorCode::MultiItemNotSupported => "Batch create only supports a single item",
+            ErrorCode::BatchInProgress => "A batch with this idempotency key is still in progress",
 
             // Business logic errors - Wallet related
             ErrorCode::InsufficientBalance => "Insufficient balance, please top up",
@@ -271,6 +282,9 @@ impl ErrorCode {
             ErrorCode::PermissionDenied => StatusCode::FORBIDDEN,
             ErrorCode::InsufficientBalance => StatusCode::PAYMENT_REQUIRED,
 
+            // Batch create
+            ErrorCode::BatchInProgress => StatusCode::CONFLICT,
+
             // Business logic errors
             ErrorCode::UserAlreadyExists
             | ErrorCode::InvalidPassword
@@ -282,7 +296,8 @@ impl ErrorCode {
             | ErrorCode::SocialAccountAlreadyBound
             | ErrorCode::PromoCodeExpired
             | ErrorCode::PromoCodeAlreadyUsed
-            | ErrorCode::PromoCodeUsageLimitReached => StatusCode::BAD_REQUEST,
+            | ErrorCode::PromoCodeUsageLimitReached
+            | ErrorCode::MultiItemNotSupported => StatusCode::BAD_REQUEST,
 
             // Server errors and third-party service errors
             _ => StatusCode::INTERNAL_SERVER_ERROR,

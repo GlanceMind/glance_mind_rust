@@ -1,4 +1,4 @@
-pub(crate) mod api_error;
+pub mod api_error;
 pub(crate) mod business_error;
 pub(crate) mod db_error;
 pub(crate) mod infrastructure_error;

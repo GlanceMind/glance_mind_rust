@@ -503,6 +503,22 @@ diesel::table! {
 }
 
 diesel::table! {
+    /// Module C: write-ahead idempotency ledger for POST /ai-tasks/batch.
+    /// Hand-added (no DB available to run `make schema-sync`); matches
+    /// migration 2026-06-03-000001_ai_batch_creates/up.sql.
+    gm_ai_batch_creates (id) {
+        id -> Uuid,
+        user_id -> Int4,
+        idempotency_key -> Text,
+        task_kind -> Text,
+        status -> Text,
+        result -> Nullable<Jsonb>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     gm_ai_conversations (id) {
         id -> Int4,
         user_id -> Int4,
@@ -2131,6 +2147,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     gm_agent_twitter_comments,
     gm_agent_twitter_tweets,
     gm_agent_videos,
+    gm_ai_batch_creates,
     gm_ai_conversations,
     gm_ai_messages,
     gm_ai_plan_steps,
