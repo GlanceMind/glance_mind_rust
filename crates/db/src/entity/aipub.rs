@@ -81,6 +81,13 @@ pub struct NewAipubPlan {
     pub behavior: Option<JsonValue>,
     /// Phase 4 R3 Task 8 — plan-level PublishSchedule proto JSON.
     pub schedule: Option<JsonValue>,
+    /// Module D3 parity: the assistant task-template draft this plan was
+    /// confirmed from. `None` for plans created outside the template flow.
+    /// Mirrors `NewCampaign::source_draft_id`; the
+    /// `gm_aipub_plans.source_draft_id` column + the
+    /// `uq_aipub_plans_source_draft` partial-unique index already exist
+    /// (Module D2 migration).
+    pub source_draft_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Default, AsChangeset)]

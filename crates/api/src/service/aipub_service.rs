@@ -326,6 +326,12 @@ impl AipubService {
             image_ai_model_id: dto.image_ai_model_id,
             behavior: dto.behavior.clone(),
             schedule: dto.schedule.clone(),
+            // TODO(impl): thread `dto.source_draft_id` here (mirror
+            // CampaignService::create_campaign). Deliberate WRONG stub for the
+            // RED phase: hard-coding None means the draft link is dropped, so
+            // `aipub_create_plan_threads_source_draft_id` fails until the
+            // implementer wires this to `dto.source_draft_id`.
+            source_draft_id: None,
         };
 
         let plan = self
