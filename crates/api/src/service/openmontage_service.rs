@@ -264,26 +264,26 @@ impl OpenMontageService {
             .ok_or_else(|| "Job disappeared after approval".to_string())
     }
 
-    /// Preflight check (read from client with fallback to warming_up)
+    /// Preflight check (read from client). When the redis snapshot is absent
+    /// (worker still warming up), fall back to an all-unavailable preflight in
+    /// the frontend shape rather than erroring.
     pub fn preflight(&self) -> Result<PreflightDto, String> {
         let preflight = self.client.read_preflight()?;
-        Ok(preflight.unwrap_or_else(|| PreflightDto {
-            passed: false,
-            status: "warming_up".to_string(),
-            blocking: vec![],
-            warnings: vec![],
-            estimated_cost_cents: None,
-        }))
+        Ok(preflight.unwrap_or_default())
     }
 
-    /// Available pipelines (read from client with fallback to animated-explainer)
+    /// Available pipelines (read from client). When the redis snapshot is absent,
+    /// fall back to a single sensible default in the frontend shape.
     pub fn pipelines(&self) -> Result<PipelinesDto, String> {
         let pipelines = self.client.read_pipelines()?;
         Ok(pipelines.unwrap_or_else(|| PipelinesDto {
             pipelines: vec![PipelineInfoDto {
+                id: "animated-explainer".to_string(),
                 name: "animated-explainer".to_string(),
                 description: "Topic to fully generated explainer".to_string(),
+                best_for: "animation".to_string(),
                 stability: "production".to_string(),
+                required_tools: vec![],
             }],
         }))
     }
