@@ -267,30 +267,71 @@ pub struct JobEventsDto {
     pub next_sequence: u64,
 }
 
-/// Preflight DTO
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PreflightDto {
-    pub passed: bool,
-    pub status: String,
+/// Composition runtime availability (frontend contract).
+///
+/// The worker publishes runtimes as an ARRAY `[{name, available}]`; the rust
+/// facade transforms that into this flat object the desktop create page reads
+/// directly (`preflight.composition_runtimes.{ffmpeg,remotion,hyperframes}`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct CompositionRuntimes {
     #[serde(default)]
-    pub blocking: Vec<String>,
+    pub ffmpeg: bool,
     #[serde(default)]
-    pub warnings: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub estimated_cost_cents: Option<i64>,
+    pub remotion: bool,
+    #[serde(default)]
+    pub hyperframes: bool,
 }
 
-/// Pipelines DTO
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A 1-minute env-var setup offer surfaced to the user (frontend contract).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct SetupOffer {
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub instructions: String,
+}
+
+/// Preflight DTO (frontend contract — `packages/shared/src/api/openmontageTypes.ts`).
+///
+/// Every field is `#[serde(default)]` so neither deserialization (of a drifted
+/// worker payload) nor serialization (of a partially-built fallback) can ever
+/// fail and 500 the endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PreflightDto {
+    #[serde(default)]
+    pub composition_runtimes: CompositionRuntimes,
+    #[serde(default)]
+    pub available_pipelines: Vec<String>,
+    #[serde(default)]
+    pub tool_availability: HashMap<String, bool>,
+    #[serde(default)]
+    pub setup_offers: Vec<SetupOffer>,
+}
+
+/// Pipelines DTO (frontend contract).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PipelinesDto {
+    #[serde(default)]
     pub pipelines: Vec<PipelineInfoDto>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A single pipeline option (frontend contract). The desktop create page keys
+/// the dropdown by `id` and labels it by `name`; the other fields are
+/// best-effort but must exist type-wise.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PipelineInfoDto {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
     pub name: String,
+    #[serde(default)]
     pub description: String,
+    #[serde(default)]
+    pub best_for: String,
+    #[serde(default)]
     pub stability: String,
+    #[serde(default)]
+    pub required_tools: Vec<String>,
 }
 
 /// Approval Decision DTO

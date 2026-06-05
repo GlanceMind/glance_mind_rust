@@ -3,13 +3,188 @@
 //! Queue client for dispatching work to the OpenMontage worker.
 //! Mirrors the pattern from novel_worker_dispatcher.rs.
 
-use crate::dto::openmontage_dto::{PipelinesDto, PreflightDto};
+use crate::dto::openmontage_dto::{
+    CompositionRuntimes, PipelineInfoDto, PipelinesDto, PreflightDto, SetupOffer,
+};
 use redis::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 pub const OPENMONTAGE_QUEUE_KEY: &str = "openmontage_worker_tasks";
+
+// ============================================================================
+// Worker snapshot -> frontend DTO transforms
+//
+// The OpenMontage Python worker publishes its preflight/pipelines snapshots to
+// redis in a protobuf-JSON shape (see `lib/protocol_export.py` +
+// `tools/tool_registry.py::provider_menu_summary`) that does NOT match the
+// frontend contract (`packages/shared/src/api/openmontageTypes.ts`). The rust
+// facade used to `serde_json::from_str::<DTO>` the worker JSON directly, which
+// failed to parse and returned HTTP 500.
+//
+// These transforms parse the worker JSON as an untyped `serde_json::Value` and
+// project it into the frontend DTOs. EVERY extraction is tolerant: a missing or
+// wrong-typed field degrades to a sensible default, so the endpoints never 500
+// again even if the worker shape drifts.
+// ============================================================================
+
+/// Read a boolean by JSON path, defaulting to `false` on any miss/mismatch.
+fn json_bool(v: &JsonValue, default: bool) -> bool {
+    v.as_bool().unwrap_or(default)
+}
+
+/// Read a string field, defaulting to `""` on any miss/mismatch.
+fn json_str(v: &JsonValue) -> String {
+    v.as_str().unwrap_or_default().to_string()
+}
+
+/// Read a `Vec<String>` from a JSON array, skipping non-string items.
+fn json_str_vec(v: &JsonValue) -> Vec<String> {
+    v.as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Transform the worker `openmontage:preflight` snapshot into the frontend
+/// `PreflightDto`. Tolerant of missing/drifted fields.
+pub fn transform_preflight(worker: &JsonValue) -> PreflightDto {
+    // composition_runtimes: worker ARRAY [{name, available}] -> object booleans.
+    let mut composition_runtimes = CompositionRuntimes::default();
+    if let Some(arr) = worker
+        .get("composition_runtimes")
+        .and_then(|v| v.as_array())
+    {
+        for entry in arr {
+            let name = entry.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            let available = json_bool(entry.get("available").unwrap_or(&JsonValue::Null), false);
+            match name {
+                "ffmpeg" => composition_runtimes.ffmpeg = available,
+                "remotion" => composition_runtimes.remotion = available,
+                "hyperframes" => composition_runtimes.hyperframes = available,
+                _ => {}
+            }
+        }
+    }
+
+    // available_pipelines: names from the worker preflight `pipelines` field
+    // (each item is a pipeline manifest with a `name`), else [].
+    let available_pipelines = worker
+        .get("pipelines")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|p| {
+                    p.get("name")
+                        .and_then(|n| n.as_str())
+                        .map(|s| s.to_string())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // tool_availability: best-effort map of tool name -> (status == "available")
+    // from the worker `tools` array. Desktop doesn't read this, so an empty map
+    // is acceptable; we populate it when the data is trivially mappable.
+    let mut tool_availability: HashMap<String, bool> = HashMap::new();
+    if let Some(tools) = worker.get("tools").and_then(|v| v.as_array()) {
+        for tool in tools {
+            if let Some(name) = tool.get("name").and_then(|n| n.as_str()) {
+                if name.is_empty() {
+                    continue;
+                }
+                let available = tool
+                    .get("status")
+                    .and_then(|s| s.as_str())
+                    .map(|s| s == "available")
+                    .unwrap_or(false);
+                tool_availability.insert(name.to_string(), available);
+            }
+        }
+    }
+
+    // setup_offers: worker {provider, install_instructions, tool, capability}
+    // -> frontend {provider, instructions}. Fall back to tool/capability for the
+    // provider label when `provider` is absent.
+    let setup_offers = worker
+        .get("setup_offers")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|offer| {
+                    let provider = offer
+                        .get("provider")
+                        .and_then(|p| p.as_str())
+                        .filter(|s| !s.is_empty())
+                        .or_else(|| offer.get("tool").and_then(|t| t.as_str()))
+                        .or_else(|| offer.get("capability").and_then(|c| c.as_str()))
+                        .unwrap_or_default()
+                        .to_string();
+                    let instructions = offer
+                        .get("install_instructions")
+                        .and_then(|i| i.as_str())
+                        .or_else(|| offer.get("instructions").and_then(|i| i.as_str()))
+                        .unwrap_or_default()
+                        .to_string();
+                    SetupOffer {
+                        provider,
+                        instructions,
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    PreflightDto {
+        composition_runtimes,
+        available_pipelines,
+        tool_availability,
+        setup_offers,
+    }
+}
+
+/// Transform the worker `openmontage:pipelines` snapshot (a BARE ARRAY of
+/// pipeline manifests) into the frontend `PipelinesDto`. Tolerant of a
+/// non-array payload (degrades to an empty list).
+pub fn transform_pipelines(worker: &JsonValue) -> PipelinesDto {
+    let pipelines = worker
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| {
+                    // Skip entries with no usable name (id == name is the
+                    // frontend key; a nameless option is useless).
+                    let name = item.get("name").and_then(|n| n.as_str())?;
+                    if name.is_empty() {
+                        return None;
+                    }
+                    Some(PipelineInfoDto {
+                        id: name.to_string(),
+                        name: name.to_string(),
+                        description: json_str(item.get("description").unwrap_or(&JsonValue::Null)),
+                        // best_for: the worker manifest has no `best_for`; use
+                        // `category` as the closest human-facing grouping.
+                        best_for: json_str(item.get("category").unwrap_or(&JsonValue::Null)),
+                        stability: json_str(item.get("stability").unwrap_or(&JsonValue::Null)),
+                        // required_tools lives per-stage in the manifest, not at
+                        // the pipeline level; surface it only if a top-level
+                        // field happens to exist, else [].
+                        required_tools: json_str_vec(
+                            item.get("required_tools").unwrap_or(&JsonValue::Null),
+                        ),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    PipelinesDto { pipelines }
+}
 
 /// Worker envelope JSON shape (matches the Python worker's envelope.py)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,9 +307,13 @@ impl OpenMontageClient for RedisOpenMontageClient {
     fn read_preflight(&self) -> Result<Option<PreflightDto>, String> {
         match self.get_string("openmontage:preflight")? {
             Some(json_str) => {
-                let dto = serde_json::from_str(&json_str)
-                    .map_err(|e| format!("parse preflight JSON: {}", e))?;
-                Ok(Some(dto))
+                // Parse as untyped Value, then TRANSFORM into the frontend DTO.
+                // The worker's snapshot shape does NOT match PreflightDto, so a
+                // direct `from_str::<PreflightDto>` would fail and 500. A bad
+                // payload degrades to an all-default preflight rather than
+                // erroring, so the endpoint never 500s on worker drift.
+                let value: JsonValue = serde_json::from_str(&json_str).unwrap_or(JsonValue::Null);
+                Ok(Some(transform_preflight(&value)))
             }
             None => Ok(None),
         }
@@ -143,9 +322,11 @@ impl OpenMontageClient for RedisOpenMontageClient {
     fn read_pipelines(&self) -> Result<Option<PipelinesDto>, String> {
         match self.get_string("openmontage:pipelines")? {
             Some(json_str) => {
-                let dto = serde_json::from_str(&json_str)
-                    .map_err(|e| format!("parse pipelines JSON: {}", e))?;
-                Ok(Some(dto))
+                // The worker publishes a BARE ARRAY here; parse as untyped Value
+                // and transform. A non-array / unparseable payload degrades to an
+                // empty pipeline list rather than erroring.
+                let value: JsonValue = serde_json::from_str(&json_str).unwrap_or(JsonValue::Null);
+                Ok(Some(transform_pipelines(&value)))
             }
             None => Ok(None),
         }
