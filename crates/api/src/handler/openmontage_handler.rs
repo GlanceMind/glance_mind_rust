@@ -18,9 +18,26 @@ use tracing::{error, info};
 use crate::dto::openmontage_dto::{ApprovalDto, AssetDto, CreateJobDto};
 use crate::error::api_error::ApiError;
 use crate::error::business_error::BusinessError;
+use crate::repository::openmontage_repository::Job;
 use crate::response::unified_response::ApiResponse;
 use crate::service::openmontage_service::OpenMontageService;
 use crate::service::openmontage_stream_hub::OpenMontageSseEvent;
+
+// ============================================================================
+// M0-T6: Per-Job Ownership Authorization Helper
+// ============================================================================
+
+/// Verify that the caller owns the job (job.user_id == caller.id).
+/// Returns Forbidden error if ownership check fails.
+fn assert_job_owner(job: &Job, caller: &User) -> Result<(), ApiError> {
+    if job.user_id != caller.id {
+        return Err(ApiError::Forbidden(format!(
+            "Access denied: job {} belongs to a different user",
+            job.job_id
+        )));
+    }
+    Ok(())
+}
 
 // ============================================================================
 // E1: GET /openmontage/preflight
@@ -88,10 +105,18 @@ pub async fn create_job(
 // ============================================================================
 
 pub async fn get_job(
-    Extension(_user): Extension<User>,
+    Extension(user): Extension<User>,
     Extension(service): Extension<OpenMontageService>,
     Path(job_id): Path<String>,
 ) -> Result<Json<ApiResponse<crate::dto::openmontage_dto::JobSnapshotDto>>, ApiError> {
+    // M0-T6: Fetch job and verify ownership before returning data
+    let job = service
+        .get_job_raw(&job_id)
+        .map_err(|e| ApiError::InternalServerError(format!("get job failed: {}", e)))?
+        .ok_or_else(|| ApiError::NotFound("Job not found".to_string()))?;
+
+    assert_job_owner(&job, &user)?;
+
     let snapshot = service
         .get_job(&job_id)
         .map_err(|e| ApiError::InternalServerError(format!("get job failed: {}", e)))?
@@ -117,11 +142,19 @@ fn default_limit() -> i64 {
 }
 
 pub async fn get_events(
-    Extension(_user): Extension<User>,
+    Extension(user): Extension<User>,
     Extension(service): Extension<OpenMontageService>,
     Path(job_id): Path<String>,
     Query(query): Query<EventsQuery>,
 ) -> Result<Json<ApiResponse<crate::dto::openmontage_dto::JobEventsDto>>, ApiError> {
+    // M0-T6: Verify ownership before listing events
+    let job = service
+        .get_job_raw(&job_id)
+        .map_err(|e| ApiError::InternalServerError(format!("get job failed: {}", e)))?
+        .ok_or_else(|| ApiError::NotFound("Job not found".to_string()))?;
+
+    assert_job_owner(&job, &user)?;
+
     let dto = service
         .list_events(&job_id, query.after, query.limit)
         .map_err(|e| ApiError::InternalServerError(format!("list events failed: {}", e)))?;
@@ -140,11 +173,19 @@ pub struct StreamQuery {
 }
 
 pub async fn stream_job(
-    Extension(_user): Extension<User>,
+    Extension(user): Extension<User>,
     Extension(service): Extension<OpenMontageService>,
     Path(job_id): Path<String>,
     Query(query): Query<StreamQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    // M0-T6: Verify ownership before streaming
+    let job = service
+        .get_job_raw(&job_id)
+        .map_err(|e| ApiError::InternalServerError(format!("get job failed: {}", e)))?
+        .ok_or_else(|| ApiError::NotFound("Job not found".to_string()))?;
+
+    assert_job_owner(&job, &user)?;
+
     let snapshot = service
         .get_job(&job_id)
         .map_err(|e| ApiError::InternalServerError(format!("get job failed: {}", e)))?;
@@ -232,11 +273,19 @@ pub async fn stream_job(
 // ============================================================================
 
 pub async fn submit_approval(
-    Extension(_user): Extension<User>,
+    Extension(user): Extension<User>,
     Extension(service): Extension<OpenMontageService>,
     Path(job_id): Path<String>,
     Json(approval): Json<ApprovalDto>,
 ) -> Result<Json<ApiResponse<crate::dto::openmontage_dto::JobSnapshotDto>>, ApiError> {
+    // M0-T6: Verify ownership before submitting approval
+    let job = service
+        .get_job_raw(&job_id)
+        .map_err(|e| ApiError::InternalServerError(format!("get job failed: {}", e)))?
+        .ok_or_else(|| ApiError::NotFound("Job not found".to_string()))?;
+
+    assert_job_owner(&job, &user)?;
+
     let snapshot = service
         .submit_approval(&job_id, approval)
         .map_err(|e| ApiError::BadRequest(format!("approval failed: {}", e)))?;
@@ -249,10 +298,18 @@ pub async fn submit_approval(
 // ============================================================================
 
 pub async fn cancel_job(
-    Extension(_user): Extension<User>,
+    Extension(user): Extension<User>,
     Extension(service): Extension<OpenMontageService>,
     Path(job_id): Path<String>,
 ) -> Result<Json<ApiResponse<crate::dto::openmontage_dto::CancelResultDto>>, ApiError> {
+    // M0-T6: Verify ownership before cancelling
+    let job = service
+        .get_job_raw(&job_id)
+        .map_err(|e| ApiError::InternalServerError(format!("get job failed: {}", e)))?
+        .ok_or_else(|| ApiError::NotFound("Job not found".to_string()))?;
+
+    assert_job_owner(&job, &user)?;
+
     let result = service
         .cancel_job(&job_id)
         .map_err(|e| ApiError::InternalServerError(format!("cancel failed: {}", e)))?;

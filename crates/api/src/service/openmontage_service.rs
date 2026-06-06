@@ -278,6 +278,15 @@ impl OpenMontageService {
         })
     }
 
+    /// M0-T6: Get raw job record for authorization checks.
+    /// Use this before calling other methods to verify ownership.
+    pub fn get_job_raw(
+        &self,
+        job_id: &str,
+    ) -> Result<Option<crate::repository::openmontage_repository::Job>, String> {
+        self.store.get_job(job_id)
+    }
+
     pub fn get_job(&self, job_id: &str) -> Result<Option<JobSnapshotDto>, String> {
         let job = self.store.get_job(job_id)?;
         Ok(job.map(|j| JobSnapshotDto {
