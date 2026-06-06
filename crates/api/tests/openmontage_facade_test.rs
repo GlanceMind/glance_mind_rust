@@ -324,6 +324,7 @@ async fn cancel_running_sets_flag() {
         tenant_id: "default-tenant".to_string(),
         request_id: "req-123".to_string(),
         idempotency_key: "idem-123".to_string(),
+        request_hash: "test-hash-123".to_string(),
         pipeline: "animated-explainer".to_string(),
         input_mode: Some("text".to_string()),
         status: "running".to_string(),

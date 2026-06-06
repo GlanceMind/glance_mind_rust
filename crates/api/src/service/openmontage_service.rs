@@ -101,12 +101,83 @@ impl OpenMontageService {
             }
         }
         // If no pipelines snapshot, proceed (fallback to warming_up behavior)
+        if pipelines_dto.is_none() {
+            tracing::warn!(
+                pipeline = %pipeline,
+                "OpenMontage pipeline snapshot unavailable; proceeding (warming-up fallback)"
+            );
+        }
 
-        // Generate IDs
+        // M0-T5: Compute idempotency key and request hash
+        use sha2::{Digest, Sha256};
+
+        // Canonical request body for hashing (exclude idempotency_key itself)
+        let canonical_body = serde_json::json!({
+            "title": dto.title,
+            "prompt": dto.prompt,
+            "target_platform": dto.target_platform,
+            "language": dto.language,
+            "duration_seconds": dto.duration_seconds,
+            "aspect_ratio": dto.aspect_ratio,
+            "input_mode": dto.input_mode,
+            "pipeline": dto.pipeline,
+            "style_playbook": dto.style_playbook,
+            "render_runtime": dto.render_runtime,
+            "quality_tier": dto.quality_tier,
+            "approval_policy": dto.approval_policy,
+            "budget_limit_usd": dto.budget_limit_usd,
+            "provider_slots": dto.provider_slots,
+            "asset_ids": dto.asset_ids,
+            "tool_invocations": dto.tool_invocations,
+            "metadata": dto.metadata,
+        });
+
+        let canonical_str = serde_json::to_string(&canonical_body)
+            .map_err(|e| format!("Failed to serialize canonical body: {}", e))?;
+
+        // Compute request hash (SHA-256)
+        let mut hasher = Sha256::new();
+        hasher.update(canonical_str.as_bytes());
+        let request_hash = format!("{:x}", hasher.finalize());
+
+        // Effective idempotency key: client-supplied or derived from body hash
+        let effective_idempotency_key = dto
+            .idempotency_key
+            .clone()
+            .unwrap_or_else(|| request_hash.clone());
+
+        // Check for existing job with same idempotency key
+        if let Some(existing_job) = self.store.find_by_idempotency(&effective_idempotency_key)? {
+            // Found existing job — check request hash
+            if existing_job.request_hash == request_hash {
+                // Same key + same body → return existing job (no new enqueue)
+                return Ok(JobSnapshotDto {
+                    job_id: existing_job.job_id,
+                    project_id: existing_job.project_id,
+                    status: existing_job.status,
+                    pipeline: existing_job.pipeline,
+                    current_stage: existing_job.current_stage,
+                    progress_pct: existing_job.progress_pct,
+                    error_json: existing_job.error_json,
+                    last_event_sequence: existing_job.last_event_sequence,
+                    next_event_sequence: existing_job.next_event_sequence,
+                    sync_required: existing_job.sync_required,
+                    snapshot_json: existing_job.snapshot_json,
+                    created_at: existing_job.created_at.to_rfc3339(),
+                    updated_at: existing_job.updated_at.map(|t| t.to_rfc3339()),
+                });
+            } else {
+                // Same key + different body → conflict
+                return Err(
+                    "Idempotency conflict: same key with different request body".to_string()
+                );
+            }
+        }
+
+        // Generate IDs for new job
         let job_id = Uuid::new_v4().to_string();
         let project_id = format!("omx-{}", job_id);
         let request_id = Uuid::new_v4().to_string();
-        let idempotency_key = Uuid::new_v4().to_string();
 
         // Server context
         let server_ctx = ServerContext {
@@ -191,7 +262,8 @@ impl OpenMontageService {
             user_id,
             tenant_id: tenant_id.to_string(),
             request_id: request_id.clone(),
-            idempotency_key: idempotency_key.clone(),
+            idempotency_key: effective_idempotency_key.clone(),
+            request_hash: request_hash.clone(),
             pipeline: dto
                 .pipeline
                 .clone()

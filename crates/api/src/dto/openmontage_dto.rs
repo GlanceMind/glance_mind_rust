@@ -135,6 +135,8 @@ pub struct CreateJobDto {
     pub asset_ids: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_invocations: Option<JsonValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
     #[serde(default)]
     pub metadata: JsonValue,
 }

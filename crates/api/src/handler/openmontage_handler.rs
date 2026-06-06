@@ -70,6 +70,11 @@ pub async fn create_job(
                 // Pipeline in allowlist but unavailable (degraded, beta, etc.)
                 // HTTP 409 Conflict - resource exists but in wrong state
                 ApiError::Conflict(e)
+            } else if e.contains("Idempotency conflict")
+                || e.contains("idempotency") && e.contains("conflict")
+            {
+                // M0-T5: Idempotency conflict (same key, different body)
+                ApiError::Conflict(e)
             } else {
                 ApiError::BadRequest(format!("create job failed: {}", e))
             }
