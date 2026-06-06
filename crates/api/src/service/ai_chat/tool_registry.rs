@@ -1850,6 +1850,14 @@ impl ToolRegistry {
                 serde_json::to_value(&group).unwrap_or_default()
             }
             "create_campaign" => {
+                // Module D3: the completeness gate runs on the RAW `params` at the
+                // mutation-dispatch site in `AiChatService::send_message`
+                // (`try_intercept_create`), BEFORE this default-injection. If the
+                // gate fires there, it streams `task_template_proposed` and skips
+                // this arm entirely; reaching here means the gate decided
+                // `Proceed` (or this is a non-chat call site), so we create. The
+                // gate is intentionally NOT inside the static `execute` fn (which
+                // lacks `conv_id`/`tx`); see `try_intercept_create`.
                 let mut p = params.clone();
                 if let Some(obj) = p.as_object_mut() {
                     if !obj.contains_key("schedule_type") {
@@ -1882,6 +1890,11 @@ impl ToolRegistry {
                 serde_json::to_value(&campaign).unwrap_or_default()
             }
             "create_publish_plan" => {
+                // Module D3: the completeness gate runs on the RAW `params` at the
+                // mutation-dispatch site (`AiChatService::try_intercept_create`),
+                // BEFORE this name back-fill. Reaching here means the gate decided
+                // `Proceed` (or this is a non-chat call site); see the
+                // `create_campaign` arm above for the rationale.
                 let mut dto: crate::dto::aipub_dto::CreatePlanDto =
                     serde_json::from_value(params.clone())
                         .map_err(|e| ApiError::BadRequest(format!("Invalid plan params: {}", e)))?;

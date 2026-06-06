@@ -41,6 +41,13 @@ pub struct CreatePlanDto {
     /// Validated by `schedule_validation::validate` before being
     /// persisted. Merged into task.content.schedule at derivation.
     pub schedule: Option<JsonValue>,
+    /// Module D3 parity: when this create originates from confirming an
+    /// assistant task-template draft, the draft's id is threaded here so the
+    /// created plan can be linked back to its draft
+    /// (`gm_aipub_plans.source_draft_id`). Mirrors
+    /// `CampaignCreateDto::source_draft_id`.
+    #[serde(default)]
+    pub source_draft_id: Option<uuid::Uuid>,
 }
 
 /// Plan response DTO
@@ -471,4 +478,57 @@ pub struct PlanCostEstimateDto {
     pub pricing_snapshot: Option<JsonValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seedance_cost: Option<SeedanceCostBreakdown>,
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use uuid::Uuid;
+
+    /// Module D3 parity: `CreatePlanDto` must deserialize a `source_draft_id`
+    /// UUID string into `Some(<uuid>)`, mirroring `CampaignCreateDto`. This is
+    /// what `confirm_orchestrate` injects into the create-DTO value before
+    /// calling the aipub creator; without the field serde silently drops the
+    /// key and the draft link is lost.
+    #[test]
+    fn create_plan_dto_deserializes_source_draft_id() {
+        let draft_id = Uuid::new_v4();
+        let dto: CreatePlanDto = serde_json::from_value(json!({
+            "platform_id": 1,
+            "content_type": "post",
+            "plan_type": "direct_publish",
+            "social_account_id": 7,
+            "content": {"video_url": "https://example.com/v.mp4"},
+            "source_draft_id": draft_id.to_string(),
+        }))
+        .expect("CreatePlanDto must deserialize a payload carrying source_draft_id");
+
+        assert_eq!(
+            dto.source_draft_id,
+            Some(draft_id),
+            "source_draft_id must round-trip from the JSON string into Some(<uuid>)"
+        );
+    }
+
+    /// The field is `#[serde(default)]`, so a payload without `source_draft_id`
+    /// must still deserialize and leave the link as `None` (plans created
+    /// outside the assistant draft flow).
+    #[test]
+    fn create_plan_dto_source_draft_id_defaults_to_none_when_absent() {
+        let dto: CreatePlanDto = serde_json::from_value(json!({
+            "platform_id": 1,
+            "content_type": "post",
+        }))
+        .expect("CreatePlanDto must deserialize without source_draft_id");
+
+        assert_eq!(
+            dto.source_draft_id, None,
+            "absent source_draft_id must default to None"
+        );
+    }
 }

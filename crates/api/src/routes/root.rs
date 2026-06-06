@@ -408,6 +408,25 @@ pub fn routes(
                     )
                     .with_state(user_state.clone()),
             )
+            // AI Batch Create (Module C) — single-item MVP (requires auth)
+            .merge(
+                axum::Router::new()
+                    .route(
+                        "/ai-tasks/batch",
+                        axum::routing::post(
+                            crate::handler::batch_task_handler::create_batch,
+                        ),
+                    )
+                    .layer(
+                        ServiceBuilder::new()
+                            .layer(middleware::from_fn_with_state(
+                                user_state.clone(),
+                                auth_middleware::auth,
+                            ))
+                            .layer(axum::Extension(user_state.clone())),
+                    )
+                    .with_state(user_state.clone()),
+            )
             // AI Publish Internal Routes (for Scheduler - no auth for now)
             .merge(crate::routes::aipub::aipub_internal_routes().with_state(user_state.clone()))
             // AI Publish Public Routes (for Executor - no auth for now)

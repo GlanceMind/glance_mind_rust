@@ -1,3 +1,6 @@
+use super::task_spec::TaskKind;
+use super::task_template::generator::{SampleField, SampleSource};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -205,6 +208,23 @@ pub enum SseEvent {
     AudientryPhase { data: serde_json::Value },
     #[serde(rename = "audientry_report")]
     AudientryReport { data: serde_json::Value },
+    // Module D1: task-template (sample-template) lifecycle SSE events. Emitted
+    // while the assistant generates a draft task config and when it proposes the
+    // resolved sample template for the desktop to render/edit.
+    #[serde(rename = "task_template_generating")]
+    TaskTemplateGenerating {
+        draft_id: uuid::Uuid,
+        task_kind: TaskKind,
+    },
+    #[serde(rename = "task_template_proposed")]
+    TaskTemplateProposed {
+        draft_id: uuid::Uuid,
+        task_kind: TaskKind,
+        sample_source: SampleSource,
+        blocking: bool,
+        missing: Vec<String>,
+        fields: Vec<SampleField>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,6 +237,31 @@ pub struct PlanStepSse {
 }
 
 impl SseEvent {
+    /// Build a [`SseEvent::TaskTemplateProposed`], running every field value
+    /// through [`redact_secret_values`] first (Module D1).
+    ///
+    /// This is THE redacting construction path: any code that emits a proposed
+    /// task template MUST build the event via this constructor (never the bare
+    /// struct literal) so no secret can reach the wire. Because the redaction
+    /// function is a RED stub today, secrets currently pass through unchanged.
+    pub fn task_template_proposed(
+        draft_id: uuid::Uuid,
+        task_kind: TaskKind,
+        sample_source: SampleSource,
+        blocking: bool,
+        missing: Vec<String>,
+        fields: Vec<SampleField>,
+    ) -> Self {
+        Self::TaskTemplateProposed {
+            draft_id,
+            task_kind,
+            sample_source,
+            blocking,
+            missing,
+            fields: redact_secret_values(fields),
+        }
+    }
+
     pub fn to_sse_string(&self) -> String {
         let (event_name, data) = match self {
             Self::MessageStart { message_id } => (
@@ -286,6 +331,37 @@ impl SseEvent {
             Self::Error { message } => ("error", serde_json::json!({ "message": message })),
             Self::AudientryPhase { data } => ("audientry_phase", data.clone()),
             Self::AudientryReport { data } => ("audientry_report", data.clone()),
+            // Module D1: task-template (sample-template) lifecycle SSE events.
+            Self::TaskTemplateGenerating {
+                draft_id,
+                task_kind,
+            } => (
+                "task_template_generating",
+                serde_json::json!({ "draft_id": draft_id, "task_kind": task_kind }),
+            ),
+            Self::TaskTemplateProposed {
+                draft_id,
+                task_kind,
+                sample_source,
+                blocking,
+                missing,
+                fields,
+            } => (
+                "task_template_proposed",
+                // Serialize each `SampleField` faithfully via serde so the wire
+                // shape is `{key,label_cn,group,importance,type,value,editable,
+                // options}` (the datatype rides under `type` through SampleField's
+                // own `#[serde(rename = "type")]`). Fields have already been routed
+                // through `redact_secret_values` by the construction path.
+                serde_json::json!({
+                    "draft_id": draft_id,
+                    "task_kind": task_kind,
+                    "sample_source": sample_source,
+                    "blocking": blocking,
+                    "missing": missing,
+                    "fields": serde_json::to_value(fields).unwrap_or(Value::Null),
+                }),
+            ),
         };
         format!(
             "event: {}\ndata: {}\n\n",
@@ -777,6 +853,9 @@ B) 创建新分组... (请输入分组名和平台)
 
 批量操作的处理：
 当用户请求批量操作（如"创建5个账号"），先追问每个操作所需的不同参数（如不同的用户名），然后使用 create_plan_proposal 生成包含多个步骤的计划。
+
+创建 AI 社媒任务（campaign）或 AI 发布任务（publish_plan）时的处理：
+当用户的创建意图信息明显不完整（缺少 3 个以上的关键配置）时，不要逐项追问，系统会自动生成一份完整、可编辑的“样例模板”供用户在界面上直接编辑确认，从而一次性创建任务。直接调用 create_campaign / create_publish_plan 即可，后端的样例模板拦截会接管缺参场景。
 "#;
 
 pub const SENSITIVE_FIELDS: &[&str] = &[
@@ -785,7 +864,89 @@ pub const SENSITIVE_FIELDS: &[&str] = &[
     "api_key",
     "proxy_url",
     "jwt_secret",
+    // Module D1: also cover generic secret-bearing key names so sample-template
+    // field values keyed under any of these are redacted before hitting the wire.
+    // Matching is case-insensitive (see `is_sensitive_field_name`).
+    "token",
+    "secret",
+    "authorization",
+    "password",
 ];
+
+/// Case-insensitive membership test against [`SENSITIVE_FIELDS`].
+///
+/// Module D1 entry point: callers (e.g. the `TaskTemplateProposed` construction
+/// path) use this to decide whether a field value must be masked purely from its
+/// key name, in addition to the content-based scan in [`redact_secret_values`].
+pub fn is_sensitive_field_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    SENSITIVE_FIELDS
+        .iter()
+        .any(|f| f.eq_ignore_ascii_case(&lower))
+}
+
+/// Placeholder substituted for any redacted secret value. Deliberately contains
+/// none of the secret shapes (`sk-`, `Bearer `, `api_key=`) so the masked output
+/// can never re-trip the content scan.
+const REDACTED_PLACEHOLDER: &str = "***REDACTED***";
+
+/// Content-based secret detector for string values (Module D1).
+///
+/// Matches the three documented secret shapes, case-insensitively:
+/// `sk-<>=8 alnum>`, `Bearer <token>`, `api[-_]?key <:|=> <token>`.
+static SECRET_VALUE_RE: Lazy<regex::Regex> = Lazy::new(|| {
+    regex::Regex::new(r"(?i)(sk-[a-z0-9]{8,}|bearer\s+\S+|api[_-]?key\s*[:=]\s*\S+)")
+        .expect("secret-value redaction regex must compile")
+});
+
+/// Recursively mask secrets inside a single JSON value.
+///
+/// `key_is_sensitive` is `true` when the value is carried under a field whose
+/// `key` is a [`SENSITIVE_FIELDS`] member — in that case every string within the
+/// subtree is masked outright. Independently, any string matching
+/// [`SECRET_VALUE_RE`] is masked by content regardless of key.
+fn mask_secret_json(value: Value, key_is_sensitive: bool) -> Value {
+    match value {
+        Value::String(s) => {
+            if key_is_sensitive || SECRET_VALUE_RE.is_match(&s) {
+                Value::String(REDACTED_PLACEHOLDER.to_string())
+            } else {
+                Value::String(s)
+            }
+        }
+        Value::Array(arr) => Value::Array(
+            arr.into_iter()
+                .map(|v| mask_secret_json(v, key_is_sensitive))
+                .collect(),
+        ),
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(k, v)| (k, mask_secret_json(v, key_is_sensitive)))
+                .collect(),
+        ),
+        // Non-string scalars (numbers, bools, null) cannot carry a secret token.
+        other => other,
+    }
+}
+
+/// Redaction entry point for emitted sample-template field values (Module D1).
+///
+/// Masks any string `value` whose content matches a known secret shape
+/// (`sk-…`, `Bearer …`, `api_key: …`) AND any value carried under a field whose
+/// `key` is one of [`SENSITIVE_FIELDS`] (case-insensitive). Recurses into
+/// object/array values so a secret nested inside a `value` is masked too. The
+/// `TaskTemplateProposed` construction path MUST run its fields through this so
+/// no secret survives to the SSE wire.
+pub fn redact_secret_values(fields: Vec<SampleField>) -> Vec<SampleField> {
+    fields
+        .into_iter()
+        .map(|mut field| {
+            let key_is_sensitive = is_sensitive_field_name(&field.key);
+            field.value = mask_secret_json(field.value, key_is_sensitive);
+            field
+        })
+        .collect()
+}
 
 pub fn redact_sensitive_fields(mut value: Value) -> Value {
     if let Some(obj) = value.as_object_mut() {

@@ -186,6 +186,109 @@ pub async fn update_plan_step(
     Ok(api_ok!(step))
 }
 
+// ── Module D3: task-template confirm / regenerate / cancel handlers ──────────
+//
+// These are compile-level wiring stubs. The full SSE/HTTP behaviour (CAS the
+// draft, project the edited fields, stream `step_*` / `plan_completed`) is
+// exercised by the live pytest integration test (`test_ai_template_api.py`),
+// NOT by these handlers in the RED phase. The implementer completes the bodies.
+
+/// POST /ai-chat/conversations/:id/task-template/:draft_id/confirm
+///
+/// Submit the edited template → CAS draft `proposed -> confirming` → project
+/// fields → batch-create → stream `step_*` / `plan_completed`.
+pub async fn confirm_task_template(
+    Extension(user): Extension<User>,
+    Extension(state): Extension<UserState>,
+    Path((conv_id, draft_id)): Path<(i32, uuid::Uuid)>,
+    Json(req): Json<ConfirmTaskTemplateDto>,
+) -> Result<impl IntoResponse, ApiError> {
+    use crate::service::ai_chat::task_template::{confirm_orchestrate, DieselDraftStore};
+    use crate::service::batch_task_service::DispatchSingleTaskCreator;
+
+    // Ownership check on the conversation (mirrors confirm_plan).
+    state.ai_chat_service.get_conversation(conv_id, user.id)?;
+
+    let drafts = crate::service::ai_chat::task_template::DraftService::new(
+        DieselDraftStore::new(state.db.pool.clone()),
+        24,
+    );
+    let creator = DispatchSingleTaskCreator::new(state.clone());
+
+    let result = confirm_orchestrate(
+        &drafts,
+        &creator,
+        draft_id,
+        user.id,
+        req.edited_fields,
+        chrono::Utc::now(),
+    )
+    .await?;
+
+    Ok(api_ok!(result))
+}
+
+/// POST /ai-chat/conversations/:id/task-template/:draft_id/regenerate
+///
+/// Re-run sample generation (optional `hint`) → emit a fresh
+/// `task_template_generating` + `task_template_proposed`.
+pub async fn regenerate_task_template(
+    Extension(user): Extension<User>,
+    Extension(state): Extension<UserState>,
+    Path((conv_id, draft_id)): Path<(i32, uuid::Uuid)>,
+    Json(req): Json<RegenerateTaskTemplateDto>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    // Ownership check on the conversation (mirrors confirm_task_template).
+    state.ai_chat_service.get_conversation(conv_id, user.id)?;
+
+    let (tx, rx) = mpsc::channel::<SseEvent>(64);
+    let service = state.ai_chat_service.clone();
+    let user_id = user.id;
+    let hint = req.hint.clone();
+
+    tokio::spawn(async move {
+        if let Err(e) = service
+            .regenerate_task_template(conv_id, draft_id, user_id, hint, &state, tx.clone())
+            .await
+        {
+            let _ = tx
+                .send(SseEvent::Error {
+                    message: e.to_string(),
+                })
+                .await;
+        }
+    });
+
+    let stream = ReceiverStream::new(rx).map(|event| {
+        Ok(Event::default()
+            .event(event_name(&event))
+            .data(event_data(&event)))
+    });
+
+    Ok(Sse::new(stream))
+}
+
+/// POST /ai-chat/conversations/:id/task-template/:draft_id/cancel
+///
+/// Discard the draft (status → cancelled).
+pub async fn cancel_task_template(
+    Extension(user): Extension<User>,
+    Extension(state): Extension<UserState>,
+    Path((conv_id, draft_id)): Path<(i32, uuid::Uuid)>,
+) -> Result<impl IntoResponse, ApiError> {
+    use crate::service::ai_chat::task_template::{DieselDraftStore, DraftService};
+
+    state.ai_chat_service.get_conversation(conv_id, user.id)?;
+
+    let drafts = DraftService::new(DieselDraftStore::new(state.db.pool.clone()), 24);
+    drafts.cancel(draft_id, user.id, chrono::Utc::now()).await?;
+
+    Ok(api_ok!(serde_json::json!({
+        "draft_id": draft_id,
+        "status": "cancelled"
+    })))
+}
+
 fn event_name(event: &SseEvent) -> &'static str {
     match event {
         SseEvent::MessageStart { .. } => "message_start",
@@ -202,6 +305,8 @@ fn event_name(event: &SseEvent) -> &'static str {
         SseEvent::Error { .. } => "error",
         SseEvent::AudientryPhase { .. } => "audientry_phase",
         SseEvent::AudientryReport { .. } => "audientry_report",
+        SseEvent::TaskTemplateGenerating { .. } => "task_template_generating",
+        SseEvent::TaskTemplateProposed { .. } => "task_template_proposed",
     }
 }
 

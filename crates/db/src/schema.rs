@@ -503,6 +503,39 @@ diesel::table! {
 }
 
 diesel::table! {
+    /// Module C: write-ahead idempotency ledger for POST /ai-tasks/batch.
+    /// Hand-added (no DB available to run `make schema-sync`); matches
+    /// migration 2026-06-03-000001_ai_batch_creates/up.sql.
+    gm_ai_batch_creates (id) {
+        id -> Uuid,
+        user_id -> Int4,
+        idempotency_key -> Text,
+        task_kind -> Text,
+        status -> Text,
+        result -> Nullable<Jsonb>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    gm_ai_task_template_drafts (id) {
+        id -> Uuid,
+        conversation_id -> Int4,
+        message_id -> Nullable<Int4>,
+        user_id -> Int4,
+        task_kind -> Text,
+        draft_config -> Jsonb,
+        sample_source -> Text,
+        status -> Text,
+        created_entity_id -> Nullable<Int4>,
+        result -> Nullable<Jsonb>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     gm_ai_conversations (id) {
         id -> Int4,
         user_id -> Int4,
@@ -634,6 +667,7 @@ diesel::table! {
         frozen_at -> Nullable<Timestamptz>,
         behavior -> Nullable<Jsonb>,
         schedule -> Nullable<Jsonb>,
+        source_draft_id -> Nullable<Uuid>,
     }
 }
 
@@ -745,6 +779,7 @@ diesel::table! {
         auto_reply_post -> Bool,
         completed_reason -> Nullable<Text>,
         reply_template_ids -> Array<Int4>,
+        source_draft_id -> Nullable<Uuid>,
     }
 }
 
@@ -2131,8 +2166,10 @@ diesel::allow_tables_to_appear_in_same_query!(
     gm_agent_twitter_comments,
     gm_agent_twitter_tweets,
     gm_agent_videos,
+    gm_ai_batch_creates,
     gm_ai_conversations,
     gm_ai_messages,
+    gm_ai_task_template_drafts,
     gm_ai_plan_steps,
     gm_ai_plans,
     gm_ai_tool_audit_logs,

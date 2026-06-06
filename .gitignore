@@ -23,6 +23,9 @@ Thumbs.db
 # Logs
 *.log
 
+# proptest failure-seed artifacts (regenerated locally on failure)
+*.proptest-regressions
+
 # Cursor IDE
 .cursor/
 

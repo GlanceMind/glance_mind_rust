@@ -120,6 +120,9 @@ impl CampaignService {
             auto_reply_post: dto.auto_reply_post,
             search_options: dto.search_options,
             reply_template_ids: reply_template_ids.clone(),
+            // Module D3: link back to the assistant task-template draft this
+            // campaign was confirmed from (when present).
+            source_draft_id: dto.source_draft_id,
         };
 
         let campaign = self
@@ -321,6 +324,9 @@ impl CampaignService {
             auto_reply_post: dto.auto_reply_post.or(Some(existing.auto_reply_post)),
             search_options: dto.search_options.or(existing.search_options),
             reply_template_ids: reply_template_ids.clone(),
+            // Preserve the original draft link on update (never clobbered by an
+            // edit; Module D3).
+            source_draft_id: existing.source_draft_id,
         };
 
         let updated = if should_replace_reply_template_ids {

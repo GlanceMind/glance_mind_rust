@@ -33,4 +33,18 @@ pub fn routes() -> Router<UserState> {
             "/plans/:plan_id/steps/:step_id",
             patch(ai_chat_handler::update_plan_step),
         )
+        // Module D3: task-template confirm / regenerate / cancel. Routed with
+        // `Path<(i32, Uuid)>` = (conversation_id, draft_id).
+        .route(
+            "/conversations/:id/task-template/:draft_id/confirm",
+            post(ai_chat_handler::confirm_task_template),
+        )
+        .route(
+            "/conversations/:id/task-template/:draft_id/regenerate",
+            post(ai_chat_handler::regenerate_task_template),
+        )
+        .route(
+            "/conversations/:id/task-template/:draft_id/cancel",
+            post(ai_chat_handler::cancel_task_template),
+        )
 }

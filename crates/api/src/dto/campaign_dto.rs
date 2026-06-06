@@ -134,6 +134,11 @@ pub struct CampaignCreateDto {
     pub search_options: Option<JsonValue>,
     #[serde(default)]
     pub reply_template_ids: Option<Vec<i32>>,
+    /// Module D3: when this create originates from confirming an assistant
+    /// task-template draft, the draft's id is threaded here so the created
+    /// campaign can be linked back to its draft (`gm_campaigns.source_draft_id`).
+    #[serde(default)]
+    pub source_draft_id: Option<uuid::Uuid>,
 }
 
 #[derive(Debug, Deserialize, Validate)]

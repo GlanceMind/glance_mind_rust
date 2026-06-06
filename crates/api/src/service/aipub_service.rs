@@ -326,6 +326,11 @@ impl AipubService {
             image_ai_model_id: dto.image_ai_model_id,
             behavior: dto.behavior.clone(),
             schedule: dto.schedule.clone(),
+            // Thread the optional draft link through so the confirm-path keeps
+            // idempotency parity with CampaignService::create_campaign (the
+            // partial-unique uq_aipub_plans_source_draft blocks a duplicate
+            // confirm from creating a second plan for the same draft).
+            source_draft_id: dto.source_draft_id,
         };
 
         let plan = self

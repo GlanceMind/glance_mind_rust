@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use uuid::Uuid;
 
 #[derive(Queryable, Selectable, Identifiable, Serialize, Deserialize, Debug, Clone)]
 #[diesel(table_name = gm_campaigns)]
@@ -44,6 +45,9 @@ pub struct Campaign {
     pub auto_reply_post: bool,
     pub completed_reason: Option<String>,
     pub reply_template_ids: Vec<i32>,
+    /// Module D2: the task-template draft this campaign was created from
+    /// (NULL for campaigns created outside the assistant draft flow).
+    pub source_draft_id: Option<Uuid>,
 }
 
 #[derive(Insertable, AsChangeset)]
@@ -76,4 +80,7 @@ pub struct NewCampaign {
     pub auto_reply_post: Option<bool>,
     pub search_options: Option<JsonValue>,
     pub reply_template_ids: Vec<i32>,
+    /// The assistant task-template draft this campaign was confirmed from
+    /// (Module D3). `None` for campaigns created outside the template flow.
+    pub source_draft_id: Option<Uuid>,
 }
