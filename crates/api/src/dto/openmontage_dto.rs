@@ -218,6 +218,22 @@ impl CreateJobDto {
         Ok(())
     }
 
+    /// Validate budget_limit_usd is finite and non-negative.
+    /// Returns Err if budget is NaN, infinite, or negative.
+    pub fn validate_budget(&self) -> Result<(), String> {
+        if let Some(budget) = self.budget_limit_usd {
+            if !budget.is_finite() {
+                return Err(
+                    "budget_limit_usd must be a finite number (not NaN or infinity)".to_string(),
+                );
+            }
+            if budget < 0.0 {
+                return Err("budget_limit_usd must be non-negative".to_string());
+            }
+        }
+        Ok(())
+    }
+
     /// Convert DTO to OpenMontageProfessionalVideoRequest (protocol message).
     /// M1: maps text fields; asset_ids/input_mode→assets is deferred to part 3.
     /// Returns JSON Value for now (protocol struct will be used in part 3).

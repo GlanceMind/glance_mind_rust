@@ -484,7 +484,7 @@ fn pg_store_persists_execution_config_fields() {
             snapshot_json: json!({"title": "DB Test"}),
             render_runtime: Some("hyperframes".to_string()),
             approval_policy: Some("manual".to_string()),
-            budget_limit_usd: Some(7.5),
+            budget_limit_usd: Some(12.34),
         })
         .expect("create job");
 
@@ -507,7 +507,7 @@ fn pg_store_persists_execution_config_fields() {
     );
     assert_eq!(
         fetched.budget_limit_usd,
-        Some(7.5),
+        Some(12.34),
         "budget_limit_usd must persist in Postgres"
     );
 

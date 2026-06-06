@@ -945,3 +945,84 @@ async fn create_job_succeeds_when_pipeline_available() {
         "Job should be enqueued when pipeline is available"
     );
 }
+
+// ============================================================================
+// M0-T7 Quality Fix: Budget Validation Tests
+// ============================================================================
+
+#[tokio::test]
+async fn create_job_rejects_negative_budget() {
+    use glance_mind_api::routes::openmontage;
+    use glance_mind_db::entity::user::User;
+    use std::sync::Arc;
+
+    let store = Arc::new(InMemoryJobStore::new());
+    let client = Arc::new(MockOpenMontageClient::new());
+    let hub = OpenMontageStreamHub::new();
+    let service = OpenMontageService::new(store.clone(), client.clone(), hub.clone());
+
+    let user = User {
+        id: 1,
+        email: Some("test@example.com".to_string()),
+        password_hash: "".to_string(),
+        invitation_code: None,
+        referred_by: None,
+        company_name: None,
+        api_key: None,
+        status: "active".to_string(),
+        full_name: "Test User".to_string(),
+        role: "user".to_string(),
+        is_active: true,
+        created_at: chrono::Utc::now(),
+        updated_at: None,
+        username: Some("testuser".to_string()),
+        permissions: 0,
+    };
+
+    let router = openmontage::user_routes()
+        .layer(axum::Extension(user))
+        .layer(axum::Extension(service));
+
+    let payload = CreateJobDto {
+        title: "Invalid Budget Test".to_string(),
+        prompt: "Test with negative budget".to_string(),
+        target_platform: "youtube".to_string(),
+        pipeline: Some("animated-explainer".to_string()),
+        budget_limit_usd: Some(-5.0), // Invalid: negative budget
+        ..Default::default()
+    };
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/jobs")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_string(&payload).unwrap()))
+        .unwrap();
+
+    let response = router.oneshot(req).await.unwrap();
+
+    // Should reject with 4xx validation error (BadRequest)
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "Negative budget should return 400 Bad Request"
+    );
+
+    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let resp: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // Check error message mentions budget
+    let error_msg = resp["msg"].as_str().unwrap_or("");
+    assert!(
+        error_msg.contains("budget") || error_msg.contains("negative"),
+        "Error message should mention budget validation, got: {}",
+        error_msg
+    );
+
+    // CRITICAL: Verify job was NOT enqueued
+    assert_eq!(
+        client.get_enqueued().len(),
+        0,
+        "Invalid budget should not result in enqueue"
+    );
+}

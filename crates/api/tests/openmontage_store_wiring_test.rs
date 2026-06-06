@@ -34,7 +34,7 @@ fn create_job_persists_execution_config_fields() {
         snapshot_json: json!({"title": "Test"}),
         render_runtime: Some("hyperframes".to_string()),
         approval_policy: Some("manual".to_string()),
-        budget_limit_usd: Some(7.5),
+        budget_limit_usd: Some(12.34),
     };
 
     let _job = store.create_job(new_job).expect("create job");
@@ -46,21 +46,20 @@ fn create_job_persists_execution_config_fields() {
         .expect("job exists");
 
     // HARD ASSERTIONS - these MUST round-trip (M0-T7 spec)
-    // Currently FAILS because the insert path drops these three fields
     assert_eq!(
         fetched.render_runtime,
         Some("hyperframes".to_string()),
-        "render_runtime must persist - currently drops to None"
+        "render_runtime must persist"
     );
     assert_eq!(
         fetched.approval_policy,
         Some("manual".to_string()),
-        "approval_policy must persist - currently drops to None"
+        "approval_policy must persist"
     );
     assert_eq!(
         fetched.budget_limit_usd,
-        Some(7.5),
-        "budget_limit_usd must persist - currently drops to None"
+        Some(12.34),
+        "budget_limit_usd must persist"
     );
 
     // Sanity check other fields still work

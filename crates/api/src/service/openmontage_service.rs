@@ -42,6 +42,9 @@ impl OpenMontageService {
         // Validate no secrets
         dto.validate_no_secret_material()?;
 
+        // M0-T7: Validate budget is finite and non-negative
+        dto.validate_budget()?;
+
         // M0-T4: Validate pipeline allowlist + availability BEFORE enqueuing
         let pipeline = dto.pipeline.as_deref().unwrap_or("animated-explainer");
 

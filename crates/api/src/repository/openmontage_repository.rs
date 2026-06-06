@@ -5,7 +5,6 @@
 
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 /// New job data for creation
@@ -444,7 +443,7 @@ impl OpenMontageJobStore for PgJobStore {
             approval_policy: new_job.approval_policy.clone(),
             budget_limit_usd: new_job
                 .budget_limit_usd
-                .map(|v| bigdecimal::BigDecimal::from_str(&v.to_string()).unwrap()),
+                .and_then(|v| bigdecimal::BigDecimal::try_from(v).ok()),
         };
 
         let db_job: OpenmontageJob = diesel::insert_into(gm_openmontage_jobs)
