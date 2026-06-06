@@ -42,6 +42,66 @@ impl OpenMontageService {
         // Validate no secrets
         dto.validate_no_secret_material()?;
 
+        // M0-T4: Validate pipeline allowlist + availability BEFORE enqueuing
+        let pipeline = dto.pipeline.as_deref().unwrap_or("animated-explainer");
+
+        // 1. Check allowlist (6 production pipelines)
+        const PRODUCTION_PIPELINES: &[&str] = &[
+            "animated-explainer",
+            "animation",
+            "avatar-spokesperson",
+            "cinematic",
+            "screen-demo",
+            "hybrid",
+        ];
+
+        if !PRODUCTION_PIPELINES.contains(&pipeline) {
+            return Err(format!(
+                "Pipeline '{}' not found. Available pipelines: {}",
+                pipeline,
+                PRODUCTION_PIPELINES.join(", ")
+            ));
+        }
+
+        // 2. Check availability from live preflight/pipelines snapshot
+        let pipelines_dto = self.client.read_pipelines()?;
+        if let Some(ref pipelines) = pipelines_dto {
+            if let Some(info) = pipelines.pipelines.iter().find(|p| p.name == pipeline) {
+                // Pipeline exists in snapshot - check stability
+                if info.stability != "production" {
+                    let preflight_dto = self.client.read_preflight()?;
+                    let warnings = preflight_dto
+                        .as_ref()
+                        .map(|p| p.warnings.join("; "))
+                        .unwrap_or_default();
+                    return Err(format!(
+                        "Pipeline '{}' is currently unavailable (stability: {}). {}",
+                        pipeline,
+                        info.stability,
+                        if warnings.is_empty() {
+                            "Check preflight for details."
+                        } else {
+                            &warnings
+                        }
+                    ));
+                }
+            } else {
+                // Pipeline not in snapshot at all
+                return Err(format!(
+                    "Pipeline '{}' is currently unavailable. Available pipelines: {}",
+                    pipeline,
+                    pipelines
+                        .pipelines
+                        .iter()
+                        .filter(|p| p.stability == "production")
+                        .map(|p| p.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
+        // If no pipelines snapshot, proceed (fallback to warming_up behavior)
+
         // Generate IDs
         let job_id = Uuid::new_v4().to_string();
         let project_id = format!("omx-{}", job_id);

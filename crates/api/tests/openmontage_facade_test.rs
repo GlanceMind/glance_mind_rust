@@ -614,3 +614,330 @@ async fn to_protocol_request_reference_driven_has_no_generation_invocation() {
                 .is_empty()
     );
 }
+
+// ============================================================================
+// M0-T4 Pipeline Allowlist + Availability Validation Tests
+// ============================================================================
+
+#[tokio::test]
+async fn create_job_rejects_non_production_pipeline_with_404() {
+    use glance_mind_api::dto::openmontage_dto::CreateJobDto;
+    use std::sync::Arc;
+
+    let store = Arc::new(InMemoryJobStore::new());
+    let client = Arc::new(MockOpenMontageClient::new());
+    let hub = OpenMontageStreamHub::new();
+    let service = OpenMontageService::new(store.clone(), client.clone(), hub);
+
+    // Mock user
+    let user = glance_mind_db::entity::user::User {
+        id: 1,
+        email: Some("test@example.com".to_string()),
+        password_hash: "".to_string(),
+        invitation_code: None,
+        referred_by: None,
+        company_name: None,
+        api_key: None,
+        status: "active".to_string(),
+        full_name: "Test User".to_string(),
+        role: "user".to_string(),
+        is_active: true,
+        created_at: chrono::Utc::now(),
+        updated_at: None,
+        username: Some("testuser".to_string()),
+        permissions: 0,
+    };
+
+    let router = glance_mind_api::routes::openmontage::user_routes()
+        .layer(axum::Extension(user))
+        .layer(axum::Extension(service));
+
+    // Request with a real OMX pipeline that is NOT in the production 6
+    let payload = CreateJobDto {
+        title: "Framework Smoke Test".to_string(),
+        prompt: "Test prompt".to_string(),
+        target_platform: "youtube".to_string(),
+        pipeline: Some("framework-smoke".to_string()),
+        ..Default::default()
+    };
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/jobs")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_string(&payload).unwrap()))
+        .unwrap();
+
+    let response = router.oneshot(req).await.unwrap();
+
+    // Should return 404
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let resp: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // Check that the error indicates pipeline_not_found
+    assert_eq!(resp["code"], 2004); // NotFound
+    let message = resp["msg"].as_str().unwrap();
+    assert!(
+        message.contains("pipeline") && message.contains("not found"),
+        "Expected 'pipeline not found' error, got: {}",
+        message
+    );
+
+    // CRITICAL: Verify no job was enqueued
+    assert_eq!(
+        client.get_enqueued().len(),
+        0,
+        "Job should not be enqueued on pipeline rejection"
+    );
+}
+
+#[tokio::test]
+async fn create_job_rejects_unavailable_pipeline_with_409() {
+    use glance_mind_api::{
+        dto::openmontage_dto::{CreateJobDto, PipelineInfoDto, PipelinesDto, PreflightDto},
+        service::openmontage_client::OpenMontageClient,
+    };
+    use std::sync::{Arc, Mutex};
+
+    // Custom mock that returns a degraded preflight/pipelines snapshot
+    #[derive(Clone)]
+    struct MockClientWithDegradedPipelines {
+        enqueued: Arc<Mutex<Vec<glance_mind_api::service::openmontage_client::WorkerEnvelope>>>,
+    }
+
+    impl OpenMontageClient for MockClientWithDegradedPipelines {
+        fn enqueue_run(
+            &self,
+            envelope: glance_mind_api::service::openmontage_client::WorkerEnvelope,
+        ) -> Result<(), String> {
+            self.enqueued.lock().unwrap().push(envelope);
+            Ok(())
+        }
+
+        fn enqueue_resume(
+            &self,
+            envelope: glance_mind_api::service::openmontage_client::WorkerEnvelope,
+        ) -> Result<(), String> {
+            self.enqueued.lock().unwrap().push(envelope);
+            Ok(())
+        }
+
+        fn set_cancel_flag(&self, _job_id: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn read_preflight(&self) -> Result<Option<PreflightDto>, String> {
+            // Preflight shows animated-explainer as unavailable (tool missing)
+            Ok(Some(PreflightDto {
+                passed: false,
+                status: "degraded".to_string(),
+                blocking: vec![],
+                warnings: vec!["animated-explainer requires unavailable tools".to_string()],
+                estimated_cost_cents: None,
+            }))
+        }
+
+        fn read_pipelines(&self) -> Result<Option<PipelinesDto>, String> {
+            // Pipelines shows animated-explainer but stability != production
+            Ok(Some(PipelinesDto {
+                pipelines: vec![PipelineInfoDto {
+                    name: "animated-explainer".to_string(),
+                    description: "Topic to fully generated explainer".to_string(),
+                    stability: "beta".to_string(), // NOT production
+                }],
+            }))
+        }
+    }
+
+    let store = Arc::new(InMemoryJobStore::new());
+    let client = Arc::new(MockClientWithDegradedPipelines {
+        enqueued: Arc::new(Mutex::new(Vec::new())),
+    });
+    let hub = OpenMontageStreamHub::new();
+    let service = OpenMontageService::new(store.clone(), client.clone(), hub);
+
+    let user = glance_mind_db::entity::user::User {
+        id: 1,
+        email: Some("test@example.com".to_string()),
+        password_hash: "".to_string(),
+        invitation_code: None,
+        referred_by: None,
+        company_name: None,
+        api_key: None,
+        status: "active".to_string(),
+        full_name: "Test User".to_string(),
+        role: "user".to_string(),
+        is_active: true,
+        created_at: chrono::Utc::now(),
+        updated_at: None,
+        username: Some("testuser".to_string()),
+        permissions: 0,
+    };
+
+    let router = glance_mind_api::routes::openmontage::user_routes()
+        .layer(axum::Extension(user))
+        .layer(axum::Extension(service));
+
+    // Request animated-explainer (in the allowlist, but unavailable per snapshot)
+    let payload = CreateJobDto {
+        title: "Degraded Pipeline Test".to_string(),
+        prompt: "Test prompt".to_string(),
+        target_platform: "youtube".to_string(),
+        pipeline: Some("animated-explainer".to_string()),
+        ..Default::default()
+    };
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/jobs")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_string(&payload).unwrap()))
+        .unwrap();
+
+    let response = router.oneshot(req).await.unwrap();
+
+    // Should return 409 Conflict
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let resp: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // Body should include degraded capability info
+    let message = resp["msg"].as_str().unwrap();
+    assert!(
+        message.contains("unavailable")
+            || message.contains("degraded")
+            || message.contains("stability:"),
+        "Expected degraded/unavailable message, got: {}",
+        message
+    );
+
+    // CRITICAL: Verify no job was enqueued
+    assert_eq!(
+        client.enqueued.lock().unwrap().len(),
+        0,
+        "Job should not be enqueued when pipeline is unavailable"
+    );
+}
+
+#[tokio::test]
+async fn create_job_succeeds_when_pipeline_available() {
+    use glance_mind_api::{
+        dto::openmontage_dto::{CreateJobDto, PipelineInfoDto, PipelinesDto, PreflightDto},
+        service::openmontage_client::OpenMontageClient,
+    };
+    use std::sync::{Arc, Mutex};
+
+    // Custom mock that returns a healthy preflight/pipelines snapshot
+    #[derive(Clone)]
+    struct MockClientWithHealthyPipelines {
+        enqueued: Arc<Mutex<Vec<glance_mind_api::service::openmontage_client::WorkerEnvelope>>>,
+    }
+
+    impl OpenMontageClient for MockClientWithHealthyPipelines {
+        fn enqueue_run(
+            &self,
+            envelope: glance_mind_api::service::openmontage_client::WorkerEnvelope,
+        ) -> Result<(), String> {
+            self.enqueued.lock().unwrap().push(envelope);
+            Ok(())
+        }
+
+        fn enqueue_resume(
+            &self,
+            envelope: glance_mind_api::service::openmontage_client::WorkerEnvelope,
+        ) -> Result<(), String> {
+            self.enqueued.lock().unwrap().push(envelope);
+            Ok(())
+        }
+
+        fn set_cancel_flag(&self, _job_id: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn read_preflight(&self) -> Result<Option<PreflightDto>, String> {
+            Ok(Some(PreflightDto {
+                passed: true,
+                status: "passed".to_string(),
+                blocking: vec![],
+                warnings: vec![],
+                estimated_cost_cents: Some(100),
+            }))
+        }
+
+        fn read_pipelines(&self) -> Result<Option<PipelinesDto>, String> {
+            Ok(Some(PipelinesDto {
+                pipelines: vec![PipelineInfoDto {
+                    name: "animated-explainer".to_string(),
+                    description: "Topic to fully generated explainer".to_string(),
+                    stability: "production".to_string(),
+                }],
+            }))
+        }
+    }
+
+    let store = Arc::new(InMemoryJobStore::new());
+    let client = Arc::new(MockClientWithHealthyPipelines {
+        enqueued: Arc::new(Mutex::new(Vec::new())),
+    });
+    let hub = OpenMontageStreamHub::new();
+    let service = OpenMontageService::new(store.clone(), client.clone(), hub);
+
+    let user = glance_mind_db::entity::user::User {
+        id: 1,
+        email: Some("test@example.com".to_string()),
+        password_hash: "".to_string(),
+        invitation_code: None,
+        referred_by: None,
+        company_name: None,
+        api_key: None,
+        status: "active".to_string(),
+        full_name: "Test User".to_string(),
+        role: "user".to_string(),
+        is_active: true,
+        created_at: chrono::Utc::now(),
+        updated_at: None,
+        username: Some("testuser".to_string()),
+        permissions: 0,
+    };
+
+    let router = glance_mind_api::routes::openmontage::user_routes()
+        .layer(axum::Extension(user))
+        .layer(axum::Extension(service));
+
+    // Request animated-explainer (available and in production)
+    let payload = CreateJobDto {
+        title: "Available Pipeline Test".to_string(),
+        prompt: "Test prompt".to_string(),
+        target_platform: "youtube".to_string(),
+        pipeline: Some("animated-explainer".to_string()),
+        ..Default::default()
+    };
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/jobs")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_string(&payload).unwrap()))
+        .unwrap();
+
+    let response = router.oneshot(req).await.unwrap();
+
+    // Should return 200 OK
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let resp: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(resp["code"], 1000);
+    assert!(!resp["data"]["job_id"].as_str().unwrap().is_empty());
+
+    // CRITICAL: Verify the job WAS enqueued
+    assert_eq!(
+        client.enqueued.lock().unwrap().len(),
+        1,
+        "Job should be enqueued when pipeline is available"
+    );
+}

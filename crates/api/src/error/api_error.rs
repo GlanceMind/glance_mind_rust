@@ -22,6 +22,9 @@ pub enum ApiError {
     #[error("Not Found: {0}")]
     NotFound(String),
 
+    #[error("Conflict: {0}")]
+    Conflict(String),
+
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
 
@@ -146,6 +149,7 @@ impl ApiError {
             ApiError::BadRequest(_) => ErrorCode::BadRequest,
             ApiError::Forbidden(_) => ErrorCode::Forbidden,
             ApiError::NotFound(_) => ErrorCode::NotFound,
+            ApiError::Conflict(_) => ErrorCode::Conflict,
             ApiError::Unauthorized(_) => ErrorCode::Unauthorized,
             ApiError::ValidationError(_) => ErrorCode::ValidationError,
 
@@ -210,6 +214,7 @@ impl ApiError {
             ApiError::BadRequest(msg) => format!("Bad request: {}", msg),
             ApiError::Forbidden(msg) => format!("Access forbidden: {}", msg),
             ApiError::NotFound(msg) => format!("Resource not found: {}", msg),
+            ApiError::Conflict(msg) => format!("Conflict: {}", msg),
             ApiError::Unauthorized(msg) => format!("Unauthorized: {}", msg),
             ApiError::ValidationError(msg) => format!("Validation failed: {}", msg),
             ApiError::PermissionDenied(feature) => format!("Feature not enabled: {}", feature),

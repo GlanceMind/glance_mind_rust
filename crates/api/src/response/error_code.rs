@@ -31,6 +31,8 @@ pub enum ErrorCode {
     TokenExpired = 2007,
     /// Token invalid
     TokenInvalid = 2008,
+    /// Conflict (resource exists but in incompatible state)
+    Conflict = 2009,
 
     // ============ Server Errors (3xxx) ============
     /// Internal server error
@@ -124,6 +126,7 @@ impl ErrorCode {
             ErrorCode::Unauthorized => "Unauthorized",
             ErrorCode::Forbidden => "Forbidden",
             ErrorCode::NotFound => "Resource not found",
+            ErrorCode::Conflict => "Conflict",
             ErrorCode::MethodNotAllowed => "Method not allowed",
             ErrorCode::TooManyRequests => "Too many requests",
             ErrorCode::TokenExpired => "Token expired",
@@ -190,6 +193,7 @@ impl ErrorCode {
             ErrorCode::Unauthorized => "Unauthorized, please login",
             ErrorCode::Forbidden => "Access forbidden",
             ErrorCode::NotFound => "Resource not found",
+            ErrorCode::Conflict => "Resource conflict",
             ErrorCode::MethodNotAllowed => "Method not allowed",
             ErrorCode::TooManyRequests => "Too many requests, please try again later",
             ErrorCode::TokenExpired => "Session expired, please login again",
@@ -266,6 +270,7 @@ impl ErrorCode {
             | ErrorCode::VideoNotFound
             | ErrorCode::SocialAccountNotFound
             | ErrorCode::PromoCodeNotFound => StatusCode::NOT_FOUND,
+            ErrorCode::Conflict => StatusCode::CONFLICT,
             ErrorCode::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             ErrorCode::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
             ErrorCode::PermissionDenied => StatusCode::FORBIDDEN,

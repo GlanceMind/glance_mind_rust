@@ -61,7 +61,19 @@ pub async fn create_job(
 ) -> Result<Json<ApiResponse<crate::dto::openmontage_dto::JobSnapshotDto>>, ApiError> {
     let snapshot = service
         .create_job(user.id, "default-tenant", dto)
-        .map_err(|e| ApiError::BadRequest(format!("create job failed: {}", e)))?;
+        .map_err(|e| {
+            // M0-T4: Map pipeline validation errors to correct HTTP status codes
+            if e.contains("not found") {
+                // Pipeline not in allowlist OR not in snapshot
+                ApiError::NotFound(e)
+            } else if e.contains("unavailable") || e.contains("stability:") {
+                // Pipeline in allowlist but unavailable (degraded, beta, etc.)
+                // HTTP 409 Conflict - resource exists but in wrong state
+                ApiError::Conflict(e)
+            } else {
+                ApiError::BadRequest(format!("create job failed: {}", e))
+            }
+        })?;
 
     Ok(Json(ApiResponse::success(snapshot)))
 }
