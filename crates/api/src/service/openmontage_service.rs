@@ -109,42 +109,7 @@ impl OpenMontageService {
         }
 
         // M0-T5: Compute idempotency key and request hash
-        use sha2::{Digest, Sha256};
-
-        // Canonical request body for hashing (exclude idempotency_key itself)
-        let canonical_body = serde_json::json!({
-            "title": dto.title,
-            "prompt": dto.prompt,
-            "target_platform": dto.target_platform,
-            "language": dto.language,
-            "duration_seconds": dto.duration_seconds,
-            "aspect_ratio": dto.aspect_ratio,
-            "input_mode": dto.input_mode,
-            "pipeline": dto.pipeline,
-            "style_playbook": dto.style_playbook,
-            "render_runtime": dto.render_runtime,
-            "quality_tier": dto.quality_tier,
-            "approval_policy": dto.approval_policy,
-            "budget_limit_usd": dto.budget_limit_usd,
-            "provider_slots": dto.provider_slots,
-            "asset_ids": dto.asset_ids,
-            "tool_invocations": dto.tool_invocations,
-            "metadata": dto.metadata,
-        });
-
-        let canonical_str = serde_json::to_string(&canonical_body)
-            .map_err(|e| format!("Failed to serialize canonical body: {}", e))?;
-
-        // Compute request hash (SHA-256)
-        let mut hasher = Sha256::new();
-        hasher.update(canonical_str.as_bytes());
-        let request_hash = format!("{:x}", hasher.finalize());
-
-        // Effective idempotency key: client-supplied or derived from body hash
-        let effective_idempotency_key = dto
-            .idempotency_key
-            .clone()
-            .unwrap_or_else(|| request_hash.clone());
+        let (effective_idempotency_key, request_hash) = derive_idempotency_key(&dto)?;
 
         // Check for existing job with same idempotency key
         if let Some(existing_job) = self.store.find_by_idempotency(&effective_idempotency_key)? {
@@ -592,5 +557,154 @@ impl OpenMontageService {
             height_px: asset.height_px,
             duration_ms: asset.duration_ms,
         })
+    }
+}
+
+/// Pure idempotency key derivation — extracts the canonical-body hashing logic
+/// and effective-key selection from the async `create_job` method.
+///
+/// Returns `(effective_key, request_hash)` where:
+/// - `request_hash` is the SHA-256 hex digest of the canonical request body
+/// - `effective_key` is either the client-supplied `idempotency_key` (if present)
+///   or the `request_hash` itself (if absent)
+///
+/// # Canonical Body Contract
+///
+/// IDEMPOTENCY CONTRACT: when adding a field to CreateJobDto, decide if it affects idempotency.
+/// If yes, add it here; if no, leave it out deliberately. Omitting a meaningful field silently
+/// breaks dedup. (idempotency_key is excluded by design — no self-reference.)
+fn derive_idempotency_key(dto: &CreateJobDto) -> Result<(String, String), String> {
+    use sha2::{Digest, Sha256};
+
+    // Canonical request body for hashing (exclude idempotency_key itself)
+    let canonical_body = serde_json::json!({
+        "title": dto.title,
+        "prompt": dto.prompt,
+        "target_platform": dto.target_platform,
+        "language": dto.language,
+        "duration_seconds": dto.duration_seconds,
+        "aspect_ratio": dto.aspect_ratio,
+        "input_mode": dto.input_mode,
+        "pipeline": dto.pipeline,
+        "style_playbook": dto.style_playbook,
+        "render_runtime": dto.render_runtime,
+        "quality_tier": dto.quality_tier,
+        "approval_policy": dto.approval_policy,
+        "budget_limit_usd": dto.budget_limit_usd,
+        "provider_slots": dto.provider_slots,
+        "asset_ids": dto.asset_ids,
+        "tool_invocations": dto.tool_invocations,
+        "metadata": dto.metadata,
+    });
+
+    let canonical_str = serde_json::to_string(&canonical_body)
+        .map_err(|e| format!("Failed to serialize canonical body: {}", e))?;
+
+    // Compute request hash (SHA-256)
+    let mut hasher = Sha256::new();
+    hasher.update(canonical_str.as_bytes());
+    let request_hash = format!("{:x}", hasher.finalize());
+
+    // Effective idempotency key: client-supplied or derived from body hash
+    let effective_idempotency_key = dto
+        .idempotency_key
+        .clone()
+        .unwrap_or_else(|| request_hash.clone());
+
+    Ok((effective_idempotency_key, request_hash))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Property: derive_idempotency_key is deterministic — calling it twice
+        /// with the same DTO should return the same (effective_key, request_hash).
+        #[test]
+        fn prop_derive_idempotency_key_is_deterministic(
+            title in ".{1,100}",
+            prompt in ".{1,200}",
+            platform in "(youtube|tiktok|instagram)",
+            key in proptest::option::of(".{1,50}"),
+        ) {
+            let dto = CreateJobDto {
+                title: title.clone(),
+                prompt: prompt.clone(),
+                target_platform: platform.clone(),
+                idempotency_key: key.clone(),
+                ..Default::default()
+            };
+
+            let (key1, hash1) = derive_idempotency_key(&dto)
+                .expect("derive_idempotency_key should succeed");
+            let (key2, hash2) = derive_idempotency_key(&dto)
+                .expect("derive_idempotency_key should succeed");
+
+            prop_assert_eq!(key1, key2, "effective_key must be deterministic");
+            prop_assert_eq!(hash1, hash2, "request_hash must be deterministic");
+        }
+
+        /// Property: client-supplied idempotency_key takes precedence —
+        /// if dto.idempotency_key is Some(k), then effective_key == k.
+        #[test]
+        fn prop_client_key_takes_precedence(
+            title in ".{1,100}",
+            prompt in ".{1,200}",
+            client_key in ".{1,50}",
+        ) {
+            let dto = CreateJobDto {
+                title,
+                prompt,
+                target_platform: "youtube".to_string(),
+                idempotency_key: Some(client_key.clone()),
+                ..Default::default()
+            };
+
+            let (effective_key, _hash) = derive_idempotency_key(&dto)
+                .expect("derive_idempotency_key should succeed");
+
+            prop_assert_eq!(effective_key, client_key,
+                "When idempotency_key is Some(k), effective_key must be k");
+        }
+
+        /// Property: idempotency_key is excluded from hash —
+        /// two DTOs identical except for different idempotency_key values
+        /// should produce the SAME request_hash.
+        #[test]
+        fn prop_idempotency_key_excluded_from_hash(
+            title in ".{1,100}",
+            prompt in ".{1,200}",
+            key1 in ".{1,50}",
+            key2 in ".{1,50}",
+        ) {
+            // Filter out case where keys are identical (would be trivial)
+            prop_assume!(key1 != key2);
+
+            let dto1 = CreateJobDto {
+                title: title.clone(),
+                prompt: prompt.clone(),
+                target_platform: "youtube".to_string(),
+                idempotency_key: Some(key1),
+                ..Default::default()
+            };
+
+            let dto2 = CreateJobDto {
+                title,
+                prompt,
+                target_platform: "youtube".to_string(),
+                idempotency_key: Some(key2),
+                ..Default::default()
+            };
+
+            let (_eff1, hash1) = derive_idempotency_key(&dto1)
+                .expect("derive_idempotency_key should succeed");
+            let (_eff2, hash2) = derive_idempotency_key(&dto2)
+                .expect("derive_idempotency_key should succeed");
+
+            prop_assert_eq!(hash1, hash2,
+                "request_hash must be identical when only idempotency_key differs");
+        }
     }
 }

@@ -240,10 +240,8 @@ async fn create_job_no_client_key_identical_body_derives_same_key() {
     );
 }
 
-// ASSERTION-CHANGE-JUSTIFIED: Replaced proptest with multi-case test due to nested tokio runtime conflict.
-// Original proptest panics: "Cannot start a runtime from within a runtime" because proptest creates
-// a new Runtime inside an existing tokio test. The replacement preserves identical assertion semantics
-// (same job_id + enqueue count == 1) but uses multiple deterministic test cases instead of randomized.
+// NOTE: property coverage (determinism / key-precedence / hash-exclusion) lives in the
+// derive_idempotency_key proptest unit tests; these async cases are end-to-end integration coverage.
 #[tokio::test]
 async fn multiple_identical_requests_always_return_same_job_and_enqueue_once() {
     // Property test: for various payloads, identical key+body should return same job_id and enqueue once
