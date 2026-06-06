@@ -76,6 +76,9 @@ async fn get_job_returns_403_when_caller_is_not_owner() {
         input_mode: Some("text".to_string()),
         status: "queued".to_string(),
         snapshot_json: serde_json::json!({"title": "Alice's Job"}),
+        render_runtime: None,
+        approval_policy: None,
+        budget_limit_usd: None,
     };
     OpenMontageJobStore::create_job(&*store, new_job).unwrap();
 
@@ -133,6 +136,9 @@ async fn get_events_returns_403_when_caller_is_not_owner() {
         input_mode: None,
         status: "queued".to_string(),
         snapshot_json: serde_json::json!({"title": "Alice's Events Job"}),
+        render_runtime: None,
+        approval_policy: None,
+        budget_limit_usd: None,
     };
     OpenMontageJobStore::create_job(&*store, new_job).unwrap();
 
@@ -183,6 +189,9 @@ async fn stream_job_returns_403_when_caller_is_not_owner() {
         input_mode: None,
         status: "running".to_string(),
         snapshot_json: serde_json::json!({"title": "Alice's Stream Job"}),
+        render_runtime: None,
+        approval_policy: None,
+        budget_limit_usd: None,
     };
     OpenMontageJobStore::create_job(&*store, new_job).unwrap();
 
@@ -226,6 +235,9 @@ async fn submit_approval_returns_403_when_caller_is_not_owner() {
         input_mode: None,
         status: "awaiting_approval".to_string(),
         snapshot_json: serde_json::json!({"title": "Alice's Approval Job"}),
+        render_runtime: None,
+        approval_policy: None,
+        budget_limit_usd: None,
     };
     OpenMontageJobStore::create_job(&*store, new_job).unwrap();
 
@@ -284,6 +296,9 @@ async fn cancel_job_returns_403_when_caller_is_not_owner() {
         input_mode: None,
         status: "running".to_string(),
         snapshot_json: serde_json::json!({"title": "Alice's Cancel Job"}),
+        render_runtime: None,
+        approval_policy: None,
+        budget_limit_usd: None,
     };
     OpenMontageJobStore::create_job(&*store, new_job).unwrap();
 
@@ -338,6 +353,9 @@ async fn owner_can_access_their_own_job() {
         input_mode: None,
         status: "queued".to_string(),
         snapshot_json: serde_json::json!({"title": "Alice's Own Job"}),
+        render_runtime: None,
+        approval_policy: None,
+        budget_limit_usd: None,
     };
     OpenMontageJobStore::create_job(&*store, new_job).unwrap();
 

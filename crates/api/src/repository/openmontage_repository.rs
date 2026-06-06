@@ -5,6 +5,7 @@
 
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 /// New job data for creation
@@ -21,6 +22,9 @@ pub struct NewJob {
     pub input_mode: Option<String>,
     pub status: String,
     pub snapshot_json: JsonValue,
+    pub render_runtime: Option<String>,
+    pub approval_policy: Option<String>,
+    pub budget_limit_usd: Option<f64>,
 }
 
 /// New job event data
@@ -203,9 +207,9 @@ impl OpenMontageJobStore for InMemoryJobStore {
             cancel_requested: false,
             current_stage: None,
             progress_pct: 0,
-            render_runtime: None,
-            approval_policy: None,
-            budget_limit_usd: None,
+            render_runtime: new_job.render_runtime,
+            approval_policy: new_job.approval_policy,
+            budget_limit_usd: new_job.budget_limit_usd,
             last_event_sequence: 0,
             next_event_sequence: 1,
             sync_required: false,
@@ -436,6 +440,11 @@ impl OpenMontageJobStore for PgJobStore {
             input_mode: new_job.input_mode.clone(),
             status: new_job.status.clone(),
             snapshot_json: new_job.snapshot_json.clone(),
+            render_runtime: new_job.render_runtime.clone(),
+            approval_policy: new_job.approval_policy.clone(),
+            budget_limit_usd: new_job
+                .budget_limit_usd
+                .map(|v| bigdecimal::BigDecimal::from_str(&v.to_string()).unwrap()),
         };
 
         let db_job: OpenmontageJob = diesel::insert_into(gm_openmontage_jobs)

@@ -329,6 +329,9 @@ async fn cancel_running_sets_flag() {
         input_mode: Some("text".to_string()),
         status: "running".to_string(),
         snapshot_json: serde_json::json!({"title": "Running Test"}),
+        render_runtime: None,
+        approval_policy: None,
+        budget_limit_usd: None,
     };
     OpenMontageJobStore::create_job(&*store, new_job).unwrap();
 

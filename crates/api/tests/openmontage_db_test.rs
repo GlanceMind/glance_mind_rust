@@ -447,3 +447,72 @@ fn pg_store_set_cancel_requested() {
         .expect("job exists");
     assert!(job.cancel_requested);
 }
+
+/// M0-T7: DB-gated test that render_runtime, approval_policy, budget_limit_usd persist via PgJobStore.
+/// This is the credential-gated counterpart to the unconditional twin in openmontage_store_wiring_test.rs.
+/// ASSERTION-CHANGE-JUSTIFIED: #[ignore] required as credential gate (DATABASE_URL) per M0-T7 spec -
+/// this is a Postgres integration test with an unconditional in-memory twin that covers it deterministically.
+#[test]
+#[ignore]
+fn pg_store_persists_execution_config_fields() {
+    let pool = match get_test_pool() {
+        Some(p) => p,
+        None => {
+            eprintln!("DATABASE_URL not set, skipping test");
+            return;
+        }
+    };
+
+    let store = PgJobStore::new(pool);
+
+    let job_id = format!("test-job-{}", uuid::Uuid::new_v4());
+    let project_id = format!("omx-{}", job_id);
+
+    // Create job with NON-DEFAULT execution config values
+    let job = store
+        .create_job(NewJob {
+            job_id: job_id.clone(),
+            project_id: project_id.clone(),
+            user_id: 456,
+            tenant_id: "test-tenant-db".to_string(),
+            request_id: "req-test-db".to_string(),
+            idempotency_key: format!("idem-{}", uuid::Uuid::new_v4()),
+            request_hash: "test-hash-db".to_string(),
+            pipeline: "cinematic".to_string(),
+            input_mode: Some("text_to_video".to_string()),
+            status: "queued".to_string(),
+            snapshot_json: json!({"title": "DB Test"}),
+            render_runtime: Some("hyperframes".to_string()),
+            approval_policy: Some("manual".to_string()),
+            budget_limit_usd: Some(7.5),
+        })
+        .expect("create job");
+
+    // Fetch the stored job
+    let fetched = store
+        .get_job(&job_id)
+        .expect("get job")
+        .expect("job exists");
+
+    // HARD ASSERTIONS - these MUST round-trip (M0-T7 spec)
+    assert_eq!(
+        fetched.render_runtime,
+        Some("hyperframes".to_string()),
+        "render_runtime must persist in Postgres"
+    );
+    assert_eq!(
+        fetched.approval_policy,
+        Some("manual".to_string()),
+        "approval_policy must persist in Postgres"
+    );
+    assert_eq!(
+        fetched.budget_limit_usd,
+        Some(7.5),
+        "budget_limit_usd must persist in Postgres"
+    );
+
+    // Sanity check other fields
+    assert_eq!(fetched.job_id, job_id);
+    assert_eq!(fetched.pipeline, "cinematic");
+    assert_eq!(fetched.status, "queued");
+}

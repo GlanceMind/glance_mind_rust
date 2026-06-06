@@ -56,6 +56,9 @@ pub struct NewOpenmontageJob {
     pub input_mode: Option<String>,
     pub status: String,
     pub snapshot_json: JsonValue,
+    pub render_runtime: Option<String>,
+    pub approval_policy: Option<String>,
+    pub budget_limit_usd: Option<bigdecimal::BigDecimal>,
 }
 
 #[derive(Debug, Clone, Default, AsChangeset)]

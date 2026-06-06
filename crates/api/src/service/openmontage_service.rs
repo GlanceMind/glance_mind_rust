@@ -240,6 +240,9 @@ impl OpenMontageService {
                 "prompt": dto.prompt,
                 "target_platform": dto.target_platform,
             }),
+            render_runtime: dto.render_runtime.clone(),
+            approval_policy: dto.approval_policy.clone(),
+            budget_limit_usd: dto.budget_limit_usd,
         };
 
         let job = self.store.create_job(new_job)?;
