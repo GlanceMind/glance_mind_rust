@@ -1564,28 +1564,6 @@ impl ToolRegistry {
             .collect()
     }
 
-    /// Module D3 wiring marker: records the gate-interception point on the RAW
-    /// create-tool args (BEFORE default-injection).
-    ///
-    /// This is a compile-level placeholder. The REAL interception runs
-    /// `task_template::evaluate_create_intercept(kind, raw_args, llm, drafts,
-    /// conv_id, msg_id, user_id)` and short-circuits to the SSE proposal when the
-    /// completeness gate fires. Wiring `drafts` / `conv_id` / `tx` through the
-    /// (currently static) `execute` signature is left to the implementer; the
-    /// behaviour is verified by the live pytest `test_ai_template_api.py`.
-    #[doc(hidden)]
-    fn note_create_intercept_wiring(kind: super::task_spec::TaskKind, raw_args: &Value) {
-        // Touch the orchestration entrypoint symbolically so the wiring intent is
-        // recorded and the import does not bit-rot. The fn item is never called.
-        let _intercept_fn = super::task_template::evaluate_create_intercept::<
-            super::task_template::DieselDraftStore,
-        >;
-        let _ = &_intercept_fn;
-        // The gate is a pure function of (kind, RAW args); confirm the raw args
-        // are observed at this point (before default-injection).
-        let _ = (kind, raw_args);
-    }
-
     pub async fn execute(
         tool_name: &str,
         params: Value,
@@ -1880,7 +1858,6 @@ impl ToolRegistry {
                 // `Proceed` (or this is a non-chat call site), so we create. The
                 // gate is intentionally NOT inside the static `execute` fn (which
                 // lacks `conv_id`/`tx`); see `try_intercept_create`.
-                Self::note_create_intercept_wiring(super::task_spec::TaskKind::Campaign, &params);
                 let mut p = params.clone();
                 if let Some(obj) = p.as_object_mut() {
                     if !obj.contains_key("schedule_type") {
@@ -1918,10 +1895,6 @@ impl ToolRegistry {
                 // BEFORE this name back-fill. Reaching here means the gate decided
                 // `Proceed` (or this is a non-chat call site); see the
                 // `create_campaign` arm above for the rationale.
-                Self::note_create_intercept_wiring(
-                    super::task_spec::TaskKind::PublishPlan,
-                    &params,
-                );
                 let mut dto: crate::dto::aipub_dto::CreatePlanDto =
                     serde_json::from_value(params.clone())
                         .map_err(|e| ApiError::BadRequest(format!("Invalid plan params: {}", e)))?;
