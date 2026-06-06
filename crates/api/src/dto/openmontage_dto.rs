@@ -7,6 +7,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
+/// Input mode enum for OpenMontage pipelines.
+/// Strictly matches the 6 supported modes from the frontend contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputMode {
+    TextToVideo,
+    SourceScript,
+    ImageToVideo,
+    FirstLastFrame,
+    ReferenceDriven,
+    SourceClip,
+}
+
 // Secret material tokens that should never appear in user input
 const SECRET_TOKENS: &[&str] = &[
     "api_key",
@@ -19,6 +32,67 @@ const SECRET_TOKENS: &[&str] = &[
     "fal-",
     "xi_",
 ];
+
+/// Validate that the input_mode is allowed for the given pipeline and that all required asset roles are present.
+/// Returns Ok if valid, Err with a message if invalid.
+///
+/// Per-pipeline contract (from OpenMontage frontend):
+/// - animated-explainer: [text_to_video], required: []
+/// - animation: [text_to_video], required: []
+/// - avatar-spokesperson: [source_script, text_to_video], required: [avatar]
+/// - cinematic: [source_clip, reference_driven, text_to_video], required: []
+/// - screen-demo: [text_to_video, source_clip], required: []
+/// - hybrid: [source_clip], required: [source_video]
+pub fn validate_input_mode_for_pipeline(
+    pipeline: &str,
+    mode: InputMode,
+    asset_roles: &[String],
+) -> Result<(), String> {
+    // Define the contract table
+    let contract = match pipeline {
+        "animated-explainer" => (vec![InputMode::TextToVideo], vec![]),
+        "animation" => (vec![InputMode::TextToVideo], vec![]),
+        "avatar-spokesperson" => (
+            vec![InputMode::SourceScript, InputMode::TextToVideo],
+            vec!["avatar"],
+        ),
+        "cinematic" => (
+            vec![
+                InputMode::SourceClip,
+                InputMode::ReferenceDriven,
+                InputMode::TextToVideo,
+            ],
+            vec![],
+        ),
+        "screen-demo" => (vec![InputMode::TextToVideo, InputMode::SourceClip], vec![]),
+        "hybrid" => (vec![InputMode::SourceClip], vec!["source_video"]),
+        _ => {
+            return Err(format!("Unknown pipeline: {}", pipeline));
+        }
+    };
+
+    let (allowed_modes, required_roles) = contract;
+
+    // Check if mode is allowed
+    if !allowed_modes.contains(&mode) {
+        return Err(format!(
+            "Input mode {:?} is not allowed for pipeline '{}'",
+            mode, pipeline
+        ));
+    }
+
+    // Check if all required roles are present
+    for required_role in required_roles {
+        if !asset_roles.iter().any(|r| r == required_role) {
+            return Err(format!(
+                "Pipeline '{}' with input mode {:?} requires asset role '{}', but it is missing",
+                pipeline, mode, required_role
+            ));
+        }
+    }
+
+    Ok(())
+}
 
 /// Server-side context injected when converting DTO to protocol request
 #[derive(Debug, Clone)]
