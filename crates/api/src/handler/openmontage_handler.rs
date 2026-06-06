@@ -117,10 +117,8 @@ pub async fn get_job(
 
     assert_job_owner(&job, &user)?;
 
-    let snapshot = service
-        .get_job(&job_id)
-        .map_err(|e| ApiError::InternalServerError(format!("get job failed: {}", e)))?
-        .ok_or_else(|| ApiError::NotFound("Job not found".to_string()))?;
+    // Build snapshot from already-fetched job (avoids redundant DB read)
+    let snapshot = OpenMontageService::snapshot_from_job(&job);
 
     Ok(Json(ApiResponse::success(snapshot)))
 }
@@ -186,45 +184,42 @@ pub async fn stream_job(
 
     assert_job_owner(&job, &user)?;
 
-    let snapshot = service
-        .get_job(&job_id)
-        .map_err(|e| ApiError::InternalServerError(format!("get job failed: {}", e)))?;
+    // Build snapshot from already-fetched job (avoids redundant DB read)
+    let snapshot = OpenMontageService::snapshot_from_job(&job);
 
     let rx = service.subscribe(&job_id).await;
     let (tx_out, rx_out) = tokio::sync::mpsc::channel::<OpenMontageSseEvent>(64);
 
     // Send snapshot
-    if let Some(snap) = snapshot {
-        let snap_event = OpenMontageSseEvent {
-            event_type: "job_snapshot".to_string(),
-            job_id: snap.job_id.clone(),
-            project_id: snap.project_id.clone(),
-            sequence: snap.last_event_sequence,
-            status: snap.status.clone(),
-            stage: snap.current_stage.clone(),
-            progress_pct: snap.progress_pct,
-            payload: snap.snapshot_json.clone(),
+    let snap_event = OpenMontageSseEvent {
+        event_type: "job_snapshot".to_string(),
+        job_id: snapshot.job_id.clone(),
+        project_id: snapshot.project_id.clone(),
+        sequence: snapshot.last_event_sequence,
+        status: snapshot.status.clone(),
+        stage: snapshot.current_stage.clone(),
+        progress_pct: snapshot.progress_pct,
+        payload: snapshot.snapshot_json.clone(),
+    };
+    let _ = tx_out.send(snap_event).await;
+
+    // Send backlog events after query.after
+    let backlog = service
+        .backlog(&job_id, query.after)
+        .map_err(|e| ApiError::InternalServerError(format!("backlog failed: {}", e)))?;
+
+    for event in backlog {
+        let evt = OpenMontageSseEvent {
+            event_type: event.event_type.clone(),
+            job_id: job_id.clone(),
+            project_id: snapshot.project_id.clone(),
+            sequence: event.sequence,
+            status: event.status.clone().unwrap_or_default(),
+            stage: event.stage.clone(),
+            progress_pct: event.progress_pct.unwrap_or(0),
+            payload: event.event_json.clone(),
         };
-        let _ = tx_out.send(snap_event).await;
-
-        // Send backlog events after query.after
-        let backlog = service
-            .backlog(&job_id, query.after)
-            .map_err(|e| ApiError::InternalServerError(format!("backlog failed: {}", e)))?;
-
-        for event in backlog {
-            let evt = OpenMontageSseEvent {
-                event_type: event.event_type.clone(),
-                job_id: job_id.clone(),
-                project_id: snap.project_id.clone(),
-                sequence: event.sequence,
-                status: event.status.clone().unwrap_or_default(),
-                stage: event.stage.clone(),
-                progress_pct: event.progress_pct.unwrap_or(0),
-                payload: event.event_json.clone(),
-            };
-            let _ = tx_out.send(evt).await;
-        }
+        let _ = tx_out.send(evt).await;
     }
 
     let heartbeat_tx = tx_out.clone();

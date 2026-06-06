@@ -287,26 +287,35 @@ impl OpenMontageService {
         self.store.get_job(job_id)
     }
 
+    /// Convert a Job entity to JobSnapshotDto.
+    /// Used internally to avoid duplicate DB reads on read paths.
+    pub fn snapshot_from_job(
+        job: &crate::repository::openmontage_repository::Job,
+    ) -> JobSnapshotDto {
+        JobSnapshotDto {
+            job_id: job.job_id.clone(),
+            project_id: job.project_id.clone(),
+            status: job.status.clone(),
+            pipeline: job.pipeline.clone(),
+            current_stage: job.current_stage.clone(),
+            progress_pct: job.progress_pct,
+            error_json: job.error_json.clone(),
+            last_event_sequence: job.last_event_sequence,
+            next_event_sequence: job.next_event_sequence,
+            sync_required: job.sync_required,
+            snapshot_json: job.snapshot_json.clone(),
+            created_at: job.created_at.to_rfc3339(),
+            updated_at: job.updated_at.map(|t| t.to_rfc3339()),
+        }
+    }
+
     pub fn get_job(&self, job_id: &str) -> Result<Option<JobSnapshotDto>, String> {
         let job = self.store.get_job(job_id)?;
-        Ok(job.map(|j| JobSnapshotDto {
-            job_id: j.job_id,
-            project_id: j.project_id,
-            status: j.status,
-            pipeline: j.pipeline,
-            current_stage: j.current_stage,
-            progress_pct: j.progress_pct,
-            error_json: j.error_json,
-            last_event_sequence: j.last_event_sequence,
-            next_event_sequence: j.next_event_sequence,
-            sync_required: j.sync_required,
-            snapshot_json: j.snapshot_json,
-            created_at: j.created_at.to_rfc3339(),
-            updated_at: j.updated_at.map(|t| t.to_rfc3339()),
-        }))
+        Ok(job.as_ref().map(Self::snapshot_from_job))
     }
 
     pub fn cancel_job(&self, job_id: &str) -> Result<CancelResultDto, String> {
+        // Re-fetch job for fresh state (mutations need latest status; read paths reuse already-fetched job)
         let job = self
             .store
             .get_job(job_id)?
@@ -343,6 +352,7 @@ impl OpenMontageService {
         job_id: &str,
         approval: ApprovalDto,
     ) -> Result<JobSnapshotDto, String> {
+        // Re-fetch job for fresh state (mutations need latest status; read paths reuse already-fetched job)
         let job = self
             .store
             .get_job(job_id)?
