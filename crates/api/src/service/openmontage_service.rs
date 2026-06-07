@@ -114,34 +114,6 @@ impl OpenMontageService {
         // M0-T5: Compute idempotency key and request hash
         let (effective_idempotency_key, request_hash) = derive_idempotency_key(&dto)?;
 
-        // Check for existing job with same idempotency key
-        if let Some(existing_job) = self.store.find_by_idempotency(&effective_idempotency_key)? {
-            // Found existing job — check request hash
-            if existing_job.request_hash == request_hash {
-                // Same key + same body → return existing job (no new enqueue)
-                return Ok(JobSnapshotDto {
-                    job_id: existing_job.job_id,
-                    project_id: existing_job.project_id,
-                    status: existing_job.status,
-                    pipeline: existing_job.pipeline,
-                    current_stage: existing_job.current_stage,
-                    progress_pct: existing_job.progress_pct,
-                    error_json: existing_job.error_json,
-                    last_event_sequence: existing_job.last_event_sequence,
-                    next_event_sequence: existing_job.next_event_sequence,
-                    sync_required: existing_job.sync_required,
-                    snapshot_json: existing_job.snapshot_json,
-                    created_at: existing_job.created_at.to_rfc3339(),
-                    updated_at: existing_job.updated_at.map(|t| t.to_rfc3339()),
-                });
-            } else {
-                // Same key + different body → conflict
-                return Err(
-                    "Idempotency conflict: same key with different request body".to_string()
-                );
-            }
-        }
-
         // Generate IDs for new job
         let job_id = Uuid::new_v4().to_string();
         let project_id = format!("omx-{}", job_id);
@@ -248,9 +220,38 @@ impl OpenMontageService {
             budget_limit_usd: dto.budget_limit_usd,
         };
 
-        let job = self.store.create_job(new_job)?;
+        // M0b-T1: Atomic upsert at the store level — returns (job, created: bool)
+        let result = self.store.create_job(new_job)?;
 
-        // Enqueue run envelope
+        // M0-T5 + M0b-T1: Idempotency conflict check (if existing job found, verify request_hash)
+        if !result.created {
+            // Found existing job — check request hash
+            if result.job.request_hash == request_hash {
+                // Same key + same body → return existing job (NO enqueue)
+                return Ok(JobSnapshotDto {
+                    job_id: result.job.job_id,
+                    project_id: result.job.project_id,
+                    status: result.job.status,
+                    pipeline: result.job.pipeline,
+                    current_stage: result.job.current_stage,
+                    progress_pct: result.job.progress_pct,
+                    error_json: result.job.error_json,
+                    last_event_sequence: result.job.last_event_sequence,
+                    next_event_sequence: result.job.next_event_sequence,
+                    sync_required: result.job.sync_required,
+                    snapshot_json: result.job.snapshot_json,
+                    created_at: result.job.created_at.to_rfc3339(),
+                    updated_at: result.job.updated_at.map(|t| t.to_rfc3339()),
+                });
+            } else {
+                // Same key + different body → HTTP 409 conflict (NO enqueue)
+                return Err(
+                    "Idempotency conflict: same key with different request body".to_string()
+                );
+            }
+        }
+
+        // NEW JOB CREATED — enqueue the run
         let envelope = WorkerEnvelope {
             task_id: Uuid::new_v4().to_string(),
             job_id: job_id.clone(),
@@ -268,19 +269,19 @@ impl OpenMontageService {
         self.client.enqueue_run(envelope)?;
 
         Ok(JobSnapshotDto {
-            job_id: job.job_id,
-            project_id: job.project_id,
-            status: job.status,
-            pipeline: job.pipeline,
-            current_stage: job.current_stage,
-            progress_pct: job.progress_pct,
-            error_json: job.error_json,
-            last_event_sequence: job.last_event_sequence,
-            next_event_sequence: job.next_event_sequence,
-            sync_required: job.sync_required,
-            snapshot_json: job.snapshot_json,
-            created_at: job.created_at.to_rfc3339(),
-            updated_at: job.updated_at.map(|t| t.to_rfc3339()),
+            job_id: result.job.job_id,
+            project_id: result.job.project_id,
+            status: result.job.status,
+            pipeline: result.job.pipeline,
+            current_stage: result.job.current_stage,
+            progress_pct: result.job.progress_pct,
+            error_json: result.job.error_json,
+            last_event_sequence: result.job.last_event_sequence,
+            next_event_sequence: result.job.next_event_sequence,
+            sync_required: result.job.sync_required,
+            snapshot_json: result.job.snapshot_json,
+            created_at: result.job.created_at.to_rfc3339(),
+            updated_at: result.job.updated_at.map(|t| t.to_rfc3339()),
         })
     }
 

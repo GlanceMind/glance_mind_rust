@@ -40,7 +40,7 @@ fn pg_store_round_trips_job_and_events() {
     let project_id = format!("omx-{}", job_id);
 
     // Create job
-    let job = store
+    let result = store
         .create_job(NewJob {
             job_id: job_id.clone(),
             project_id: project_id.clone(),
@@ -53,8 +53,14 @@ fn pg_store_round_trips_job_and_events() {
             input_mode: Some("text".to_string()),
             status: "queued".to_string(),
             snapshot_json: json!({"title": "Test"}),
+            render_runtime: None,
+            approval_policy: None,
+            budget_limit_usd: None,
         })
         .expect("create job");
+
+    assert!(result.created, "First create should insert new job");
+    let job = result.job;
 
     assert_eq!(job.job_id, job_id);
     assert_eq!(job.user_id, 999);
@@ -69,9 +75,9 @@ fn pg_store_round_trips_job_and_events() {
     assert_eq!(fetched.job_id, job_id);
     assert_eq!(fetched.user_id, 999);
 
-    // Find by idempotency
+    // Find by idempotency (now requires user_id)
     let found = store
-        .find_by_idempotency(&job.idempotency_key)
+        .find_by_idempotency(999, &job.idempotency_key)
         .expect("find by idempotency")
         .expect("job exists");
     assert_eq!(found.job_id, job_id);
@@ -187,6 +193,9 @@ fn pg_store_update_from_event_extracts_fields() {
             input_mode: None,
             status: "queued".to_string(),
             snapshot_json: json!({}),
+            render_runtime: None,
+            approval_policy: None,
+            budget_limit_usd: None,
         })
         .expect("create job");
 
@@ -245,6 +254,9 @@ fn pg_store_update_from_event_requires_primary_video_for_completed() {
             input_mode: None,
             status: "queued".to_string(),
             snapshot_json: json!({}),
+            render_runtime: None,
+            approval_policy: None,
+            budget_limit_usd: None,
         })
         .expect("create job");
 
@@ -335,27 +347,45 @@ fn pg_store_idempotency_key_enforced() {
         input_mode: None,
         status: "queued".to_string(),
         snapshot_json: json!({}),
+        render_runtime: None,
+        approval_policy: None,
+        budget_limit_usd: None,
     };
 
-    store.create_job(job1).expect("create first job");
+    let result1 = store.create_job(job1.clone()).expect("create first job");
+    assert!(result1.created, "First create should insert new job");
+    let first_job_id = result1.job.job_id.clone();
 
-    // Try to create another job with the same idempotency_key
+    // ASSERTION-CHANGE-JUSTIFIED: M0b-T1 changed the behavior from "error on duplicate" to "idempotent upsert".
+    // The old assertion `assert!(result.is_err())` tested the wrong behavior (fail-on-duplicate breaks idempotency).
+    // The new assertion verifies atomic upsert: same (user_id, key) → return existing job, created=false.
+    // Try to create another job with the same (user_id, idempotency_key) — should return existing
     let job2 = NewJob {
-        job_id: format!("job-{}", uuid::Uuid::new_v4()),
+        job_id: format!("job-{}", uuid::Uuid::new_v4()), // Different job_id
         project_id: "omx-job-2".to_string(),
-        user_id: 100,
+        user_id: 100, // Same user_id
         tenant_id: "tenant-1".to_string(),
         request_id: "req-2".to_string(),
-        idempotency_key: idem_key.clone(),
+        idempotency_key: idem_key.clone(), // Same key
         request_hash: "test-hash-5".to_string(),
         pipeline: "cinematic".to_string(),
         input_mode: None,
         status: "queued".to_string(),
         snapshot_json: json!({}),
+        render_runtime: None,
+        approval_policy: None,
+        budget_limit_usd: None,
     };
 
-    let result = store.create_job(job2);
-    assert!(result.is_err(), "Duplicate idempotency_key should fail");
+    let result2 = store.create_job(job2).expect("create should succeed (idempotent)");
+    assert!(
+        !result2.created,
+        "Second create with same (user_id, key) should find existing job"
+    );
+    assert_eq!(
+        result2.job.job_id, first_job_id,
+        "Should return the FIRST job's ID, not the second's"
+    );
 }
 
 #[test]
@@ -432,6 +462,9 @@ fn pg_store_set_cancel_requested() {
             input_mode: None,
             status: "running".to_string(),
             snapshot_json: json!({}),
+            render_runtime: None,
+            approval_policy: None,
+            budget_limit_usd: None,
         })
         .expect("create job");
 
@@ -469,7 +502,7 @@ fn pg_store_persists_execution_config_fields() {
     let project_id = format!("omx-{}", job_id);
 
     // Create job with NON-DEFAULT execution config values
-    let job = store
+    let result = store
         .create_job(NewJob {
             job_id: job_id.clone(),
             project_id: project_id.clone(),
@@ -487,6 +520,8 @@ fn pg_store_persists_execution_config_fields() {
             budget_limit_usd: Some(12.34),
         })
         .expect("create job");
+
+    let _job = result.job; // Suppress unused warning
 
     // Fetch the stored job
     let fetched = store
@@ -515,4 +550,87 @@ fn pg_store_persists_execution_config_fields() {
     assert_eq!(fetched.job_id, job_id);
     assert_eq!(fetched.pipeline, "cinematic");
     assert_eq!(fetched.status, "queued");
+}
+
+/// M0b-T1: Concurrent create_job calls with the same (user_id, key, body) should produce
+/// exactly ONE job row and exactly ONE enqueue (via atomic upsert at the DB layer).
+/// This is the credential-gated concurrency test; its deterministic twin is
+/// `idempotency_conflict_path_does_not_enqueue_twin` in openmontage_idempotency_test.rs.
+/// ASSERTION-CHANGE-JUSTIFIED: #[ignore] marker is required per spec - credential-gated DB test
+/// that requires PostgreSQL. The deterministic twin runs unconditionally; this is the DB counterpart.
+#[tokio::test]
+#[ignore]
+async fn concurrent_creates_with_same_key_produce_one_job_and_one_enqueue() {
+    let pool = match get_test_pool() {
+        Some(p) => p,
+        None => {
+            eprintln!(
+                "DATABASE_URL not set, skipping concurrency test (deterministic twin covers it)"
+            );
+            return;
+        }
+    };
+
+    use glance_mind_api::service::openmontage_client::MockOpenMontageClient;
+    use glance_mind_api::service::openmontage_service::OpenMontageService;
+    use glance_mind_api::service::openmontage_stream_hub::OpenMontageStreamHub;
+    use std::sync::Arc;
+
+    let store = Arc::new(PgJobStore::new(pool));
+    let client = Arc::new(MockOpenMontageClient::new());
+    let hub = OpenMontageStreamHub::new();
+    let service = Arc::new(OpenMontageService::new(store.clone(), client.clone(), hub));
+
+    let user_id = 1;
+    let tenant_id = "test-tenant";
+    let idempotency_key = format!("concurrent-test-{}", uuid::Uuid::new_v4());
+
+    let dto = glance_mind_api::dto::openmontage_dto::CreateJobDto {
+        title: "Concurrent Test".to_string(),
+        prompt: "Make a video".to_string(),
+        target_platform: "youtube".to_string(),
+        pipeline: Some("animated-explainer".to_string()),
+        idempotency_key: Some(idempotency_key.clone()),
+        ..Default::default()
+    };
+
+    // Spawn TWO concurrent create_job calls with the SAME (user_id, key, body)
+    let service1 = service.clone();
+    let service2 = service.clone();
+    let dto1 = dto.clone();
+    let dto2 = dto.clone();
+
+    let (result1, result2) = tokio::join!(
+        tokio::spawn(async move { service1.create_job(user_id, tenant_id, dto1) }),
+        tokio::spawn(async move { service2.create_job(user_id, tenant_id, dto2) })
+    );
+
+    // Both spawns should complete without panicking
+    let job1 = result1.expect("spawn1").expect("create1");
+    let job2 = result2.expect("spawn2").expect("create2");
+
+    // ASSERT: Both should return the SAME job_id (idempotency)
+    assert_eq!(
+        job1.job_id, job2.job_id,
+        "Concurrent creates with same key should return the same job_id"
+    );
+
+    // ASSERT: Exactly ONE job row exists in the DB
+    let jobs_in_db: Vec<_> = store
+        .get_job(&job1.job_id)
+        .expect("get_job")
+        .into_iter()
+        .collect();
+    assert_eq!(
+        jobs_in_db.len(),
+        1,
+        "Exactly one job row should exist in the DB"
+    );
+
+    // ASSERT (BINDING): Total enqueue count across both calls == 1 (no duplicate paid render)
+    assert_eq!(
+        client.get_enqueued().len(),
+        1,
+        "Concurrent creates MUST enqueue exactly once (no duplicate paid render)"
+    );
 }

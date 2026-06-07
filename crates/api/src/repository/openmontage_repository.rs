@@ -121,11 +121,18 @@ pub struct NewAsset {
     pub duration_ms: Option<i32>,
 }
 
+/// Result of create_job indicating whether a new job was created or an existing one was found
+#[derive(Debug, Clone)]
+pub struct CreateJobResult {
+    pub job: Job,
+    pub created: bool, // true if newly inserted, false if existing job returned
+}
+
 /// Job store trait
 pub trait OpenMontageJobStore: Send + Sync {
-    fn create_job(&self, job: NewJob) -> Result<Job, String>;
+    fn create_job(&self, job: NewJob) -> Result<CreateJobResult, String>;
     fn get_job(&self, job_id: &str) -> Result<Option<Job>, String>;
-    fn find_by_idempotency(&self, key: &str) -> Result<Option<Job>, String>;
+    fn find_by_idempotency(&self, user_id: i32, key: &str) -> Result<Option<Job>, String>;
     fn append_event(&self, event: NewJobEvent) -> Result<AppendResult, String>;
     fn list_events(
         &self,
@@ -181,16 +188,23 @@ impl Default for InMemoryJobStore {
 }
 
 impl OpenMontageJobStore for InMemoryJobStore {
-    fn create_job(&self, new_job: NewJob) -> Result<Job, String> {
+    fn create_job(&self, new_job: NewJob) -> Result<CreateJobResult, String> {
         let mut data = self.data.lock().unwrap();
 
-        // Check idempotency
+        // Atomic find-or-insert: check for existing job with (user_id, idempotency_key)
         for stored in data.values() {
-            if stored.job.idempotency_key == new_job.idempotency_key {
-                return Err("Duplicate idempotency_key".to_string());
+            if stored.job.user_id == new_job.user_id
+                && stored.job.idempotency_key == new_job.idempotency_key
+            {
+                // Found existing job — return it with created=false
+                return Ok(CreateJobResult {
+                    job: stored.job.clone(),
+                    created: false,
+                });
             }
         }
 
+        // No existing job — create new one
         let job = Job {
             id: self.allocate_id(),
             job_id: new_job.job_id.clone(),
@@ -226,7 +240,7 @@ impl OpenMontageJobStore for InMemoryJobStore {
             },
         );
 
-        Ok(job)
+        Ok(CreateJobResult { job, created: true })
     }
 
     fn get_job(&self, job_id: &str) -> Result<Option<Job>, String> {
@@ -234,10 +248,10 @@ impl OpenMontageJobStore for InMemoryJobStore {
         Ok(data.get(job_id).map(|j| j.job.clone()))
     }
 
-    fn find_by_idempotency(&self, key: &str) -> Result<Option<Job>, String> {
+    fn find_by_idempotency(&self, user_id: i32, key: &str) -> Result<Option<Job>, String> {
         let data = self.data.lock().unwrap();
         for stored in data.values() {
-            if stored.job.idempotency_key == key {
+            if stored.job.user_id == user_id && stored.job.idempotency_key == key {
                 return Ok(Some(stored.job.clone()));
             }
         }
@@ -422,7 +436,7 @@ impl PgJobStore {
 }
 
 impl OpenMontageJobStore for PgJobStore {
-    fn create_job(&self, new_job: NewJob) -> Result<Job, String> {
+    fn create_job(&self, new_job: NewJob) -> Result<CreateJobResult, String> {
         use glance_mind_db::schema::gm_openmontage_jobs::dsl::*;
 
         let mut conn = self.get_conn()?;
@@ -446,40 +460,64 @@ impl OpenMontageJobStore for PgJobStore {
                 .and_then(|v| bigdecimal::BigDecimal::try_from(v).ok()),
         };
 
-        let db_job: OpenmontageJob = diesel::insert_into(gm_openmontage_jobs)
+        // Atomic upsert with ON CONFLICT: try to insert, on conflict do nothing and return existing row
+        let insert_result = diesel::insert_into(gm_openmontage_jobs)
             .values(&new_db_job)
+            .on_conflict((user_id, idempotency_key))
+            .do_nothing()
             .returning(OpenmontageJob::as_select())
-            .get_result(&mut conn)
-            .map_err(|e| format!("Insert error: {}", e))?;
+            .get_result(&mut conn);
 
-        Ok(Job {
-            id: db_job.id,
-            job_id: db_job.job_id,
-            project_id: db_job.project_id,
-            user_id: db_job.user_id,
-            tenant_id: db_job.tenant_id,
-            request_id: db_job.request_id,
-            idempotency_key: db_job.idempotency_key,
-            request_hash: db_job.request_hash,
-            pipeline: db_job.pipeline,
-            input_mode: db_job.input_mode,
-            status: db_job.status,
-            cancel_requested: db_job.cancel_requested,
-            current_stage: db_job.current_stage,
-            progress_pct: db_job.progress_pct,
-            render_runtime: db_job.render_runtime,
-            approval_policy: db_job.approval_policy,
-            budget_limit_usd: db_job
-                .budget_limit_usd
-                .map(|bd| bd.to_string().parse::<f64>().unwrap_or(0.0)),
-            last_event_sequence: db_job.last_event_sequence,
-            next_event_sequence: db_job.next_event_sequence,
-            sync_required: db_job.sync_required,
-            snapshot_json: db_job.snapshot_json,
-            error_json: db_job.error_json,
-            created_at: db_job.created_at,
-            updated_at: db_job.updated_at,
-        })
+        match insert_result {
+            Ok(db_job) => {
+                // Row was inserted — this is a new job
+                Ok(CreateJobResult {
+                    job: Job {
+                        id: db_job.id,
+                        job_id: db_job.job_id,
+                        project_id: db_job.project_id,
+                        user_id: db_job.user_id,
+                        tenant_id: db_job.tenant_id,
+                        request_id: db_job.request_id,
+                        idempotency_key: db_job.idempotency_key,
+                        request_hash: db_job.request_hash,
+                        pipeline: db_job.pipeline,
+                        input_mode: db_job.input_mode,
+                        status: db_job.status,
+                        cancel_requested: db_job.cancel_requested,
+                        current_stage: db_job.current_stage,
+                        progress_pct: db_job.progress_pct,
+                        render_runtime: db_job.render_runtime,
+                        approval_policy: db_job.approval_policy,
+                        budget_limit_usd: db_job
+                            .budget_limit_usd
+                            .map(|bd| bd.to_string().parse::<f64>().unwrap_or(0.0)),
+                        last_event_sequence: db_job.last_event_sequence,
+                        next_event_sequence: db_job.next_event_sequence,
+                        sync_required: db_job.sync_required,
+                        snapshot_json: db_job.snapshot_json,
+                        error_json: db_job.error_json,
+                        created_at: db_job.created_at,
+                        updated_at: db_job.updated_at,
+                    },
+                    created: true,
+                })
+            }
+            Err(diesel::result::Error::QueryBuilderError(_)) => {
+                // ON CONFLICT DO NOTHING returns no rows — conflict occurred, fetch existing job
+                let existing_job = self
+                    .find_by_idempotency(new_job.user_id, &new_job.idempotency_key)?
+                    .ok_or_else(|| {
+                        "Conflict occurred but existing job not found (race condition)".to_string()
+                    })?;
+
+                Ok(CreateJobResult {
+                    job: existing_job,
+                    created: false,
+                })
+            }
+            Err(e) => Err(format!("Insert error: {}", e)),
+        }
     }
 
     fn get_job(&self, job_id_param: &str) -> Result<Option<Job>, String> {
@@ -524,12 +562,13 @@ impl OpenMontageJobStore for PgJobStore {
         }))
     }
 
-    fn find_by_idempotency(&self, key: &str) -> Result<Option<Job>, String> {
+    fn find_by_idempotency(&self, user_id_param: i32, key: &str) -> Result<Option<Job>, String> {
         use glance_mind_db::schema::gm_openmontage_jobs::dsl::*;
 
         let mut conn = self.get_conn()?;
 
         let db_job: Option<OpenmontageJob> = gm_openmontage_jobs
+            .filter(user_id.eq(user_id_param))
             .filter(idempotency_key.eq(key))
             .select(OpenmontageJob::as_select())
             .first(&mut conn)

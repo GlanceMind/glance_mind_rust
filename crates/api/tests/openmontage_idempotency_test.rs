@@ -319,3 +319,127 @@ async fn multiple_identical_requests_always_return_same_job_and_enqueue_once() {
         );
     }
 }
+
+// ============================================================================
+// M0b-T1: Concurrency-Safe Idempotency Tests
+// ============================================================================
+
+/// TWIN (deterministic, unconditional): Simulate concurrent create_job calls by spawning
+/// two tasks that both attempt to create with the same (user_id, key, body). Under the
+/// current code (check-then-act), both can pass the idempotency check and both insert+enqueue.
+/// After the fix (atomic upsert), exactly ONE job exists and enqueue count == 1.
+/// ASSERTION-CHANGE-JUSTIFIED: Rewrote the twin from sequential to concurrent to actually
+/// demonstrate the race condition (check-then-act allows both to insert). The BINDING assertion
+/// (enqueue count == 1) is unchanged — that's the core property being tested.
+#[tokio::test]
+async fn idempotency_conflict_path_does_not_enqueue_twin() {
+    let store = Arc::new(InMemoryJobStore::new());
+    let client = Arc::new(MockOpenMontageClient::new());
+    let hub = OpenMontageStreamHub::new();
+    let service = Arc::new(OpenMontageService::new(store.clone(), client.clone(), hub));
+
+    let user_id = 1;
+    let tenant_id = "tenant-1";
+    let idempotency_key = "concurrent-key-twin";
+
+    let dto = CreateJobDto {
+        title: "Concurrent Test".to_string(),
+        prompt: "Make a video".to_string(),
+        target_platform: "youtube".to_string(),
+        pipeline: Some("animated-explainer".to_string()),
+        idempotency_key: Some(idempotency_key.to_string()),
+        ..Default::default()
+    };
+
+    // Spawn TWO concurrent create_job calls with the SAME (user_id, key, body)
+    let service1 = service.clone();
+    let service2 = service.clone();
+    let dto1 = dto.clone();
+    let dto2 = dto.clone();
+
+    let (result1, result2) = tokio::join!(
+        tokio::spawn(async move { service1.create_job(user_id, tenant_id, dto1) }),
+        tokio::spawn(async move { service2.create_job(user_id, tenant_id, dto2) })
+    );
+
+    // Both spawns should complete
+    let job1 = result1.expect("spawn1");
+    let job2 = result2.expect("spawn2");
+
+    // At least one should succeed (the other might fail with conflict or also succeed)
+    let succeeded: Vec<_> = vec![job1, job2]
+        .into_iter()
+        .filter_map(Result::ok)
+        .collect();
+    assert!(!succeeded.is_empty(), "At least one create should succeed");
+
+    // After the fix: all succeeded job_ids should be identical
+    if succeeded.len() > 1 {
+        assert_eq!(
+            succeeded[0].job_id, succeeded[1].job_id,
+            "All successful creates should return the same job_id"
+        );
+    }
+
+    // ASSERT (BINDING): Exactly ONE enqueue (no duplicate paid render)
+    // EXPECTED TO FAIL under current code (both will enqueue) — this is the RED
+    assert_eq!(
+        client.get_enqueued().len(),
+        1,
+        "Concurrent creates MUST enqueue exactly once (no duplicate paid render). \
+         Current code may fail this — that's the bug we're fixing."
+    );
+}
+
+/// Proptest: For N identical create attempts (same user, key, body) against a single
+/// InMemory store, exactly ONE is "created" (enqueues) and the rest are "existing" (no enqueue).
+#[cfg(test)]
+mod concurrency_properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn prop_n_identical_creates_enqueue_exactly_once(
+            n in 2usize..5usize,
+            title in ".{1,50}",
+            prompt in ".{1,100}",
+        ) {
+            let store = Arc::new(InMemoryJobStore::new());
+            let client = Arc::new(MockOpenMontageClient::new());
+            let hub = OpenMontageStreamHub::new();
+            let service = OpenMontageService::new(store, client.clone(), hub);
+
+            let dto = CreateJobDto {
+                title,
+                prompt,
+                target_platform: "youtube".to_string(),
+                pipeline: Some("animated-explainer".to_string()),
+                idempotency_key: Some("shared-key".to_string()),
+                ..Default::default()
+            };
+
+            // Simulate N sequential identical creates
+            let mut job_ids = Vec::new();
+            for _ in 0..n {
+                let result = service.create_job(1, "tenant-1", dto.clone());
+                prop_assert!(result.is_ok(), "All creates should succeed (idempotency)");
+                job_ids.push(result.unwrap().job_id);
+            }
+
+            // Property 1: All job_ids are identical
+            let first_id = &job_ids[0];
+            for id in &job_ids {
+                prop_assert_eq!(id, first_id, "All creates should return the same job_id");
+            }
+
+            // Property 2 (BINDING): Exactly ONE enqueue
+            prop_assert_eq!(
+                client.get_enqueued().len(),
+                1,
+                "N identical creates should enqueue exactly once, not {} times",
+                n
+            );
+        }
+    }
+}
