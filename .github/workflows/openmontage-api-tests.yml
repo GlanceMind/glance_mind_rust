@@ -1,0 +1,148 @@
+name: OpenMontage API Tests
+
+on:
+  push:
+    branches: [main, "omx-6pipe/**"]
+    paths:
+      - "crates/api/src/**/openmontage*"
+      - "crates/api/tests/openmontage*"
+      - "crates/db/**"
+      - ".github/workflows/openmontage-api-tests.yml"
+  pull_request:
+    paths:
+      - "crates/api/src/**/openmontage*"
+      - "crates/api/tests/openmontage*"
+      - "crates/db/**"
+      - ".github/workflows/openmontage-api-tests.yml"
+
+jobs:
+  facade-and-proptest:
+    name: Facade, Store Wiring, and Service PropTests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: glancemind_test
+        ports:
+          - 15432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:15432/glancemind_test
+      REDIS_URL: redis://localhost:6379
+      RUST_BACKTRACE: 1
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev protobuf-compiler libpq-dev postgresql-client
+
+      - name: Apply database migrations
+        run: |
+          set -uo pipefail
+          export PGPASSWORD=postgres
+
+          mapfile -t pending < <(find crates/db/migrations -name "up.sql" | sort)
+
+          pass=1
+          while [ ${#pending[@]} -gt 0 ]; do
+            echo "--- Migration pass ${pass} (${#pending[@]} files) ---"
+            progress=0
+            next_pending=()
+            for migration in "${pending[@]}"; do
+              name=$(basename "$(dirname "$migration")")
+              if psql -v ON_ERROR_STOP=1 -1 -h localhost -p 15432 -U postgres -d glancemind_test -f "$migration" > /dev/null 2>&1; then
+                echo "  OK: $name"
+                progress=$((progress + 1))
+              else
+                next_pending+=("$migration")
+              fi
+            done
+            if [ ${#next_pending[@]} -eq 0 ]; then break; fi
+            if [ "$progress" -eq 0 ]; then
+              echo "ERROR: No progress in pass ${pass}. Remaining:"
+              for m in "${next_pending[@]}"; do echo "  $(basename "$(dirname "$m")")"; done
+              exit 1
+            fi
+            pending=("${next_pending[@]}")
+            pass=$((pass + 1))
+          done
+
+          echo "All migrations applied."
+
+          # Seed test data if init script exists
+          if [ -f crates/db/docker/init-test-data.sql ]; then
+            psql -h localhost -p 15432 -U postgres -d glancemind_test \
+              -f crates/db/docker/init-test-data.sql > /dev/null
+            echo "Test seed data applied."
+          fi
+
+      - name: Run facade tests
+        run: cargo test -p glance_mind_api --test openmontage_facade_test
+
+      - name: Run store wiring tests
+        run: cargo test -p glance_mind_api --test openmontage_store_wiring_test
+
+      - name: Run service unit tests and proptests
+        run: |
+          cargo test -p glance_mind_api openmontage_service
+
+  mutation-gate:
+    name: Mutation Testing (OMX-changed files)
+    runs-on: ubuntu-latest
+    continue-on-error: false
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants --locked
+
+      - name: Generate PR diff
+        run: |
+          git fetch origin main
+          git diff origin/main...HEAD > pr.diff
+
+      - name: Run mutation testing on changed OpenMontage files
+        run: |
+          if [ -s pr.diff ]; then
+            cargo mutants --in-diff pr.diff -- --package glance_mind_api
+          else
+            echo "No diff found — skipping mutation testing"
+          fi
