@@ -60,7 +60,14 @@ pub fn validate_input_mode_for_pipeline(
     // Define the contract table
     let contract = match pipeline {
         "animated-explainer" => (vec![InputMode::TextToVideo], vec![]),
-        "animation" => (vec![InputMode::TextToVideo], vec![]),
+        "animation" => (
+            vec![
+                InputMode::TextToVideo,
+                InputMode::ImageToVideo,
+                InputMode::FirstLastFrame,
+            ],
+            vec![],
+        ),
         "avatar-spokesperson" => (
             vec![InputMode::SourceScript, InputMode::TextToVideo],
             vec!["avatar"],

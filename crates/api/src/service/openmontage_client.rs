@@ -204,6 +204,11 @@ impl MockOpenMontageClient {
     pub fn last_enqueued_run(&self) -> Option<WorkerEnvelope> {
         self.enqueued.lock().unwrap().last().cloned()
     }
+
+    /// Returns the number of enqueued jobs (for testing enqueue vs. rejection)
+    pub fn enqueue_count(&self) -> usize {
+        self.enqueued.lock().unwrap().len()
+    }
 }
 
 impl Default for MockOpenMontageClient {

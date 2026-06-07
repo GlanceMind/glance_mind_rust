@@ -130,6 +130,7 @@ impl OpenMontageService {
         let mut request_json = dto.to_protocol_request(server_ctx);
 
         // M2: Resolve asset_ids and build assets/tool_invocations based on input_mode
+        let mut resolved_asset_roles = Vec::new();
         if let Some(ref asset_ids) = dto.asset_ids {
             if !asset_ids.is_empty() {
                 let mut assets_array = Vec::new();
@@ -142,6 +143,9 @@ impl OpenMontageService {
                         .get_asset(asset_id)
                         .map_err(|e| format!("Failed to fetch asset {}: {}", asset_id, e))?
                         .ok_or_else(|| format!("Asset not found: {}", asset_id))?;
+
+                    // M4-T3: Collect resolved asset roles for per-pipeline validation
+                    resolved_asset_roles.push(asset.role.clone());
 
                     assets_array.push(serde_json::json!({
                         "asset_id": asset.asset_id,
@@ -201,6 +205,19 @@ impl OpenMontageService {
                 scan_json_for_secrets(&assets_value, "resolved_assets")
                     .map_err(|e| format!("secret_material_rejected: {}", e))?;
             }
+        }
+
+        // M4-T3: Validate per-pipeline required asset roles (hybrid requires source_video)
+        if let Some(ref input_mode_str) = dto.input_mode {
+            use crate::dto::openmontage_dto::{validate_input_mode_for_pipeline, InputMode};
+
+            // Parse input_mode string to InputMode enum
+            let input_mode: InputMode = serde_json::from_str(&format!("\"{}\"", input_mode_str))
+                .map_err(|_| format!("Invalid input_mode: {}", input_mode_str))?;
+
+            // Validate input_mode + required asset roles for this pipeline
+            validate_input_mode_for_pipeline(pipeline, input_mode, &resolved_asset_roles)
+                .map_err(|e| format!("validation_error: {}", e))?;
         }
 
         let new_job = NewJob {

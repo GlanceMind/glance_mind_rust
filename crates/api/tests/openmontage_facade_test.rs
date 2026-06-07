@@ -436,6 +436,7 @@ async fn to_protocol_request_maps_image_to_video() {
         title: "Image to Video Test".to_string(),
         prompt: "Animate this image".to_string(),
         target_platform: "youtube".to_string(),
+        pipeline: Some("animation".to_string()), // animation supports image_to_video
         input_mode: Some("image_to_video".to_string()),
         asset_ids: Some(vec![asset_id.clone()]),
         duration_seconds: Some(5),
@@ -526,6 +527,7 @@ async fn to_protocol_request_maps_first_last_frame() {
         title: "First Last Frame Test".to_string(),
         prompt: "Interpolate between frames".to_string(),
         target_platform: "tiktok".to_string(),
+        pipeline: Some("animation".to_string()), // animation supports first_last_frame
         input_mode: Some("first_last_frame".to_string()),
         asset_ids: Some(vec![start_id, end_id]),
         ..Default::default()
@@ -592,6 +594,7 @@ async fn to_protocol_request_reference_driven_has_no_generation_invocation() {
         title: "Reference Driven Test".to_string(),
         prompt: "Match this style".to_string(),
         target_platform: "youtube".to_string(),
+        pipeline: Some("cinematic".to_string()), // cinematic supports reference_driven
         input_mode: Some("reference_driven".to_string()),
         asset_ids: Some(vec![ref_vid_id]),
         ..Default::default()
