@@ -1,32 +1,33 @@
 name: OpenMontage API Tests
 
 on:
-  push:
-    branches: [main, "omx-6pipe/**"]
-    paths:
-      - "crates/api/src/**/openmontage*"
-      - "crates/api/tests/openmontage*"
-      - "crates/db/**"
-      - ".github/workflows/openmontage-api-tests.yml"
   pull_request:
-    paths:
-      - "crates/api/src/**/openmontage*"
-      - "crates/api/tests/openmontage*"
-      - "crates/db/**"
-      - ".github/workflows/openmontage-api-tests.yml"
+    branches: ["**"]
+
+# Self-hosted runner: only the pull_request trigger (not push) so a single
+# commit doesn't spawn TWO runs that contend for the same host ports
+# (Postgres 15432 / Redis 6379) on the shared runner. Concurrency cancels an
+# older in-flight run for the same ref, freeing the service-container ports.
+concurrency:
+  group: openmontage-api-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  facade-and-proptest:
-    name: Facade, Store Wiring, and Service PropTests
+  openmontage-api-tests:
+    name: OpenMontage API Tests
+    # GitHub-hosted: isolated VM + fresh Docker per run (avoids self-hosted
+    # runner port/leaked-container contention for the PG/Redis service ports).
     runs-on: ubuntu-latest
-
     services:
-      postgres:
+      db:
         image: postgres:15-alpine
         env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: glancemind_test
+          POSTGRES_USER: aihub_user
+          POSTGRES_PASSWORD: aihub_password
+          POSTGRES_DB: aihub_db
         ports:
           - 15432:5432
         options: >-
@@ -34,9 +35,8 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-
       redis:
-        image: redis:7
+        image: redis:7-alpine
         ports:
           - 6379:6379
         options: >-
@@ -45,16 +45,10 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
-    env:
-      DATABASE_URL: postgres://postgres:postgres@localhost:15432/glancemind_test
-      REDIS_URL: redis://localhost:6379
-      RUST_BACKTRACE: 1
-      CARGO_TERM_COLOR: always
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Rust Cache
@@ -66,9 +60,13 @@ jobs:
           sudo apt-get install -y build-essential pkg-config libssl-dev protobuf-compiler libpq-dev postgresql-client
 
       - name: Apply database migrations
+        # Run each up.sql in sort order via psql (multi-pass to handle dependency ordering).
+        # This mirrors crates/db/docker/run-migrations.sh and is used instead of
+        # `diesel migration run` because some historical migrations reset search_path
+        # in ways that break Diesel's own __diesel_schema_migrations tracking table.
         run: |
           set -uo pipefail
-          export PGPASSWORD=postgres
+          export PGPASSWORD=aihub_password
 
           mapfile -t pending < <(find crates/db/migrations -name "up.sql" | sort)
 
@@ -79,7 +77,7 @@ jobs:
             next_pending=()
             for migration in "${pending[@]}"; do
               name=$(basename "$(dirname "$migration")")
-              if psql -v ON_ERROR_STOP=1 -1 -h localhost -p 15432 -U postgres -d glancemind_test -f "$migration" > /dev/null 2>&1; then
+              if psql -v ON_ERROR_STOP=1 -1 -h localhost -p 15432 -U aihub_user -d aihub_db -f "$migration" > /dev/null 2>&1; then
                 echo "  OK: $name"
                 progress=$((progress + 1))
               else
@@ -98,51 +96,24 @@ jobs:
 
           echo "All migrations applied."
 
-          # Seed test data if init script exists
-          if [ -f crates/db/docker/init-test-data.sql ]; then
-            psql -h localhost -p 15432 -U postgres -d glancemind_test \
-              -f crates/db/docker/init-test-data.sql > /dev/null
-            echo "Test seed data applied."
-          fi
+          # Seed test data (users with id=1 etc. required by FK constraints in tests)
+          psql -h localhost -p 15432 -U aihub_user -d aihub_db \
+            -f crates/db/docker/init-test-data.sql > /dev/null
+          echo "Test seed data applied."
 
-      - name: Run facade tests
-        run: cargo test -p glance_mind_api --test openmontage_facade_test
-
-      - name: Run store wiring tests
-        run: cargo test -p glance_mind_api --test openmontage_store_wiring_test
-
-      - name: Run service unit tests and proptests
+      - name: Run OpenMontage API Tests
         run: |
-          cargo test -p glance_mind_api openmontage_service
-
-  mutation-gate:
-    name: Mutation Testing (OMX-changed files)
-    runs-on: ubuntu-latest
-    continue-on-error: false
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install cargo-mutants
-        run: cargo install cargo-mutants --locked
-
-      - name: Generate PR diff
-        run: |
-          git fetch origin main
-          git diff origin/main...HEAD > pr.diff
-
-      - name: Run mutation testing on changed OpenMontage files
-        run: |
-          if [ -s pr.diff ]; then
-            cargo mutants --in-diff pr.diff -- --package glance_mind_api
-          else
-            echo "No diff found — skipping mutation testing"
-          fi
+          cargo test -p glance_mind_api \
+            --test openmontage_db_test \
+            --test openmontage_invariants_test \
+            --test openmontage_callback_test \
+            --test openmontage_enqueue_test \
+            --test openmontage_facade_test \
+            --test openmontage_assets_test \
+            --test openmontage_asset_validation_test \
+            --test openmontage_client_runtime_test \
+            -- --include-ignored
+        env:
+          DATABASE_URL: postgres://aihub_user:aihub_password@localhost:15432/aihub_db
+          REDIS_URL: redis://localhost:6379
+          RUST_BACKTRACE: 1

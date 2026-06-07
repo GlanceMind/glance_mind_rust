@@ -60,114 +60,85 @@ impl RedisOpenMontageClient {
         Ok(Self::new(client))
     }
 
-    async fn enqueue_internal(&self, envelope: WorkerEnvelope) -> Result<(), String> {
-        let client = self.client.clone();
+    /// Synchronous RPUSH of an envelope onto the worker queue.
+    ///
+    /// IMPORTANT: this MUST stay synchronous (no nested `Runtime::new()` +
+    /// `block_on`). These trait methods are invoked from inside async axum
+    /// handlers, i.e. on a tokio worker thread; spinning up a new multi-thread
+    /// runtime and calling `block_on` there panics at runtime with "Cannot
+    /// start a runtime from within a runtime". The redis crate's blocking
+    /// client works fine on a runtime worker thread (same pattern used by
+    /// `lib.rs::init_redis`).
+    fn rpush_envelope(&self, envelope: WorkerEnvelope) -> Result<(), String> {
         let payload =
             serde_json::to_string(&envelope).map_err(|e| format!("serialize envelope: {}", e))?;
-
-        tokio::task::spawn_blocking(move || {
-            let mut conn = client
-                .get_connection()
-                .map_err(|e| format!("Redis connection error: {}", e))?;
-            let _: i64 = redis::cmd("RPUSH")
-                .arg(OPENMONTAGE_QUEUE_KEY)
-                .arg(payload)
-                .query(&mut conn)
-                .map_err(|e| format!("Redis RPUSH error: {}", e))?;
-            Ok::<(), String>(())
-        })
-        .await
-        .map_err(|e| format!("enqueue join error: {}", e))??;
-
+        let mut conn = self
+            .client
+            .get_connection()
+            .map_err(|e| format!("Redis connection error: {}", e))?;
+        let _: i64 = redis::cmd("RPUSH")
+            .arg(OPENMONTAGE_QUEUE_KEY)
+            .arg(payload)
+            .query(&mut conn)
+            .map_err(|e| format!("Redis RPUSH error: {}", e))?;
         Ok(())
+    }
+
+    /// Synchronous GET of a JSON string value (used by preflight/pipelines).
+    fn get_string(&self, key: &str) -> Result<Option<String>, String> {
+        let mut conn = self
+            .client
+            .get_connection()
+            .map_err(|e| format!("Redis connection error: {}", e))?;
+        redis::cmd("GET")
+            .arg(key)
+            .query(&mut conn)
+            .map_err(|e| format!("Redis GET error: {}", e))
     }
 }
 
 impl OpenMontageClient for RedisOpenMontageClient {
     fn enqueue_run(&self, envelope: WorkerEnvelope) -> Result<(), String> {
-        let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio runtime: {}", e))?;
-        rt.block_on(self.enqueue_internal(envelope))
+        self.rpush_envelope(envelope)
     }
 
     fn enqueue_resume(&self, envelope: WorkerEnvelope) -> Result<(), String> {
-        let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio runtime: {}", e))?;
-        rt.block_on(self.enqueue_internal(envelope))
+        self.rpush_envelope(envelope)
     }
 
     fn set_cancel_flag(&self, job_id: &str) -> Result<(), String> {
         let key = format!("openmontage:job:{}:cancel", job_id);
-        let client = self.client.clone();
-        let key_owned = key.clone();
-
-        let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio runtime: {}", e))?;
-
-        rt.block_on(tokio::task::spawn_blocking(move || {
-            let mut conn = client
-                .get_connection()
-                .map_err(|e| format!("Redis connection error: {}", e))?;
-            let _: () = redis::cmd("SET")
-                .arg(&key_owned)
-                .arg("1")
-                .query(&mut conn)
-                .map_err(|e| format!("Redis SET error: {}", e))?;
-            Ok::<(), String>(())
-        }))
-        .map_err(|e| format!("set_cancel_flag join error: {}", e))??;
-
+        let mut conn = self
+            .client
+            .get_connection()
+            .map_err(|e| format!("Redis connection error: {}", e))?;
+        let _: () = redis::cmd("SET")
+            .arg(&key)
+            .arg("1")
+            .query(&mut conn)
+            .map_err(|e| format!("Redis SET error: {}", e))?;
         Ok(())
     }
 
     fn read_preflight(&self) -> Result<Option<PreflightDto>, String> {
-        let key = "openmontage:preflight";
-        let client = self.client.clone();
-
-        let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio runtime: {}", e))?;
-
-        let value: Option<String> = rt
-            .block_on(tokio::task::spawn_blocking(move || {
-                let mut conn = client
-                    .get_connection()
-                    .map_err(|e| format!("Redis connection error: {}", e))?;
-                redis::cmd("GET")
-                    .arg(key)
-                    .query(&mut conn)
-                    .map_err(|e| format!("Redis GET error: {}", e))
-            }))
-            .map_err(|e| format!("read_preflight join error: {}", e))??;
-
-        if let Some(json_str) = value {
-            let dto = serde_json::from_str(&json_str)
-                .map_err(|e| format!("parse preflight JSON: {}", e))?;
-            Ok(Some(dto))
-        } else {
-            Ok(None)
+        match self.get_string("openmontage:preflight")? {
+            Some(json_str) => {
+                let dto = serde_json::from_str(&json_str)
+                    .map_err(|e| format!("parse preflight JSON: {}", e))?;
+                Ok(Some(dto))
+            }
+            None => Ok(None),
         }
     }
 
     fn read_pipelines(&self) -> Result<Option<PipelinesDto>, String> {
-        let key = "openmontage:pipelines";
-        let client = self.client.clone();
-
-        let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio runtime: {}", e))?;
-
-        let value: Option<String> = rt
-            .block_on(tokio::task::spawn_blocking(move || {
-                let mut conn = client
-                    .get_connection()
-                    .map_err(|e| format!("Redis connection error: {}", e))?;
-                redis::cmd("GET")
-                    .arg(key)
-                    .query(&mut conn)
-                    .map_err(|e| format!("Redis GET error: {}", e))
-            }))
-            .map_err(|e| format!("read_pipelines join error: {}", e))??;
-
-        if let Some(json_str) = value {
-            let dto = serde_json::from_str(&json_str)
-                .map_err(|e| format!("parse pipelines JSON: {}", e))?;
-            Ok(Some(dto))
-        } else {
-            Ok(None)
+        match self.get_string("openmontage:pipelines")? {
+            Some(json_str) => {
+                let dto = serde_json::from_str(&json_str)
+                    .map_err(|e| format!("parse pipelines JSON: {}", e))?;
+                Ok(Some(dto))
+            }
+            None => Ok(None),
         }
     }
 }

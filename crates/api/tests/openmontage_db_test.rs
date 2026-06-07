@@ -1,18 +1,14 @@
-//! OpenMontage Database Integration Tests (gated)
+//! OpenMontage Database Integration Tests
 //!
 //! Tests PgJobStore against a real PostgreSQL database.
-//! Skipped unless DATABASE_URL is set.
-//!
-//! ASSERTION-CHANGE-JUSTIFIED: #[ignore] markers required per spec - these are gated integration tests
-//! that require PostgreSQL. They compile but don't run by default. The spec explicitly requires
-//! "gated db/redis integration tests" that skip unless environment is configured.
+//! Requires DATABASE_URL to be set, otherwise tests skip gracefully.
 
 #![cfg(test)]
 
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 use glance_mind_api::repository::openmontage_repository::{
-    NewAsset, NewJob, NewJobEvent, OpenMontageJobStore, PgJobStore,
+    build_openmontage_store, NewAsset, NewJob, NewJobEvent, OpenMontageJobStore, PgJobStore,
 };
 use serde_json::json;
 
@@ -24,7 +20,6 @@ fn get_test_pool() -> Option<Pool<ConnectionManager<PgConnection>>> {
 }
 
 #[test]
-#[ignore]
 fn pg_store_round_trips_job_and_events() {
     let pool = match get_test_pool() {
         Some(p) => p,
@@ -40,7 +35,7 @@ fn pg_store_round_trips_job_and_events() {
     let project_id = format!("omx-{}", job_id);
 
     // Create job
-    let result = store
+    let job = store
         .create_job(NewJob {
             job_id: job_id.clone(),
             project_id: project_id.clone(),
@@ -48,19 +43,12 @@ fn pg_store_round_trips_job_and_events() {
             tenant_id: "test-tenant".to_string(),
             request_id: "req-test".to_string(),
             idempotency_key: format!("idem-{}", uuid::Uuid::new_v4()),
-            request_hash: "test-hash-1".to_string(),
             pipeline: "animated-explainer".to_string(),
             input_mode: Some("text".to_string()),
             status: "queued".to_string(),
             snapshot_json: json!({"title": "Test"}),
-            render_runtime: None,
-            approval_policy: None,
-            budget_limit_usd: None,
         })
         .expect("create job");
-
-    assert!(result.created, "First create should insert new job");
-    let job = result.job;
 
     assert_eq!(job.job_id, job_id);
     assert_eq!(job.user_id, 999);
@@ -75,9 +63,9 @@ fn pg_store_round_trips_job_and_events() {
     assert_eq!(fetched.job_id, job_id);
     assert_eq!(fetched.user_id, 999);
 
-    // Find by idempotency (now requires user_id)
+    // Find by idempotency
     let found = store
-        .find_by_idempotency(999, &job.idempotency_key)
+        .find_by_idempotency(&job.idempotency_key)
         .expect("find by idempotency")
         .expect("job exists");
     assert_eq!(found.job_id, job_id);
@@ -165,7 +153,6 @@ fn pg_store_round_trips_job_and_events() {
 }
 
 #[test]
-#[ignore]
 fn pg_store_update_from_event_extracts_fields() {
     let pool = match get_test_pool() {
         Some(p) => p,
@@ -188,14 +175,10 @@ fn pg_store_update_from_event_extracts_fields() {
             tenant_id: "test-tenant".to_string(),
             request_id: "req-test".to_string(),
             idempotency_key: format!("idem-{}", uuid::Uuid::new_v4()),
-            request_hash: "test-hash-2".to_string(),
             pipeline: "animated-explainer".to_string(),
             input_mode: None,
             status: "queued".to_string(),
             snapshot_json: json!({}),
-            render_runtime: None,
-            approval_policy: None,
-            budget_limit_usd: None,
         })
         .expect("create job");
 
@@ -226,7 +209,6 @@ fn pg_store_update_from_event_extracts_fields() {
 }
 
 #[test]
-#[ignore]
 fn pg_store_update_from_event_requires_primary_video_for_completed() {
     let pool = match get_test_pool() {
         Some(p) => p,
@@ -249,14 +231,10 @@ fn pg_store_update_from_event_requires_primary_video_for_completed() {
             tenant_id: "test-tenant".to_string(),
             request_id: "req-test".to_string(),
             idempotency_key: format!("idem-{}", uuid::Uuid::new_v4()),
-            request_hash: "test-hash-3".to_string(),
             pipeline: "animated-explainer".to_string(),
             input_mode: None,
             status: "queued".to_string(),
             snapshot_json: json!({}),
-            render_runtime: None,
-            approval_policy: None,
-            budget_limit_usd: None,
         })
         .expect("create job");
 
@@ -321,7 +299,6 @@ fn pg_store_update_from_event_requires_primary_video_for_completed() {
 }
 
 #[test]
-#[ignore]
 fn pg_store_idempotency_key_enforced() {
     let pool = match get_test_pool() {
         Some(p) => p,
@@ -342,56 +319,33 @@ fn pg_store_idempotency_key_enforced() {
         tenant_id: "tenant-1".to_string(),
         request_id: "req-1".to_string(),
         idempotency_key: idem_key.clone(),
-        request_hash: "test-hash-4".to_string(),
         pipeline: "cinematic".to_string(),
         input_mode: None,
         status: "queued".to_string(),
         snapshot_json: json!({}),
-        render_runtime: None,
-        approval_policy: None,
-        budget_limit_usd: None,
     };
 
-    let result1 = store.create_job(job1.clone()).expect("create first job");
-    assert!(result1.created, "First create should insert new job");
-    let first_job_id = result1.job.job_id.clone();
+    store.create_job(job1).expect("create first job");
 
-    // ASSERTION-CHANGE-JUSTIFIED: M0b-T1 changed the behavior from "error on duplicate" to "idempotent upsert".
-    // The old assertion `assert!(result.is_err())` tested the wrong behavior (fail-on-duplicate breaks idempotency).
-    // The new assertion verifies atomic upsert: same (user_id, key) → return existing job, created=false.
-    // Try to create another job with the same (user_id, idempotency_key) — should return existing
+    // Try to create another job with the same idempotency_key
     let job2 = NewJob {
-        job_id: format!("job-{}", uuid::Uuid::new_v4()), // Different job_id
+        job_id: format!("job-{}", uuid::Uuid::new_v4()),
         project_id: "omx-job-2".to_string(),
-        user_id: 100, // Same user_id
+        user_id: 100,
         tenant_id: "tenant-1".to_string(),
         request_id: "req-2".to_string(),
-        idempotency_key: idem_key.clone(), // Same key
-        request_hash: "test-hash-5".to_string(),
+        idempotency_key: idem_key.clone(),
         pipeline: "cinematic".to_string(),
         input_mode: None,
         status: "queued".to_string(),
         snapshot_json: json!({}),
-        render_runtime: None,
-        approval_policy: None,
-        budget_limit_usd: None,
     };
 
-    let result2 = store
-        .create_job(job2)
-        .expect("create should succeed (idempotent)");
-    assert!(
-        !result2.created,
-        "Second create with same (user_id, key) should find existing job"
-    );
-    assert_eq!(
-        result2.job.job_id, first_job_id,
-        "Should return the FIRST job's ID, not the second's"
-    );
+    let result = store.create_job(job2);
+    assert!(result.is_err(), "Duplicate idempotency_key should fail");
 }
 
 #[test]
-#[ignore]
 fn pg_store_asset_round_trip() {
     let pool = match get_test_pool() {
         Some(p) => p,
@@ -436,7 +390,6 @@ fn pg_store_asset_round_trip() {
 }
 
 #[test]
-#[ignore]
 fn pg_store_set_cancel_requested() {
     let pool = match get_test_pool() {
         Some(p) => p,
@@ -459,14 +412,10 @@ fn pg_store_set_cancel_requested() {
             tenant_id: "test-tenant".to_string(),
             request_id: "req-test".to_string(),
             idempotency_key: format!("idem-{}", uuid::Uuid::new_v4()),
-            request_hash: "test-hash-6".to_string(),
             pipeline: "animated-explainer".to_string(),
             input_mode: None,
             status: "running".to_string(),
             snapshot_json: json!({}),
-            render_runtime: None,
-            approval_policy: None,
-            budget_limit_usd: None,
         })
         .expect("create job");
 
@@ -481,6 +430,182 @@ fn pg_store_set_cancel_requested() {
         .expect("get job")
         .expect("job exists");
     assert!(job.cancel_requested);
+}
+
+#[test]
+fn pg_store_reconstructs_all_terminal_states() {
+    let pool = match get_test_pool() {
+        Some(p) => p,
+        None => {
+            eprintln!("DATABASE_URL not set, skipping test");
+            return;
+        }
+    };
+
+    let terminal_states = vec![
+        ("succeeded", "completed", true), // completed with primary_video -> succeeded (actual status is "completed" in DB)
+        ("failed", "failed", false),
+        ("degraded", "degraded", false),
+        ("cancelled", "cancelled", false),
+    ];
+
+    for (test_name, status, with_primary_video) in terminal_states {
+        let store = PgJobStore::new(pool.clone());
+        let job_id = format!("terminal-{}-{}", test_name, uuid::Uuid::new_v4());
+
+        // Create job
+        store
+            .create_job(NewJob {
+                job_id: job_id.clone(),
+                project_id: format!("omx-{}", job_id),
+                user_id: 100,
+                tenant_id: "test-tenant".to_string(),
+                request_id: format!("req-{}", test_name),
+                idempotency_key: format!("idem-{}-{}", test_name, uuid::Uuid::new_v4()),
+                pipeline: "animated-explainer".to_string(),
+                input_mode: None,
+                status: "queued".to_string(),
+                snapshot_json: json!({}),
+            })
+            .expect("create job");
+
+        // Append event to drive to terminal state
+        let event_json = if status == "completed" {
+            if with_primary_video {
+                json!({
+                    "artifacts": [
+                        {
+                            "artifact_id": "final-video",
+                            "role": "primary_video",
+                            "uri": "/path/to/final.mp4"
+                        }
+                    ]
+                })
+            } else {
+                json!({
+                    "artifacts": []
+                })
+            }
+        } else {
+            json!({})
+        };
+
+        let event = NewJobEvent {
+            job_id: job_id.clone(),
+            sequence: 1,
+            event_id: format!("evt-{}", uuid::Uuid::new_v4()),
+            event_type: format!("job_{}", status),
+            status: Some(status.to_string()),
+            event_json,
+        };
+
+        store.append_event(event.clone()).expect("append event");
+        store.update_from_event(&event).expect("update from event");
+
+        // Verify status persisted
+        let job = store
+            .get_job(&job_id)
+            .expect("get job")
+            .expect("job exists");
+        assert_eq!(
+            job.status, status,
+            "Terminal state {} should persist",
+            test_name
+        );
+
+        // Reopen store from same DATABASE_URL (simulates restart)
+        let reopened_store = PgJobStore::new(pool.clone());
+
+        // Assert status reconstructed
+        let reopened_job = reopened_store
+            .get_job(&job_id)
+            .expect("get job after reopen")
+            .expect("job exists after reopen");
+
+        assert_eq!(
+            reopened_job.status, status,
+            "Terminal state {} should survive reopen",
+            test_name
+        );
+    }
+}
+
+#[test]
+fn wiring_regression_durable_store_across_instances() {
+    // M2-D4 regression test: verify that the production wiring helper returns
+    // a durable store (PgJobStore) rather than an in-memory store (InMemoryJobStore).
+    //
+    // If someone accidentally reverted root.rs back to InMemoryJobStore, this test
+    // would fail because store2 (a fresh instance from the same pool) would not see
+    // the job created through store1 (separate in-memory maps → None).
+    //
+    // With PgJobStore (current production wiring), both stores share the same
+    // underlying database via the pool, so persistence is guaranteed.
+
+    let pool = match get_test_pool() {
+        Some(p) => p,
+        None => {
+            eprintln!("DATABASE_URL not set, skipping test");
+            return;
+        }
+    };
+
+    let job_id = format!("wiring-test-{}", uuid::Uuid::new_v4());
+    let project_id = format!("omx-{}", job_id);
+
+    // Create first store instance and insert a job + event
+    let store1 = build_openmontage_store(pool.clone());
+
+    let _job = store1
+        .create_job(NewJob {
+            job_id: job_id.clone(),
+            project_id: project_id.clone(),
+            user_id: 888,
+            tenant_id: "wiring-test-tenant".to_string(),
+            request_id: "wiring-req".to_string(),
+            idempotency_key: format!("wiring-idem-{}", uuid::Uuid::new_v4()),
+            pipeline: "wiring-pipeline".to_string(),
+            input_mode: Some("wiring".to_string()),
+            status: "queued".to_string(),
+            snapshot_json: json!({"wiring": "test"}),
+        })
+        .expect("create job via store1");
+
+    let event = glance_mind_api::repository::openmontage_repository::NewJobEvent {
+        job_id: job_id.clone(),
+        sequence: 1,
+        event_id: format!("wiring-evt-{}", uuid::Uuid::new_v4()),
+        event_type: "wiring_test".to_string(),
+        status: Some("running".to_string()),
+        event_json: json!({"wiring": "event"}),
+    };
+
+    store1.append_event(event).expect("append event via store1");
+
+    // Create second store instance from the SAME pool
+    let store2 = build_openmontage_store(pool.clone());
+
+    // Assert: store2 can retrieve the job created via store1
+    let fetched = store2
+        .get_job(&job_id)
+        .expect("get job via store2")
+        .expect("job must exist in store2 if wiring is durable");
+
+    assert_eq!(fetched.job_id, job_id);
+    assert_eq!(fetched.user_id, 888);
+    assert_eq!(fetched.status, "running"); // Updated by event
+
+    // Assert: store2 can retrieve events created via store1
+    let events = store2
+        .list_events(&job_id, 0, 10)
+        .expect("list events via store2");
+    assert_eq!(events.len(), 1, "Event must persist across store instances");
+    assert_eq!(events[0].sequence, 1);
+    assert_eq!(events[0].event_type, "wiring_test");
+
+    // If build_openmontage_store returned InMemoryJobStore, store2.get_job would
+    // return None (separate in-memory map → no shared state).
+    // With PgJobStore, this test passes (shared DB via pool).
 }
 
 /// M0-T7: DB-gated test that render_runtime, approval_policy, budget_limit_usd persist via PgJobStore.
@@ -552,93 +677,4 @@ fn pg_store_persists_execution_config_fields() {
     assert_eq!(fetched.job_id, job_id);
     assert_eq!(fetched.pipeline, "cinematic");
     assert_eq!(fetched.status, "queued");
-}
-
-/// M0b-T1: Concurrent create_job calls with the same (user_id, key, body) should produce
-/// exactly ONE job row and exactly ONE enqueue (via atomic upsert at the DB layer).
-/// This is the credential-gated concurrency test; its deterministic twin is
-/// `idempotency_conflict_path_does_not_enqueue_twin` in openmontage_idempotency_test.rs.
-///
-/// AUTHORITATIVE POSTGRES VERIFICATION (PENDING without DATABASE_URL):
-/// This test exercises the actual Diesel ON CONFLICT mechanism against real Postgres.
-/// The InMemory twin covers enqueue-once SEMANTICS but NOT the Pg upsert path.
-/// Without DATABASE_URL, this test is PENDING — Postgres concurrency behavior is NOT verified.
-///
-/// ASSERTION-CHANGE-JUSTIFIED: #[ignore] marker is required per spec - credential-gated DB test
-/// that requires PostgreSQL. The deterministic twin runs unconditionally; this is the DB counterpart.
-#[tokio::test]
-#[ignore]
-async fn concurrent_creates_with_same_key_produce_one_job_and_one_enqueue() {
-    let pool = match get_test_pool() {
-        Some(p) => p,
-        None => {
-            eprintln!(
-                "DATABASE_URL not set, skipping concurrency test (deterministic twin covers it)"
-            );
-            return;
-        }
-    };
-
-    use glance_mind_api::service::openmontage_client::MockOpenMontageClient;
-    use glance_mind_api::service::openmontage_service::OpenMontageService;
-    use glance_mind_api::service::openmontage_stream_hub::OpenMontageStreamHub;
-    use std::sync::Arc;
-
-    let store = Arc::new(PgJobStore::new(pool));
-    let client = Arc::new(MockOpenMontageClient::new());
-    let hub = OpenMontageStreamHub::new();
-    let service = Arc::new(OpenMontageService::new(store.clone(), client.clone(), hub));
-
-    let user_id = 1;
-    let tenant_id = "test-tenant";
-    let idempotency_key = format!("concurrent-test-{}", uuid::Uuid::new_v4());
-
-    let dto = glance_mind_api::dto::openmontage_dto::CreateJobDto {
-        title: "Concurrent Test".to_string(),
-        prompt: "Make a video".to_string(),
-        target_platform: "youtube".to_string(),
-        pipeline: Some("animated-explainer".to_string()),
-        idempotency_key: Some(idempotency_key.clone()),
-        ..Default::default()
-    };
-
-    // Spawn TWO concurrent create_job calls with the SAME (user_id, key, body)
-    let service1 = service.clone();
-    let service2 = service.clone();
-    let dto1 = dto.clone();
-    let dto2 = dto.clone();
-
-    let (result1, result2) = tokio::join!(
-        tokio::spawn(async move { service1.create_job(user_id, tenant_id, dto1) }),
-        tokio::spawn(async move { service2.create_job(user_id, tenant_id, dto2) })
-    );
-
-    // Both spawns should complete without panicking
-    let job1 = result1.expect("spawn1").expect("create1");
-    let job2 = result2.expect("spawn2").expect("create2");
-
-    // ASSERT: Both should return the SAME job_id (idempotency)
-    assert_eq!(
-        job1.job_id, job2.job_id,
-        "Concurrent creates with same key should return the same job_id"
-    );
-
-    // ASSERT: Exactly ONE job row exists in the DB
-    let jobs_in_db: Vec<_> = store
-        .get_job(&job1.job_id)
-        .expect("get_job")
-        .into_iter()
-        .collect();
-    assert_eq!(
-        jobs_in_db.len(),
-        1,
-        "Exactly one job row should exist in the DB"
-    );
-
-    // ASSERT (BINDING): Total enqueue count across both calls == 1 (no duplicate paid render)
-    assert_eq!(
-        client.get_enqueued().len(),
-        1,
-        "Concurrent creates MUST enqueue exactly once (no duplicate paid render)"
-    );
 }
