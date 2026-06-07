@@ -35,7 +35,7 @@ fn pg_store_round_trips_job_and_events() {
     let project_id = format!("omx-{}", job_id);
 
     // Create job
-    let job = store
+    let result = store
         .create_job(NewJob {
             job_id: job_id.clone(),
             project_id: project_id.clone(),
@@ -43,13 +43,18 @@ fn pg_store_round_trips_job_and_events() {
             tenant_id: "test-tenant".to_string(),
             request_id: "req-test".to_string(),
             idempotency_key: format!("idem-{}", uuid::Uuid::new_v4()),
+            request_hash: "test-hash".to_string(),
             pipeline: "animated-explainer".to_string(),
             input_mode: Some("text".to_string()),
             status: "queued".to_string(),
             snapshot_json: json!({"title": "Test"}),
+            render_runtime: None,
+            approval_policy: None,
+            budget_limit_usd: None,
         })
         .expect("create job");
 
+    let job = result.job;
     assert_eq!(job.job_id, job_id);
     assert_eq!(job.user_id, 999);
     assert_eq!(job.status, "queued");
@@ -65,7 +70,7 @@ fn pg_store_round_trips_job_and_events() {
 
     // Find by idempotency
     let found = store
-        .find_by_idempotency(&job.idempotency_key)
+        .find_by_idempotency(999, &job.idempotency_key)
         .expect("find by idempotency")
         .expect("job exists");
     assert_eq!(found.job_id, job_id);
@@ -179,6 +184,10 @@ fn pg_store_update_from_event_extracts_fields() {
             input_mode: None,
             status: "queued".to_string(),
             snapshot_json: json!({}),
+            request_hash: "test-hash".to_string(),
+            render_runtime: None,
+            approval_policy: None,
+            budget_limit_usd: None,
         })
         .expect("create job");
 
@@ -235,6 +244,10 @@ fn pg_store_update_from_event_requires_primary_video_for_completed() {
             input_mode: None,
             status: "queued".to_string(),
             snapshot_json: json!({}),
+            request_hash: "test-hash".to_string(),
+            render_runtime: None,
+            approval_policy: None,
+            budget_limit_usd: None,
         })
         .expect("create job");
 
@@ -319,10 +332,14 @@ fn pg_store_idempotency_key_enforced() {
         tenant_id: "tenant-1".to_string(),
         request_id: "req-1".to_string(),
         idempotency_key: idem_key.clone(),
+        request_hash: "test-hash".to_string(),
         pipeline: "cinematic".to_string(),
         input_mode: None,
         status: "queued".to_string(),
         snapshot_json: json!({}),
+        render_runtime: None,
+        approval_policy: None,
+        budget_limit_usd: None,
     };
 
     store.create_job(job1).expect("create first job");
@@ -335,10 +352,14 @@ fn pg_store_idempotency_key_enforced() {
         tenant_id: "tenant-1".to_string(),
         request_id: "req-2".to_string(),
         idempotency_key: idem_key.clone(),
+        request_hash: "test-hash-2".to_string(),
         pipeline: "cinematic".to_string(),
         input_mode: None,
         status: "queued".to_string(),
         snapshot_json: json!({}),
+        render_runtime: None,
+        approval_policy: None,
+        budget_limit_usd: None,
     };
 
     let result = store.create_job(job2);
@@ -416,6 +437,10 @@ fn pg_store_set_cancel_requested() {
             input_mode: None,
             status: "running".to_string(),
             snapshot_json: json!({}),
+            request_hash: "test-hash".to_string(),
+            render_runtime: None,
+            approval_policy: None,
+            budget_limit_usd: None,
         })
         .expect("create job");
 
@@ -466,6 +491,10 @@ fn pg_store_reconstructs_all_terminal_states() {
                 input_mode: None,
                 status: "queued".to_string(),
                 snapshot_json: json!({}),
+                request_hash: "test-hash".to_string(),
+                render_runtime: None,
+                approval_policy: None,
+                budget_limit_usd: None,
             })
             .expect("create job");
 
@@ -568,6 +597,10 @@ fn wiring_regression_durable_store_across_instances() {
             input_mode: Some("wiring".to_string()),
             status: "queued".to_string(),
             snapshot_json: json!({"wiring": "test"}),
+            request_hash: "test-hash".to_string(),
+            render_runtime: None,
+            approval_policy: None,
+            budget_limit_usd: None,
         })
         .expect("create job via store1");
 

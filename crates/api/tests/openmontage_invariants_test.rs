@@ -142,9 +142,14 @@ fn t2_7_in_memory_store_is_non_transactional() {
         input_mode: Some("text".to_string()),
         status: "queued".to_string(),
         snapshot_json: serde_json::json!({"title": "T2.7 Test"}),
+        request_hash: "test-hash".to_string(),
+        render_runtime: None,
+        approval_policy: None,
+        budget_limit_usd: None,
     };
 
-    let job = store.create_job(new_job).unwrap();
+    let result = store.create_job(new_job).unwrap();
+    let job = result.job;
     assert_eq!(job.job_id, "job-t2-7");
 
     // Attempt to append an event that would succeed
@@ -219,9 +224,14 @@ mod pg_transaction_rollback_test {
             input_mode: Some("text".to_string()),
             status: "queued".to_string(),
             snapshot_json: serde_json::json!({"title": "T2.7 Transaction Test"}),
+            request_hash: "test-hash".to_string(),
+            render_runtime: None,
+            approval_policy: None,
+            budget_limit_usd: None,
         };
 
-        let job = store.create_job(new_job).unwrap();
+        let result = store.create_job(new_job).unwrap();
+        let job = result.job;
         assert_eq!(job.job_id, job_id);
 
         // Craft an event with a status that exceeds VARCHAR(50) constraint (51+ chars)
@@ -333,6 +343,10 @@ async fn t2_8_ingest_event_mutates_status_via_update_from_event() {
         input_mode: Some("text".to_string()),
         status: "queued".to_string(),
         snapshot_json: serde_json::json!({"title": "Ingest Test"}),
+        request_hash: "test-hash".to_string(),
+        render_runtime: None,
+        approval_policy: None,
+        budget_limit_usd: None,
     };
     store.create_job(new_job).unwrap();
 
@@ -354,6 +368,7 @@ async fn t2_8_ingest_event_mutates_status_via_update_from_event() {
         progress_pct: 30,
         emitted_at: "2024-01-01T12:00:00Z".to_string(),
         artifacts: vec![],
+        extra: std::collections::HashMap::new(),
     };
 
     let ack: CallbackAck = service.ingest_event(event).unwrap();
