@@ -31,6 +31,15 @@ const SECRET_TOKENS: &[&str] = &[
     "xai-",
     "fal-",
     "xi_",
+    // M0b-T5: Broadened provider secret prefixes
+    "ghp_",        // GitHub personal access token
+    "github_pat_", // GitHub fine-grained PAT
+    "AKIA",        // AWS access key
+    "ASIA",        // AWS session token
+    "AIza",        // Google Cloud API key
+    "hf_",         // HuggingFace token
+    "xoxb-",       // Slack bot token
+    "Bearer ",     // Bearer auth header (note trailing space)
 ];
 
 /// Validate that the input_mode is allowed for the given pipeline and that all required asset roles are present.
@@ -421,4 +430,54 @@ pub struct CancelResultDto {
     pub job_id: String,
     pub cancel_requested: bool,
     pub message: String,
+}
+
+// ============================================================================
+// M0b-T5: Public secret scanning and redaction utilities
+// ============================================================================
+
+/// Recursively scan a JSON value for secret-shaped tokens.
+/// Returns Err if any secret is found, Ok otherwise.
+pub fn scan_json_for_secrets(value: &JsonValue, context: &str) -> Result<(), String> {
+    check_json_for_secrets(value, context)
+}
+
+/// Recursively redact secret-shaped tokens in a JSON value.
+/// Returns a new JSON value with secrets replaced by "***REDACTED***".
+pub fn redact_secrets_in_json(value: &JsonValue) -> JsonValue {
+    match value {
+        JsonValue::String(s) => {
+            // Check if this string contains any secret token
+            for token in SECRET_TOKENS {
+                if s.to_lowercase().contains(&token.to_lowercase()) {
+                    return JsonValue::String("***REDACTED***".to_string());
+                }
+            }
+            value.clone()
+        }
+        JsonValue::Object(map) => {
+            let mut new_map = serde_json::Map::new();
+            for (k, v) in map {
+                // Check if the key itself contains a secret token
+                let mut key_has_secret = false;
+                for token in SECRET_TOKENS {
+                    if k.to_lowercase().contains(&token.to_lowercase()) {
+                        key_has_secret = true;
+                        break;
+                    }
+                }
+                if key_has_secret {
+                    new_map.insert(k.clone(), JsonValue::String("***REDACTED***".to_string()));
+                } else {
+                    new_map.insert(k.clone(), redact_secrets_in_json(v));
+                }
+            }
+            JsonValue::Object(new_map)
+        }
+        JsonValue::Array(arr) => {
+            let new_arr: Vec<JsonValue> = arr.iter().map(redact_secrets_in_json).collect();
+            JsonValue::Array(new_arr)
+        }
+        _ => value.clone(),
+    }
 }

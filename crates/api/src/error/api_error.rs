@@ -31,6 +31,9 @@ pub enum ApiError {
     #[error("Validation Error: {0}")]
     ValidationError(String),
 
+    #[error("Unprocessable Entity: {0}")]
+    UnprocessableEntity(String),
+
     // ============ Business Errors - User Related ============
     #[error("User not found")]
     UserNotFound,
@@ -152,6 +155,7 @@ impl ApiError {
             ApiError::Conflict(_) => ErrorCode::Conflict,
             ApiError::Unauthorized(_) => ErrorCode::Unauthorized,
             ApiError::ValidationError(_) => ErrorCode::ValidationError,
+            ApiError::UnprocessableEntity(_) => ErrorCode::UnprocessableEntity,
 
             // User related
             ApiError::UserNotFound => ErrorCode::UserNotFound,
@@ -217,6 +221,7 @@ impl ApiError {
             ApiError::Conflict(msg) => format!("Conflict: {}", msg),
             ApiError::Unauthorized(msg) => format!("Unauthorized: {}", msg),
             ApiError::ValidationError(msg) => format!("Validation failed: {}", msg),
+            ApiError::UnprocessableEntity(msg) => format!("Unprocessable entity: {}", msg),
             ApiError::PermissionDenied(feature) => format!("Feature not enabled: {}", feature),
             ApiError::ChargeFailed(msg) => format!("Charge failed: {}", msg),
             ApiError::PricingRuleNotFound(action) => format!("Pricing rule not found: {}", action),

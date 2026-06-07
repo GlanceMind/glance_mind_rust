@@ -215,6 +215,12 @@ impl InMemoryJobStore {
         *next += 1;
         id
     }
+
+    /// Test helper: list all jobs (for verifying enqueue count)
+    pub fn list_jobs_for_test(&self) -> Vec<Job> {
+        let data = self.data.lock().unwrap();
+        data.values().map(|s| s.job.clone()).collect()
+    }
 }
 
 impl Default for InMemoryJobStore {

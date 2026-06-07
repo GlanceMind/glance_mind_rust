@@ -33,6 +33,8 @@ pub enum ErrorCode {
     TokenInvalid = 2008,
     /// Conflict (resource exists but in incompatible state)
     Conflict = 2009,
+    /// Unprocessable Entity (request is well-formed but semantically invalid)
+    UnprocessableEntity = 2010,
 
     // ============ Server Errors (3xxx) ============
     /// Internal server error
@@ -131,6 +133,7 @@ impl ErrorCode {
             ErrorCode::TooManyRequests => "Too many requests",
             ErrorCode::TokenExpired => "Token expired",
             ErrorCode::TokenInvalid => "Token invalid",
+            ErrorCode::UnprocessableEntity => "Unprocessable entity",
 
             // Server errors
             ErrorCode::InternalServerError => "Internal server error",
@@ -198,6 +201,7 @@ impl ErrorCode {
             ErrorCode::TooManyRequests => "Too many requests, please try again later",
             ErrorCode::TokenExpired => "Session expired, please login again",
             ErrorCode::TokenInvalid => "Invalid authentication",
+            ErrorCode::UnprocessableEntity => "Unprocessable entity",
 
             // Server errors
             ErrorCode::InternalServerError => "Internal server error",
@@ -271,6 +275,7 @@ impl ErrorCode {
             | ErrorCode::SocialAccountNotFound
             | ErrorCode::PromoCodeNotFound => StatusCode::NOT_FOUND,
             ErrorCode::Conflict => StatusCode::CONFLICT,
+            ErrorCode::UnprocessableEntity => StatusCode::UNPROCESSABLE_ENTITY,
             ErrorCode::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             ErrorCode::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
             ErrorCode::PermissionDenied => StatusCode::FORBIDDEN,

@@ -161,6 +161,7 @@ impl From<i32> for ErrorCode {
             2007 => ErrorCode::TokenExpired,
             2008 => ErrorCode::TokenInvalid,
             2009 => ErrorCode::Conflict,
+            2010 => ErrorCode::UnprocessableEntity,
             3000 => ErrorCode::InternalServerError,
             3001 => ErrorCode::DatabaseError,
             3002 => ErrorCode::CacheError,

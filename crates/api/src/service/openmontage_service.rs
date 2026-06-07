@@ -189,10 +189,17 @@ impl OpenMontageService {
                     }
                 }
 
-                request_json["assets"] = serde_json::Value::Array(assets_array);
+                request_json["assets"] = serde_json::Value::Array(assets_array.clone());
                 if !tool_invocations.is_empty() {
                     request_json["tool_invocations"] = serde_json::Value::Array(tool_invocations);
                 }
+
+                // M0b-T5: Scan resolved assets for secret material
+                // After assets are resolved and merged into request_json, scan them recursively
+                use crate::dto::openmontage_dto::scan_json_for_secrets;
+                let assets_value = serde_json::Value::Array(assets_array);
+                scan_json_for_secrets(&assets_value, "resolved_assets")
+                    .map_err(|e| format!("secret_material_rejected: {}", e))?;
             }
         }
 
@@ -465,13 +472,18 @@ impl OpenMontageService {
     ) -> Result<crate::handler::openmontage_handler::CallbackAck, String> {
         let job_id = &event.job.job_id;
 
+        // M0b-T5: Redact secrets in event payload BEFORE persistence + SSE publish
+        use crate::dto::openmontage_dto::redact_secrets_in_json;
+        let raw_event_json = serde_json::to_value(&event).unwrap_or_default();
+        let redacted_event_json = redact_secrets_in_json(&raw_event_json);
+
         let new_event = NewJobEvent {
             job_id: job_id.to_string(),
             sequence: event.sequence,
             event_id: event.event_id.clone(),
             event_type: event.event_type.clone(),
             status: Some(event.status.clone()),
-            event_json: serde_json::to_value(&event).unwrap_or_default(),
+            event_json: redacted_event_json.clone(),
         };
 
         let append_result = self.store.append_event(new_event.clone())?;
@@ -479,7 +491,7 @@ impl OpenMontageService {
         if append_result.inserted {
             self.store.update_from_event(&new_event)?;
 
-            // Publish to SSE hub
+            // Publish to SSE hub (with redacted payload)
             let sse_event = OpenMontageSseEvent {
                 event_type: event.event_type.clone(),
                 job_id: job_id.to_string(),
@@ -488,7 +500,7 @@ impl OpenMontageService {
                 status: event.status.clone(),
                 stage: Some(event.stage.clone()),
                 progress_pct: event.progress_pct,
-                payload: serde_json::to_value(&event).unwrap_or_default(),
+                payload: redacted_event_json,
             };
             tokio::spawn({
                 let hub = self.hub.clone();

@@ -1081,6 +1081,7 @@ async fn ingest_completed_without_primary_video_downgrades_to_degraded() {
         stage: "finalize".to_string(),
         progress_pct: 100,
         emitted_at: chrono::Utc::now().to_rfc3339(),
+        extra: std::collections::HashMap::new(),
         artifacts: vec![
             // Some artifacts, but NO primary_video
             ArtifactDto {
@@ -1162,6 +1163,7 @@ async fn ingest_completed_with_primary_video_stays_completed() {
         stage: "finalize".to_string(),
         progress_pct: 100,
         emitted_at: chrono::Utc::now().to_rfc3339(),
+        extra: std::collections::HashMap::new(),
         artifacts: vec![ArtifactDto {
             artifact_id: "art-video-1".to_string(),
             kind: "video".to_string(),

@@ -79,8 +79,11 @@ pub async fn create_job(
     let snapshot = service
         .create_job(user.id, "default-tenant", dto)
         .map_err(|e| {
+            // M0b-T5: Secret material rejection (422 Unprocessable Entity)
+            if e.contains("secret_material_rejected") || e.contains("forbidden token") {
+                ApiError::UnprocessableEntity(e)
             // M0-T4: Map pipeline validation errors to correct HTTP status codes
-            if e.contains("not found") {
+            } else if e.contains("not found") {
                 // Pipeline not in allowlist OR not in snapshot
                 ApiError::NotFound(e)
             } else if e.contains("unavailable") || e.contains("stability:") {
@@ -542,6 +545,9 @@ pub struct OpenMontageJobEvent {
     pub emitted_at: String,
     #[serde(default)]
     pub artifacts: Vec<ArtifactDto>,
+    /// M0b-T5: Catch-all for additional fields (error, message, debug_info, etc.)
+    #[serde(flatten, default)]
+    pub extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
