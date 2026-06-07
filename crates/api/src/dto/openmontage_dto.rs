@@ -7,6 +7,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
+/// Input mode enum for OpenMontage pipelines.
+/// Strictly matches the 6 supported modes from the frontend contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputMode {
+    TextToVideo,
+    SourceScript,
+    ImageToVideo,
+    FirstLastFrame,
+    ReferenceDriven,
+    SourceClip,
+}
+
 // Secret material tokens that should never appear in user input
 const SECRET_TOKENS: &[&str] = &[
     "api_key",
@@ -18,7 +31,77 @@ const SECRET_TOKENS: &[&str] = &[
     "xai-",
     "fal-",
     "xi_",
+    // M0b-T5: Broadened provider secret prefixes
+    "ghp_",        // GitHub personal access token
+    "github_pat_", // GitHub fine-grained PAT
+    "AKIA",        // AWS access key
+    "ASIA",        // AWS session token
+    "AIza",        // Google Cloud API key
+    "hf_",         // HuggingFace token
+    "xoxb-",       // Slack bot token
+    "Bearer ",     // Bearer auth header (note trailing space)
 ];
+
+/// Validate that the input_mode is allowed for the given pipeline and that all required asset roles are present.
+/// Returns Ok if valid, Err with a message if invalid.
+///
+/// Per-pipeline contract (from OpenMontage frontend):
+/// - animated-explainer: [text_to_video], required: []
+/// - animation: [text_to_video], required: []
+/// - avatar-spokesperson: [source_script, text_to_video], required: [avatar]
+/// - cinematic: [source_clip, reference_driven, text_to_video], required: []
+/// - screen-demo: [text_to_video, source_clip], required: []
+/// - hybrid: [source_clip], required: [source_video]
+pub fn validate_input_mode_for_pipeline(
+    pipeline: &str,
+    mode: InputMode,
+    asset_roles: &[String],
+) -> Result<(), String> {
+    // Define the contract table
+    let contract = match pipeline {
+        "animated-explainer" => (vec![InputMode::TextToVideo], vec![]),
+        "animation" => (vec![InputMode::TextToVideo], vec![]),
+        "avatar-spokesperson" => (
+            vec![InputMode::SourceScript, InputMode::TextToVideo],
+            vec!["avatar"],
+        ),
+        "cinematic" => (
+            vec![
+                InputMode::SourceClip,
+                InputMode::ReferenceDriven,
+                InputMode::TextToVideo,
+            ],
+            vec![],
+        ),
+        "screen-demo" => (vec![InputMode::TextToVideo, InputMode::SourceClip], vec![]),
+        "hybrid" => (vec![InputMode::SourceClip], vec!["source_video"]),
+        _ => {
+            return Err(format!("Unknown pipeline: {}", pipeline));
+        }
+    };
+
+    let (allowed_modes, required_roles) = contract;
+
+    // Check if mode is allowed
+    if !allowed_modes.contains(&mode) {
+        return Err(format!(
+            "Input mode {:?} is not allowed for pipeline '{}'",
+            mode, pipeline
+        ));
+    }
+
+    // Check if all required roles are present
+    for required_role in required_roles {
+        if !asset_roles.iter().any(|r| r == required_role) {
+            return Err(format!(
+                "Pipeline '{}' with input mode {:?} requires asset role '{}', but it is missing",
+                pipeline, mode, required_role
+            ));
+        }
+    }
+
+    Ok(())
+}
 
 /// Server-side context injected when converting DTO to protocol request
 #[derive(Debug, Clone)]
@@ -61,8 +144,23 @@ pub struct CreateJobDto {
     pub asset_ids: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_invocations: Option<JsonValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
     #[serde(default)]
     pub metadata: JsonValue,
+    // M0b-T6: Cross-tier contract fields (frontend → Rust → engine)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_script: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice_selection: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub production_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audience: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub objective: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub brand_json: Option<JsonValue>,
 }
 
 impl CreateJobDto {
@@ -98,6 +196,22 @@ impl CreateJobDto {
         }
         if let Some(ref ap) = self.approval_policy {
             fields.push(("approval_policy", ap.clone()));
+        }
+        // M0b-T6: Include new cross-tier string fields in secret scan
+        if let Some(ref ss) = self.source_script {
+            fields.push(("source_script", ss.clone()));
+        }
+        if let Some(ref vs) = self.voice_selection {
+            fields.push(("voice_selection", vs.clone()));
+        }
+        if let Some(ref pm) = self.production_mode {
+            fields.push(("production_mode", pm.clone()));
+        }
+        if let Some(ref aud) = self.audience {
+            fields.push(("audience", aud.clone()));
+        }
+        if let Some(ref obj) = self.objective {
+            fields.push(("objective", obj.clone()));
         }
 
         // Check string fields
@@ -139,6 +253,27 @@ impl CreateJobDto {
             check_json_for_secrets(ti, "tool_invocations")?;
         }
 
+        // M0b-T6: Check brand_json for secrets (esp. nested API keys)
+        if let Some(ref bj) = self.brand_json {
+            check_json_for_secrets(bj, "brand_json")?;
+        }
+
+        Ok(())
+    }
+
+    /// Validate budget_limit_usd is finite and non-negative.
+    /// Returns Err if budget is NaN, infinite, or negative.
+    pub fn validate_budget(&self) -> Result<(), String> {
+        if let Some(budget) = self.budget_limit_usd {
+            if !budget.is_finite() {
+                return Err(
+                    "budget_limit_usd must be a finite number (not NaN or infinity)".to_string(),
+                );
+            }
+            if budget < 0.0 {
+                return Err("budget_limit_usd must be non-negative".to_string());
+            }
+        }
         Ok(())
     }
 
@@ -177,6 +312,26 @@ impl CreateJobDto {
             req["input_mode"] = JsonValue::String(im.clone());
         }
 
+        // M0b-T6: Emit cross-tier contract fields into worker request_json
+        if let Some(ref ss) = self.source_script {
+            req["source_script"] = JsonValue::String(ss.clone());
+        }
+        if let Some(ref vs) = self.voice_selection {
+            req["voice_selection"] = JsonValue::String(vs.clone());
+        }
+        if let Some(ref pm) = self.production_mode {
+            req["production_mode"] = JsonValue::String(pm.clone());
+        }
+        if let Some(ref aud) = self.audience {
+            req["audience"] = JsonValue::String(aud.clone());
+        }
+        if let Some(ref obj) = self.objective {
+            req["objective"] = JsonValue::String(obj.clone());
+        }
+        if let Some(ref bj) = self.brand_json {
+            req["brand_json"] = bj.clone();
+        }
+
         // Server-only fields
         if let Some(ref cb_secret) = server_ctx.callback_secret_ref {
             req["callback"] = serde_json::json!({
@@ -188,6 +343,48 @@ impl CreateJobDto {
         // TODO(part-3): map asset_ids to OpenMontageInputAsset[], tool_invocations to OpenMontageToolInvocation[]
 
         req
+    }
+
+    /// Build tool_invocations for the given input_mode and assets (pipeline-independent mapping).
+    /// Returns a vec of tool_invocation JSON objects.
+    /// This is the same mapping logic used in the service, extracted for unit testing.
+    pub fn build_tool_invocations_for_input_mode(
+        input_mode: &str,
+        prompt: &str,
+        duration_seconds: u32,
+        assets: &[serde_json::Value],
+    ) -> Vec<serde_json::Value> {
+        let mut tool_invocations = vec![];
+
+        match input_mode {
+            "image_to_video" => {
+                // Find reference_image asset
+                if let Some(img_asset) = assets.iter().find(|a| a["kind"] == "reference_image") {
+                    tool_invocations.push(serde_json::json!({
+                        "operation": "image_to_video",
+                        "input_json": serde_json::json!({
+                            "prompt": prompt,
+                            "image_url": img_asset["uri"],
+                            "duration": duration_seconds,
+                        }).to_string(),
+                    }));
+                }
+            }
+            "first_last_frame" => {
+                // start_frame and end_frame are already in assets_array, no tool_invocation needed
+            }
+            "reference_driven" => {
+                // reference_video is in assets_array, no direct generation invocation (worker gates it)
+            }
+            "source_clip" => {
+                // source_video is in assets_array, no tool_invocation
+            }
+            _ => {
+                // text_to_video / source_script / unknown: no tool_invocations
+            }
+        }
+
+        tool_invocations
     }
 }
 
@@ -242,6 +439,9 @@ pub struct JobSnapshotDto {
     pub created_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
+    /// M4-T5b: artifacts extracted from snapshot_json (curated brief, etc.)
+    #[serde(default)]
+    pub artifacts: Vec<crate::handler::openmontage_handler::ArtifactDto>,
 }
 
 /// Job Event DTO
@@ -329,4 +529,54 @@ pub struct CancelResultDto {
     pub job_id: String,
     pub cancel_requested: bool,
     pub message: String,
+}
+
+// ============================================================================
+// M0b-T5: Public secret scanning and redaction utilities
+// ============================================================================
+
+/// Recursively scan a JSON value for secret-shaped tokens.
+/// Returns Err if any secret is found, Ok otherwise.
+pub fn scan_json_for_secrets(value: &JsonValue, context: &str) -> Result<(), String> {
+    check_json_for_secrets(value, context)
+}
+
+/// Recursively redact secret-shaped tokens in a JSON value.
+/// Returns a new JSON value with secrets replaced by "***REDACTED***".
+pub fn redact_secrets_in_json(value: &JsonValue) -> JsonValue {
+    match value {
+        JsonValue::String(s) => {
+            // Check if this string contains any secret token
+            for token in SECRET_TOKENS {
+                if s.to_lowercase().contains(&token.to_lowercase()) {
+                    return JsonValue::String("***REDACTED***".to_string());
+                }
+            }
+            value.clone()
+        }
+        JsonValue::Object(map) => {
+            let mut new_map = serde_json::Map::new();
+            for (k, v) in map {
+                // Check if the key itself contains a secret token
+                let mut key_has_secret = false;
+                for token in SECRET_TOKENS {
+                    if k.to_lowercase().contains(&token.to_lowercase()) {
+                        key_has_secret = true;
+                        break;
+                    }
+                }
+                if key_has_secret {
+                    new_map.insert(k.clone(), JsonValue::String("***REDACTED***".to_string()));
+                } else {
+                    new_map.insert(k.clone(), redact_secrets_in_json(v));
+                }
+            }
+            JsonValue::Object(new_map)
+        }
+        JsonValue::Array(arr) => {
+            let new_arr: Vec<JsonValue> = arr.iter().map(redact_secrets_in_json).collect();
+            JsonValue::Array(new_arr)
+        }
+        _ => value.clone(),
+    }
 }

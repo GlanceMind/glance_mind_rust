@@ -1024,6 +1024,8 @@ diesel::table! {
         request_id -> Varchar,
         #[max_length = 200]
         idempotency_key -> Varchar,
+        #[max_length = 64]
+        request_hash -> Varchar,
         #[max_length = 100]
         pipeline -> Varchar,
         #[max_length = 50]

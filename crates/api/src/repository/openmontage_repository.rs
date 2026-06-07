@@ -16,10 +16,14 @@ pub struct NewJob {
     pub tenant_id: String,
     pub request_id: String,
     pub idempotency_key: String,
+    pub request_hash: String,
     pub pipeline: String,
     pub input_mode: Option<String>,
     pub status: String,
     pub snapshot_json: JsonValue,
+    pub render_runtime: Option<String>,
+    pub approval_policy: Option<String>,
+    pub budget_limit_usd: Option<f64>,
 }
 
 /// New job event data
@@ -43,6 +47,7 @@ pub struct Job {
     pub tenant_id: String,
     pub request_id: String,
     pub idempotency_key: String,
+    pub request_hash: String,
     pub pipeline: String,
     pub input_mode: Option<String>,
     pub status: String,
@@ -116,11 +121,54 @@ pub struct NewAsset {
     pub duration_ms: Option<i32>,
 }
 
+/// Result of create_job indicating whether a new job was created or an existing one was found
+#[derive(Debug, Clone)]
+pub struct CreateJobResult {
+    pub job: Job,
+    pub created: bool, // true if newly inserted, false if existing job returned
+}
+
+/// Derive the final job status from an event, applying downgrade rules.
+///
+/// If event.status is "completed" AND the event's artifacts contain NO primary_video,
+/// returns "degraded". Otherwise returns event.status unchanged.
+///
+/// This is the single source of truth for the completed→degraded rule, applied
+/// consistently in both InMemoryJobStore and PgJobStore.
+fn derive_final_status(event: &NewJobEvent) -> Option<String> {
+    let event_status = event.status.as_ref()?;
+
+    // Only apply the rule if status is "completed"
+    if event_status != "completed" {
+        return Some(event_status.clone());
+    }
+
+    // Check for primary_video artifact in event_json
+    if let Some(artifacts) = event.event_json.get("artifacts").and_then(|v| v.as_array()) {
+        let has_primary_video = artifacts.iter().any(|a| {
+            a.get("role")
+                .and_then(|r| r.as_str())
+                .map(|r| r == "primary_video")
+                .unwrap_or(false)
+        });
+
+        if has_primary_video {
+            return Some("completed".to_string());
+        } else {
+            // Completed without primary_video → degraded
+            return Some("degraded".to_string());
+        }
+    }
+
+    // No artifacts array → degraded
+    Some("degraded".to_string())
+}
+
 /// Job store trait
 pub trait OpenMontageJobStore: Send + Sync {
-    fn create_job(&self, job: NewJob) -> Result<Job, String>;
+    fn create_job(&self, job: NewJob) -> Result<CreateJobResult, String>;
     fn get_job(&self, job_id: &str) -> Result<Option<Job>, String>;
-    fn find_by_idempotency(&self, key: &str) -> Result<Option<Job>, String>;
+    fn find_by_idempotency(&self, user_id: i32, key: &str) -> Result<Option<Job>, String>;
     fn append_event(&self, event: NewJobEvent) -> Result<AppendResult, String>;
     fn list_events(
         &self,
@@ -167,6 +215,12 @@ impl InMemoryJobStore {
         *next += 1;
         id
     }
+
+    /// Test helper: list all jobs (for verifying enqueue count)
+    pub fn list_jobs_for_test(&self) -> Vec<Job> {
+        let data = self.data.lock().unwrap();
+        data.values().map(|s| s.job.clone()).collect()
+    }
 }
 
 impl Default for InMemoryJobStore {
@@ -176,16 +230,23 @@ impl Default for InMemoryJobStore {
 }
 
 impl OpenMontageJobStore for InMemoryJobStore {
-    fn create_job(&self, new_job: NewJob) -> Result<Job, String> {
+    fn create_job(&self, new_job: NewJob) -> Result<CreateJobResult, String> {
         let mut data = self.data.lock().unwrap();
 
-        // Check idempotency
+        // Atomic find-or-insert: check for existing job with (user_id, idempotency_key)
         for stored in data.values() {
-            if stored.job.idempotency_key == new_job.idempotency_key {
-                return Err("Duplicate idempotency_key".to_string());
+            if stored.job.user_id == new_job.user_id
+                && stored.job.idempotency_key == new_job.idempotency_key
+            {
+                // Found existing job — return it with created=false
+                return Ok(CreateJobResult {
+                    job: stored.job.clone(),
+                    created: false,
+                });
             }
         }
 
+        // No existing job — create new one
         let job = Job {
             id: self.allocate_id(),
             job_id: new_job.job_id.clone(),
@@ -194,15 +255,16 @@ impl OpenMontageJobStore for InMemoryJobStore {
             tenant_id: new_job.tenant_id,
             request_id: new_job.request_id,
             idempotency_key: new_job.idempotency_key,
+            request_hash: new_job.request_hash,
             pipeline: new_job.pipeline,
             input_mode: new_job.input_mode,
             status: new_job.status,
             cancel_requested: false,
             current_stage: None,
             progress_pct: 0,
-            render_runtime: None,
-            approval_policy: None,
-            budget_limit_usd: None,
+            render_runtime: new_job.render_runtime,
+            approval_policy: new_job.approval_policy,
+            budget_limit_usd: new_job.budget_limit_usd,
             last_event_sequence: 0,
             next_event_sequence: 1,
             sync_required: false,
@@ -220,7 +282,7 @@ impl OpenMontageJobStore for InMemoryJobStore {
             },
         );
 
-        Ok(job)
+        Ok(CreateJobResult { job, created: true })
     }
 
     fn get_job(&self, job_id: &str) -> Result<Option<Job>, String> {
@@ -228,10 +290,10 @@ impl OpenMontageJobStore for InMemoryJobStore {
         Ok(data.get(job_id).map(|j| j.job.clone()))
     }
 
-    fn find_by_idempotency(&self, key: &str) -> Result<Option<Job>, String> {
+    fn find_by_idempotency(&self, user_id: i32, key: &str) -> Result<Option<Job>, String> {
         let data = self.data.lock().unwrap();
         for stored in data.values() {
-            if stored.job.idempotency_key == key {
+            if stored.job.user_id == user_id && stored.job.idempotency_key == key {
                 return Ok(Some(stored.job.clone()));
             }
         }
@@ -281,8 +343,9 @@ impl OpenMontageJobStore for InMemoryJobStore {
         if gap {
             stored.job.sync_required = true;
         }
-        if let Some(ref status) = event.status {
-            stored.job.status = status.clone();
+        // Apply final status derivation (completed→degraded rule)
+        if let Some(final_status) = derive_final_status(&event) {
+            stored.job.status = final_status;
         }
         stored.job.updated_at = Some(chrono::Utc::now());
 
@@ -320,8 +383,9 @@ impl OpenMontageJobStore for InMemoryJobStore {
             .get_mut(&event.job_id)
             .ok_or_else(|| format!("Job not found: {}", event.job_id))?;
 
-        if let Some(ref status) = event.status {
-            stored.job.status = status.clone();
+        // Apply final status derivation (completed→degraded rule)
+        if let Some(final_status) = derive_final_status(event) {
+            stored.job.status = final_status;
         }
 
         // Extract stage/progress from event_json if present
@@ -331,6 +395,9 @@ impl OpenMontageJobStore for InMemoryJobStore {
         if let Some(progress) = event.event_json.get("progress").and_then(|v| v.as_i64()) {
             stored.job.progress_pct = progress as i32;
         }
+
+        // M4-T5b: Update snapshot_json with latest event data (matches Postgres impl)
+        stored.job.snapshot_json = event.event_json.clone();
 
         stored.job.updated_at = Some(chrono::Utc::now());
         Ok(())
@@ -416,7 +483,7 @@ impl PgJobStore {
 }
 
 impl OpenMontageJobStore for PgJobStore {
-    fn create_job(&self, new_job: NewJob) -> Result<Job, String> {
+    fn create_job(&self, new_job: NewJob) -> Result<CreateJobResult, String> {
         use glance_mind_db::schema::gm_openmontage_jobs::dsl::*;
 
         let mut conn = self.get_conn()?;
@@ -428,45 +495,78 @@ impl OpenMontageJobStore for PgJobStore {
             tenant_id: new_job.tenant_id.clone(),
             request_id: new_job.request_id.clone(),
             idempotency_key: new_job.idempotency_key.clone(),
+            request_hash: new_job.request_hash.clone(),
             pipeline: new_job.pipeline.clone(),
             input_mode: new_job.input_mode.clone(),
             status: new_job.status.clone(),
             snapshot_json: new_job.snapshot_json.clone(),
+            render_runtime: new_job.render_runtime.clone(),
+            approval_policy: new_job.approval_policy.clone(),
+            budget_limit_usd: new_job
+                .budget_limit_usd
+                .and_then(|v| bigdecimal::BigDecimal::try_from(v).ok()),
         };
 
-        let db_job: OpenmontageJob = diesel::insert_into(gm_openmontage_jobs)
+        // Atomic upsert with ON CONFLICT: try to insert, on conflict do nothing.
+        // The idiomatic Diesel pattern: .optional() converts NotFound (no row on conflict) to Ok(None).
+        let inserted: Option<OpenmontageJob> = diesel::insert_into(gm_openmontage_jobs)
             .values(&new_db_job)
+            .on_conflict((user_id, idempotency_key))
+            .do_nothing()
             .returning(OpenmontageJob::as_select())
             .get_result(&mut conn)
+            .optional()
             .map_err(|e| format!("Insert error: {}", e))?;
 
-        Ok(Job {
-            id: db_job.id,
-            job_id: db_job.job_id,
-            project_id: db_job.project_id,
-            user_id: db_job.user_id,
-            tenant_id: db_job.tenant_id,
-            request_id: db_job.request_id,
-            idempotency_key: db_job.idempotency_key,
-            pipeline: db_job.pipeline,
-            input_mode: db_job.input_mode,
-            status: db_job.status,
-            cancel_requested: db_job.cancel_requested,
-            current_stage: db_job.current_stage,
-            progress_pct: db_job.progress_pct,
-            render_runtime: db_job.render_runtime,
-            approval_policy: db_job.approval_policy,
-            budget_limit_usd: db_job
-                .budget_limit_usd
-                .map(|bd| bd.to_string().parse::<f64>().unwrap_or(0.0)),
-            last_event_sequence: db_job.last_event_sequence,
-            next_event_sequence: db_job.next_event_sequence,
-            sync_required: db_job.sync_required,
-            snapshot_json: db_job.snapshot_json,
-            error_json: db_job.error_json,
-            created_at: db_job.created_at,
-            updated_at: db_job.updated_at,
-        })
+        match inserted {
+            Some(db_job) => {
+                // Row was inserted — this is a new job
+                Ok(CreateJobResult {
+                    job: Job {
+                        id: db_job.id,
+                        job_id: db_job.job_id,
+                        project_id: db_job.project_id,
+                        user_id: db_job.user_id,
+                        tenant_id: db_job.tenant_id,
+                        request_id: db_job.request_id,
+                        idempotency_key: db_job.idempotency_key,
+                        request_hash: db_job.request_hash,
+                        pipeline: db_job.pipeline,
+                        input_mode: db_job.input_mode,
+                        status: db_job.status,
+                        cancel_requested: db_job.cancel_requested,
+                        current_stage: db_job.current_stage,
+                        progress_pct: db_job.progress_pct,
+                        render_runtime: db_job.render_runtime,
+                        approval_policy: db_job.approval_policy,
+                        budget_limit_usd: db_job
+                            .budget_limit_usd
+                            .map(|bd| bd.to_string().parse::<f64>().unwrap_or(0.0)),
+                        last_event_sequence: db_job.last_event_sequence,
+                        next_event_sequence: db_job.next_event_sequence,
+                        sync_required: db_job.sync_required,
+                        snapshot_json: db_job.snapshot_json,
+                        error_json: db_job.error_json,
+                        created_at: db_job.created_at,
+                        updated_at: db_job.updated_at,
+                    },
+                    created: true,
+                })
+            }
+            None => {
+                // ON CONFLICT DO NOTHING returned no row — conflict occurred, fetch existing job
+                let existing_job = self
+                    .find_by_idempotency(new_job.user_id, &new_job.idempotency_key)?
+                    .ok_or_else(|| {
+                        "Conflict occurred but existing job not found (race condition)".to_string()
+                    })?;
+
+                Ok(CreateJobResult {
+                    job: existing_job,
+                    created: false,
+                })
+            }
+        }
     }
 
     fn get_job(&self, job_id_param: &str) -> Result<Option<Job>, String> {
@@ -489,6 +589,7 @@ impl OpenMontageJobStore for PgJobStore {
             tenant_id: db_job.tenant_id,
             request_id: db_job.request_id,
             idempotency_key: db_job.idempotency_key,
+            request_hash: db_job.request_hash,
             pipeline: db_job.pipeline,
             input_mode: db_job.input_mode,
             status: db_job.status,
@@ -510,12 +611,13 @@ impl OpenMontageJobStore for PgJobStore {
         }))
     }
 
-    fn find_by_idempotency(&self, key: &str) -> Result<Option<Job>, String> {
+    fn find_by_idempotency(&self, user_id_param: i32, key: &str) -> Result<Option<Job>, String> {
         use glance_mind_db::schema::gm_openmontage_jobs::dsl::*;
 
         let mut conn = self.get_conn()?;
 
         let db_job: Option<OpenmontageJob> = gm_openmontage_jobs
+            .filter(user_id.eq(user_id_param))
             .filter(idempotency_key.eq(key))
             .select(OpenmontageJob::as_select())
             .first(&mut conn)
@@ -530,6 +632,7 @@ impl OpenMontageJobStore for PgJobStore {
             tenant_id: db_job.tenant_id,
             request_id: db_job.request_id,
             idempotency_key: db_job.idempotency_key,
+            request_hash: db_job.request_hash,
             pipeline: db_job.pipeline,
             input_mode: db_job.input_mode,
             status: db_job.status,
@@ -612,7 +715,7 @@ impl OpenMontageJobStore for PgJobStore {
                     next_event_sequence: Some(event.sequence + 1),
                     updated_at: Some(chrono::Utc::now()),
                     sync_required: if gap { Some(true) } else { None },
-                    status: event.status.clone(),
+                    status: derive_final_status(&event),
                     ..Default::default()
                 };
 
@@ -676,34 +779,11 @@ impl OpenMontageJobStore for PgJobStore {
                 .select(OpenmontageJob::as_select())
                 .first(conn)?;
 
-            let mut update = UpdateOpenmontageJob::default();
-
-            // Update status
-            if let Some(ref status_val) = event.status {
-                let mut final_status = status_val.clone();
-
-                // If status is "completed", require primary_video artifact
-                if status_val == "completed" {
-                    if let Some(artifacts) =
-                        event.event_json.get("artifacts").and_then(|v| v.as_array())
-                    {
-                        let has_primary_video = artifacts.iter().any(|a| {
-                            a.get("role")
-                                .and_then(|r| r.as_str())
-                                .map(|r| r == "primary_video")
-                                .unwrap_or(false)
-                        });
-
-                        if !has_primary_video {
-                            final_status = "degraded".to_string();
-                        }
-                    } else {
-                        final_status = "degraded".to_string();
-                    }
-                }
-
-                update.status = Some(final_status);
-            }
+            // Apply final status derivation (completed→degraded rule)
+            let mut update = UpdateOpenmontageJob {
+                status: derive_final_status(event),
+                ..Default::default()
+            };
 
             // Extract stage from event_json
             if let Some(stage_val) = event.event_json.get("stage").and_then(|v| v.as_str()) {

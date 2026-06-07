@@ -35,7 +35,7 @@ fn pg_store_round_trips_job_and_events() {
     let project_id = format!("omx-{}", job_id);
 
     // Create job
-    let job = store
+    let result = store
         .create_job(NewJob {
             job_id: job_id.clone(),
             project_id: project_id.clone(),
@@ -43,13 +43,18 @@ fn pg_store_round_trips_job_and_events() {
             tenant_id: "test-tenant".to_string(),
             request_id: "req-test".to_string(),
             idempotency_key: format!("idem-{}", uuid::Uuid::new_v4()),
+            request_hash: "test-hash".to_string(),
             pipeline: "animated-explainer".to_string(),
             input_mode: Some("text".to_string()),
             status: "queued".to_string(),
             snapshot_json: json!({"title": "Test"}),
+            render_runtime: None,
+            approval_policy: None,
+            budget_limit_usd: None,
         })
         .expect("create job");
 
+    let job = result.job;
     assert_eq!(job.job_id, job_id);
     assert_eq!(job.user_id, 999);
     assert_eq!(job.status, "queued");
@@ -65,7 +70,7 @@ fn pg_store_round_trips_job_and_events() {
 
     // Find by idempotency
     let found = store
-        .find_by_idempotency(&job.idempotency_key)
+        .find_by_idempotency(999, &job.idempotency_key)
         .expect("find by idempotency")
         .expect("job exists");
     assert_eq!(found.job_id, job_id);
@@ -179,6 +184,10 @@ fn pg_store_update_from_event_extracts_fields() {
             input_mode: None,
             status: "queued".to_string(),
             snapshot_json: json!({}),
+            request_hash: "test-hash".to_string(),
+            render_runtime: None,
+            approval_policy: None,
+            budget_limit_usd: None,
         })
         .expect("create job");
 
@@ -235,6 +244,10 @@ fn pg_store_update_from_event_requires_primary_video_for_completed() {
             input_mode: None,
             status: "queued".to_string(),
             snapshot_json: json!({}),
+            request_hash: "test-hash".to_string(),
+            render_runtime: None,
+            approval_policy: None,
+            budget_limit_usd: None,
         })
         .expect("create job");
 
@@ -312,20 +325,26 @@ fn pg_store_idempotency_key_enforced() {
 
     let idem_key = format!("unique-key-{}", uuid::Uuid::new_v4());
 
+    let job1_id = format!("job-{}", uuid::Uuid::new_v4());
     let job1 = NewJob {
-        job_id: format!("job-{}", uuid::Uuid::new_v4()),
+        job_id: job1_id.clone(),
         project_id: "omx-job-1".to_string(),
         user_id: 100,
         tenant_id: "tenant-1".to_string(),
         request_id: "req-1".to_string(),
         idempotency_key: idem_key.clone(),
+        request_hash: "test-hash".to_string(),
         pipeline: "cinematic".to_string(),
         input_mode: None,
         status: "queued".to_string(),
         snapshot_json: json!({}),
+        render_runtime: None,
+        approval_policy: None,
+        budget_limit_usd: None,
     };
 
-    store.create_job(job1).expect("create first job");
+    let first = store.create_job(job1).expect("create first job");
+    assert!(first.created, "first create is a brand-new job");
 
     // Try to create another job with the same idempotency_key
     let job2 = NewJob {
@@ -335,14 +354,32 @@ fn pg_store_idempotency_key_enforced() {
         tenant_id: "tenant-1".to_string(),
         request_id: "req-2".to_string(),
         idempotency_key: idem_key.clone(),
+        request_hash: "test-hash-2".to_string(),
         pipeline: "cinematic".to_string(),
         input_mode: None,
         status: "queued".to_string(),
         snapshot_json: json!({}),
+        render_runtime: None,
+        approval_policy: None,
+        budget_limit_usd: None,
     };
 
-    let result = store.create_job(job2);
-    assert!(result.is_err(), "Duplicate idempotency_key should fail");
+    // ASSERTION-CHANGE-JUSTIFIED: the reconciled M0b-T1 store contract is an idempotent
+    // atomic upsert — on_conflict (user_id, idempotency_key) do_nothing, then return the
+    // EXISTING row with created=false — NOT error-on-duplicate. The same-key/different-body
+    // 409 is surfaced at the FACADE layer (M0-T5, exercised in openmontage_facade_test). So a
+    // duplicate (user_id, idempotency_key) at the STORE level returns the existing job, not Err.
+    let result = store
+        .create_job(job2)
+        .expect("idempotent create returns Ok (existing job), not Err");
+    assert!(
+        !result.created,
+        "duplicate idempotency_key returns the existing job (created=false)"
+    );
+    assert_eq!(
+        result.job.job_id, job1_id,
+        "duplicate returns the FIRST job's id, not a newly-created job"
+    );
 }
 
 #[test]
@@ -416,6 +453,10 @@ fn pg_store_set_cancel_requested() {
             input_mode: None,
             status: "running".to_string(),
             snapshot_json: json!({}),
+            request_hash: "test-hash".to_string(),
+            render_runtime: None,
+            approval_policy: None,
+            budget_limit_usd: None,
         })
         .expect("create job");
 
@@ -466,6 +507,10 @@ fn pg_store_reconstructs_all_terminal_states() {
                 input_mode: None,
                 status: "queued".to_string(),
                 snapshot_json: json!({}),
+                request_hash: "test-hash".to_string(),
+                render_runtime: None,
+                approval_policy: None,
+                budget_limit_usd: None,
             })
             .expect("create job");
 
@@ -568,6 +613,10 @@ fn wiring_regression_durable_store_across_instances() {
             input_mode: Some("wiring".to_string()),
             status: "queued".to_string(),
             snapshot_json: json!({"wiring": "test"}),
+            request_hash: "test-hash".to_string(),
+            render_runtime: None,
+            approval_policy: None,
+            budget_limit_usd: None,
         })
         .expect("create job via store1");
 
@@ -606,4 +655,75 @@ fn wiring_regression_durable_store_across_instances() {
     // If build_openmontage_store returned InMemoryJobStore, store2.get_job would
     // return None (separate in-memory map → no shared state).
     // With PgJobStore, this test passes (shared DB via pool).
+}
+
+/// M0-T7: DB-gated test that render_runtime, approval_policy, budget_limit_usd persist via PgJobStore.
+/// This is the credential-gated counterpart to the unconditional twin in openmontage_store_wiring_test.rs.
+/// ASSERTION-CHANGE-JUSTIFIED: #[ignore] required as credential gate (DATABASE_URL) per M0-T7 spec -
+/// this is a Postgres integration test with an unconditional in-memory twin that covers it deterministically.
+#[test]
+#[ignore]
+fn pg_store_persists_execution_config_fields() {
+    let pool = match get_test_pool() {
+        Some(p) => p,
+        None => {
+            eprintln!("DATABASE_URL not set, skipping test");
+            return;
+        }
+    };
+
+    let store = PgJobStore::new(pool);
+
+    let job_id = format!("test-job-{}", uuid::Uuid::new_v4());
+    let project_id = format!("omx-{}", job_id);
+
+    // Create job with NON-DEFAULT execution config values
+    let result = store
+        .create_job(NewJob {
+            job_id: job_id.clone(),
+            project_id: project_id.clone(),
+            user_id: 456,
+            tenant_id: "test-tenant-db".to_string(),
+            request_id: "req-test-db".to_string(),
+            idempotency_key: format!("idem-{}", uuid::Uuid::new_v4()),
+            request_hash: "test-hash-db".to_string(),
+            pipeline: "cinematic".to_string(),
+            input_mode: Some("text_to_video".to_string()),
+            status: "queued".to_string(),
+            snapshot_json: json!({"title": "DB Test"}),
+            render_runtime: Some("hyperframes".to_string()),
+            approval_policy: Some("manual".to_string()),
+            budget_limit_usd: Some(12.34),
+        })
+        .expect("create job");
+
+    let _job = result.job; // Suppress unused warning
+
+    // Fetch the stored job
+    let fetched = store
+        .get_job(&job_id)
+        .expect("get job")
+        .expect("job exists");
+
+    // HARD ASSERTIONS - these MUST round-trip (M0-T7 spec)
+    assert_eq!(
+        fetched.render_runtime,
+        Some("hyperframes".to_string()),
+        "render_runtime must persist in Postgres"
+    );
+    assert_eq!(
+        fetched.approval_policy,
+        Some("manual".to_string()),
+        "approval_policy must persist in Postgres"
+    );
+    assert_eq!(
+        fetched.budget_limit_usd,
+        Some(12.34),
+        "budget_limit_usd must persist in Postgres"
+    );
+
+    // Sanity check other fields
+    assert_eq!(fetched.job_id, job_id);
+    assert_eq!(fetched.pipeline, "cinematic");
+    assert_eq!(fetched.status, "queued");
 }

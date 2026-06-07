@@ -18,9 +18,26 @@ use tracing::{error, info};
 use crate::dto::openmontage_dto::{ApprovalDto, AssetDto, CreateJobDto};
 use crate::error::api_error::ApiError;
 use crate::error::business_error::BusinessError;
+use crate::repository::openmontage_repository::Job;
 use crate::response::unified_response::ApiResponse;
 use crate::service::openmontage_service::OpenMontageService;
 use crate::service::openmontage_stream_hub::OpenMontageSseEvent;
+
+// ============================================================================
+// M0-T6: Per-Job Ownership Authorization Helper
+// ============================================================================
+
+/// Verify that the caller owns the job (job.user_id == caller.id).
+/// Returns Forbidden error if ownership check fails.
+fn assert_job_owner(job: &Job, caller: &User) -> Result<(), ApiError> {
+    if job.user_id != caller.id {
+        return Err(ApiError::Forbidden(format!(
+            "Access denied: job {} belongs to a different user",
+            job.job_id
+        )));
+    }
+    Ok(())
+}
 
 // ============================================================================
 // E1: GET /openmontage/preflight
@@ -61,7 +78,33 @@ pub async fn create_job(
 ) -> Result<Json<ApiResponse<crate::dto::openmontage_dto::JobSnapshotDto>>, ApiError> {
     let snapshot = service
         .create_job(user.id, "default-tenant", dto)
-        .map_err(|e| ApiError::BadRequest(format!("create job failed: {}", e)))?;
+        .map_err(|e| {
+            // M0b-T5 + M5-T3: 422 Unprocessable Entity cases
+            // - Secret material rejection (forbidden tokens)
+            // - Screen-demo production_mode validation (real_capture, absent/invalid mode)
+            if e.contains("secret_material_rejected")
+                || e.contains("forbidden token")
+                || (e.contains("screen-demo")
+                    && (e.contains("real_capture") || e.contains("production_mode")))
+            {
+                ApiError::UnprocessableEntity(e)
+            // M0-T4: Map pipeline validation errors to correct HTTP status codes
+            } else if e.contains("not found") {
+                // Pipeline not in allowlist OR not in snapshot
+                ApiError::NotFound(e)
+            } else if e.contains("unavailable") || e.contains("stability:") {
+                // Pipeline in allowlist but unavailable (degraded, beta, etc.)
+                // HTTP 409 Conflict - resource exists but in wrong state
+                ApiError::Conflict(e)
+            } else if e.contains("Idempotency conflict")
+                || e.contains("idempotency") && e.contains("conflict")
+            {
+                // M0-T5: Idempotency conflict (same key, different body)
+                ApiError::Conflict(e)
+            } else {
+                ApiError::BadRequest(format!("create job failed: {}", e))
+            }
+        })?;
 
     Ok(Json(ApiResponse::success(snapshot)))
 }
@@ -71,14 +114,20 @@ pub async fn create_job(
 // ============================================================================
 
 pub async fn get_job(
-    Extension(_user): Extension<User>,
+    Extension(user): Extension<User>,
     Extension(service): Extension<OpenMontageService>,
     Path(job_id): Path<String>,
 ) -> Result<Json<ApiResponse<crate::dto::openmontage_dto::JobSnapshotDto>>, ApiError> {
-    let snapshot = service
-        .get_job(&job_id)
+    // M0-T6: Fetch job and verify ownership before returning data
+    let job = service
+        .get_job_raw(&job_id)
         .map_err(|e| ApiError::InternalServerError(format!("get job failed: {}", e)))?
         .ok_or_else(|| ApiError::NotFound("Job not found".to_string()))?;
+
+    assert_job_owner(&job, &user)?;
+
+    // Build snapshot from already-fetched job (avoids redundant DB read)
+    let snapshot = OpenMontageService::snapshot_from_job(&job);
 
     Ok(Json(ApiResponse::success(snapshot)))
 }
@@ -100,11 +149,19 @@ fn default_limit() -> i64 {
 }
 
 pub async fn get_events(
-    Extension(_user): Extension<User>,
+    Extension(user): Extension<User>,
     Extension(service): Extension<OpenMontageService>,
     Path(job_id): Path<String>,
     Query(query): Query<EventsQuery>,
 ) -> Result<Json<ApiResponse<crate::dto::openmontage_dto::JobEventsDto>>, ApiError> {
+    // M0-T6: Verify ownership before listing events
+    let job = service
+        .get_job_raw(&job_id)
+        .map_err(|e| ApiError::InternalServerError(format!("get job failed: {}", e)))?
+        .ok_or_else(|| ApiError::NotFound("Job not found".to_string()))?;
+
+    assert_job_owner(&job, &user)?;
+
     let dto = service
         .list_events(&job_id, query.after, query.limit)
         .map_err(|e| ApiError::InternalServerError(format!("list events failed: {}", e)))?;
@@ -123,50 +180,55 @@ pub struct StreamQuery {
 }
 
 pub async fn stream_job(
-    Extension(_user): Extension<User>,
+    Extension(user): Extension<User>,
     Extension(service): Extension<OpenMontageService>,
     Path(job_id): Path<String>,
     Query(query): Query<StreamQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
-    let snapshot = service
-        .get_job(&job_id)
-        .map_err(|e| ApiError::InternalServerError(format!("get job failed: {}", e)))?;
+    // M0-T6: Verify ownership before streaming
+    let job = service
+        .get_job_raw(&job_id)
+        .map_err(|e| ApiError::InternalServerError(format!("get job failed: {}", e)))?
+        .ok_or_else(|| ApiError::NotFound("Job not found".to_string()))?;
+
+    assert_job_owner(&job, &user)?;
+
+    // Build snapshot from already-fetched job (avoids redundant DB read)
+    let snapshot = OpenMontageService::snapshot_from_job(&job);
 
     let rx = service.subscribe(&job_id).await;
     let (tx_out, rx_out) = tokio::sync::mpsc::channel::<OpenMontageSseEvent>(64);
 
     // Send snapshot
-    if let Some(snap) = snapshot {
-        let snap_event = OpenMontageSseEvent {
-            event_type: "job_snapshot".to_string(),
-            job_id: snap.job_id.clone(),
-            project_id: snap.project_id.clone(),
-            sequence: snap.last_event_sequence,
-            status: snap.status.clone(),
-            stage: snap.current_stage.clone(),
-            progress_pct: snap.progress_pct,
-            payload: snap.snapshot_json.clone(),
+    let snap_event = OpenMontageSseEvent {
+        event_type: "job_snapshot".to_string(),
+        job_id: snapshot.job_id.clone(),
+        project_id: snapshot.project_id.clone(),
+        sequence: snapshot.last_event_sequence,
+        status: snapshot.status.clone(),
+        stage: snapshot.current_stage.clone(),
+        progress_pct: snapshot.progress_pct,
+        payload: snapshot.snapshot_json.clone(),
+    };
+    let _ = tx_out.send(snap_event).await;
+
+    // Send backlog events after query.after
+    let backlog = service
+        .backlog(&job_id, query.after)
+        .map_err(|e| ApiError::InternalServerError(format!("backlog failed: {}", e)))?;
+
+    for event in backlog {
+        let evt = OpenMontageSseEvent {
+            event_type: event.event_type.clone(),
+            job_id: job_id.clone(),
+            project_id: snapshot.project_id.clone(),
+            sequence: event.sequence,
+            status: event.status.clone().unwrap_or_default(),
+            stage: event.stage.clone(),
+            progress_pct: event.progress_pct.unwrap_or(0),
+            payload: event.event_json.clone(),
         };
-        let _ = tx_out.send(snap_event).await;
-
-        // Send backlog events after query.after
-        let backlog = service
-            .backlog(&job_id, query.after)
-            .map_err(|e| ApiError::InternalServerError(format!("backlog failed: {}", e)))?;
-
-        for event in backlog {
-            let evt = OpenMontageSseEvent {
-                event_type: event.event_type.clone(),
-                job_id: job_id.clone(),
-                project_id: snap.project_id.clone(),
-                sequence: event.sequence,
-                status: event.status.clone().unwrap_or_default(),
-                stage: event.stage.clone(),
-                progress_pct: event.progress_pct.unwrap_or(0),
-                payload: event.event_json.clone(),
-            };
-            let _ = tx_out.send(evt).await;
-        }
+        let _ = tx_out.send(evt).await;
     }
 
     let heartbeat_tx = tx_out.clone();
@@ -215,11 +277,19 @@ pub async fn stream_job(
 // ============================================================================
 
 pub async fn submit_approval(
-    Extension(_user): Extension<User>,
+    Extension(user): Extension<User>,
     Extension(service): Extension<OpenMontageService>,
     Path(job_id): Path<String>,
     Json(approval): Json<ApprovalDto>,
 ) -> Result<Json<ApiResponse<crate::dto::openmontage_dto::JobSnapshotDto>>, ApiError> {
+    // M0-T6: Verify ownership before submitting approval
+    let job = service
+        .get_job_raw(&job_id)
+        .map_err(|e| ApiError::InternalServerError(format!("get job failed: {}", e)))?
+        .ok_or_else(|| ApiError::NotFound("Job not found".to_string()))?;
+
+    assert_job_owner(&job, &user)?;
+
     let snapshot = service
         .submit_approval(&job_id, approval)
         .map_err(|e| ApiError::BadRequest(format!("approval failed: {}", e)))?;
@@ -232,10 +302,18 @@ pub async fn submit_approval(
 // ============================================================================
 
 pub async fn cancel_job(
-    Extension(_user): Extension<User>,
+    Extension(user): Extension<User>,
     Extension(service): Extension<OpenMontageService>,
     Path(job_id): Path<String>,
 ) -> Result<Json<ApiResponse<crate::dto::openmontage_dto::CancelResultDto>>, ApiError> {
+    // M0-T6: Verify ownership before cancelling
+    let job = service
+        .get_job_raw(&job_id)
+        .map_err(|e| ApiError::InternalServerError(format!("get job failed: {}", e)))?
+        .ok_or_else(|| ApiError::NotFound("Job not found".to_string()))?;
+
+    assert_job_owner(&job, &user)?;
+
     let result = service
         .cancel_job(&job_id)
         .map_err(|e| ApiError::InternalServerError(format!("cancel failed: {}", e)))?;
@@ -248,6 +326,8 @@ pub async fn cancel_job(
 // ============================================================================
 
 /// Valid OpenMontage input asset kinds
+/// R011 M3-T2: Reconciled to full ROOT role vocabulary (reference_image, start_frame, end_frame,
+/// reference_video, source_video, brand_asset, audio, music, subtitle, avatar)
 const VALID_ASSET_KINDS: &[&str] = &[
     "reference_image",
     "start_frame",
@@ -258,6 +338,7 @@ const VALID_ASSET_KINDS: &[&str] = &[
     "audio",
     "music",
     "subtitle",
+    "avatar", // M3-T2: user-supplied avatar (uploaded photo or platform avatar)
 ];
 
 /// Maximum file size for images (OpenMontage assets): 30MB
@@ -373,7 +454,7 @@ pub async fn upload_asset(
     // Determine asset family (image/video/audio) and validate mime + size
     let is_image = matches!(
         asset_kind.as_str(),
-        "reference_image" | "start_frame" | "end_frame" | "brand_asset"
+        "reference_image" | "start_frame" | "end_frame" | "brand_asset" | "avatar" // M3-T2: avatar is an image
     );
     let is_video = matches!(asset_kind.as_str(), "reference_video" | "source_video");
     let is_audio = matches!(asset_kind.as_str(), "audio" | "music");
@@ -423,6 +504,7 @@ pub async fn upload_asset(
         "brand_asset" => "brand_logo".to_string(),
         "audio" | "music" => "background_audio".to_string(),
         "subtitle" => "subtitle_file".to_string(),
+        "avatar" => "avatar".to_string(), // M3-T2: avatar role
         _ => "generic".to_string(),
     });
 
@@ -473,6 +555,9 @@ pub struct OpenMontageJobEvent {
     pub emitted_at: String,
     #[serde(default)]
     pub artifacts: Vec<ArtifactDto>,
+    /// M0b-T5: Catch-all for additional fields (error, message, debug_info, etc.)
+    #[serde(flatten, default)]
+    pub extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -487,10 +572,13 @@ pub struct JobIdentifier {
     pub idempotency_key: String,
 }
 
-#[derive(serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct ArtifactDto {
+    #[serde(default)]
     pub artifact_id: String,
+    #[serde(default)]
     pub kind: String,
+    #[serde(default)]
     pub role: String,
     #[serde(default)]
     pub uri: String,
@@ -506,6 +594,12 @@ pub struct ArtifactDto {
     pub duration_ms: i32,
     #[serde(default)]
     pub bytes: i64,
+    /// M4-T5b: artifact_type for curated brief artifacts (e.g., "video_analysis_brief")
+    #[serde(default)]
+    pub artifact_type: String,
+    /// M4-T5b: metadata for curated brief artifacts
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
 }
 
 #[derive(serde::Serialize)]

@@ -31,6 +31,10 @@ pub enum ErrorCode {
     TokenExpired = 2007,
     /// Token invalid
     TokenInvalid = 2008,
+    /// Conflict (resource exists but in incompatible state)
+    Conflict = 2009,
+    /// Unprocessable Entity (request is well-formed but semantically invalid)
+    UnprocessableEntity = 2010,
 
     // ============ Server Errors (3xxx) ============
     /// Internal server error
@@ -124,10 +128,12 @@ impl ErrorCode {
             ErrorCode::Unauthorized => "Unauthorized",
             ErrorCode::Forbidden => "Forbidden",
             ErrorCode::NotFound => "Resource not found",
+            ErrorCode::Conflict => "Conflict",
             ErrorCode::MethodNotAllowed => "Method not allowed",
             ErrorCode::TooManyRequests => "Too many requests",
             ErrorCode::TokenExpired => "Token expired",
             ErrorCode::TokenInvalid => "Token invalid",
+            ErrorCode::UnprocessableEntity => "Unprocessable entity",
 
             // Server errors
             ErrorCode::InternalServerError => "Internal server error",
@@ -190,10 +196,12 @@ impl ErrorCode {
             ErrorCode::Unauthorized => "Unauthorized, please login",
             ErrorCode::Forbidden => "Access forbidden",
             ErrorCode::NotFound => "Resource not found",
+            ErrorCode::Conflict => "Resource conflict",
             ErrorCode::MethodNotAllowed => "Method not allowed",
             ErrorCode::TooManyRequests => "Too many requests, please try again later",
             ErrorCode::TokenExpired => "Session expired, please login again",
             ErrorCode::TokenInvalid => "Invalid authentication",
+            ErrorCode::UnprocessableEntity => "Unprocessable entity",
 
             // Server errors
             ErrorCode::InternalServerError => "Internal server error",
@@ -266,6 +274,8 @@ impl ErrorCode {
             | ErrorCode::VideoNotFound
             | ErrorCode::SocialAccountNotFound
             | ErrorCode::PromoCodeNotFound => StatusCode::NOT_FOUND,
+            ErrorCode::Conflict => StatusCode::CONFLICT,
+            ErrorCode::UnprocessableEntity => StatusCode::UNPROCESSABLE_ENTITY,
             ErrorCode::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             ErrorCode::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
             ErrorCode::PermissionDenied => StatusCode::FORBIDDEN,
