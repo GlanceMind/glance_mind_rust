@@ -325,8 +325,9 @@ fn pg_store_idempotency_key_enforced() {
 
     let idem_key = format!("unique-key-{}", uuid::Uuid::new_v4());
 
+    let job1_id = format!("job-{}", uuid::Uuid::new_v4());
     let job1 = NewJob {
-        job_id: format!("job-{}", uuid::Uuid::new_v4()),
+        job_id: job1_id.clone(),
         project_id: "omx-job-1".to_string(),
         user_id: 100,
         tenant_id: "tenant-1".to_string(),
@@ -342,7 +343,8 @@ fn pg_store_idempotency_key_enforced() {
         budget_limit_usd: None,
     };
 
-    store.create_job(job1).expect("create first job");
+    let first = store.create_job(job1).expect("create first job");
+    assert!(first.created, "first create is a brand-new job");
 
     // Try to create another job with the same idempotency_key
     let job2 = NewJob {
@@ -362,8 +364,22 @@ fn pg_store_idempotency_key_enforced() {
         budget_limit_usd: None,
     };
 
-    let result = store.create_job(job2);
-    assert!(result.is_err(), "Duplicate idempotency_key should fail");
+    // ASSERTION-CHANGE-JUSTIFIED: the reconciled M0b-T1 store contract is an idempotent
+    // atomic upsert — on_conflict (user_id, idempotency_key) do_nothing, then return the
+    // EXISTING row with created=false — NOT error-on-duplicate. The same-key/different-body
+    // 409 is surfaced at the FACADE layer (M0-T5, exercised in openmontage_facade_test). So a
+    // duplicate (user_id, idempotency_key) at the STORE level returns the existing job, not Err.
+    let result = store
+        .create_job(job2)
+        .expect("idempotent create returns Ok (existing job), not Err");
+    assert!(
+        !result.created,
+        "duplicate idempotency_key returns the existing job (created=false)"
+    );
+    assert_eq!(
+        result.job.job_id, job1_id,
+        "duplicate returns the FIRST job's id, not a newly-created job"
+    );
 }
 
 #[test]
