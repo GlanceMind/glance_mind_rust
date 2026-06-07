@@ -377,7 +377,9 @@ fn pg_store_idempotency_key_enforced() {
         budget_limit_usd: None,
     };
 
-    let result2 = store.create_job(job2).expect("create should succeed (idempotent)");
+    let result2 = store
+        .create_job(job2)
+        .expect("create should succeed (idempotent)");
     assert!(
         !result2.created,
         "Second create with same (user_id, key) should find existing job"
@@ -556,6 +558,12 @@ fn pg_store_persists_execution_config_fields() {
 /// exactly ONE job row and exactly ONE enqueue (via atomic upsert at the DB layer).
 /// This is the credential-gated concurrency test; its deterministic twin is
 /// `idempotency_conflict_path_does_not_enqueue_twin` in openmontage_idempotency_test.rs.
+///
+/// AUTHORITATIVE POSTGRES VERIFICATION (PENDING without DATABASE_URL):
+/// This test exercises the actual Diesel ON CONFLICT mechanism against real Postgres.
+/// The InMemory twin covers enqueue-once SEMANTICS but NOT the Pg upsert path.
+/// Without DATABASE_URL, this test is PENDING — Postgres concurrency behavior is NOT verified.
+///
 /// ASSERTION-CHANGE-JUSTIFIED: #[ignore] marker is required per spec - credential-gated DB test
 /// that requires PostgreSQL. The deterministic twin runs unconditionally; this is the DB counterpart.
 #[tokio::test]

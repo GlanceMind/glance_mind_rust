@@ -460,16 +460,19 @@ impl OpenMontageJobStore for PgJobStore {
                 .and_then(|v| bigdecimal::BigDecimal::try_from(v).ok()),
         };
 
-        // Atomic upsert with ON CONFLICT: try to insert, on conflict do nothing and return existing row
-        let insert_result = diesel::insert_into(gm_openmontage_jobs)
+        // Atomic upsert with ON CONFLICT: try to insert, on conflict do nothing.
+        // The idiomatic Diesel pattern: .optional() converts NotFound (no row on conflict) to Ok(None).
+        let inserted: Option<OpenmontageJob> = diesel::insert_into(gm_openmontage_jobs)
             .values(&new_db_job)
             .on_conflict((user_id, idempotency_key))
             .do_nothing()
             .returning(OpenmontageJob::as_select())
-            .get_result(&mut conn);
+            .get_result(&mut conn)
+            .optional()
+            .map_err(|e| format!("Insert error: {}", e))?;
 
-        match insert_result {
-            Ok(db_job) => {
+        match inserted {
+            Some(db_job) => {
                 // Row was inserted — this is a new job
                 Ok(CreateJobResult {
                     job: Job {
@@ -503,8 +506,8 @@ impl OpenMontageJobStore for PgJobStore {
                     created: true,
                 })
             }
-            Err(diesel::result::Error::QueryBuilderError(_)) => {
-                // ON CONFLICT DO NOTHING returns no rows — conflict occurred, fetch existing job
+            None => {
+                // ON CONFLICT DO NOTHING returned no row — conflict occurred, fetch existing job
                 let existing_job = self
                     .find_by_idempotency(new_job.user_id, &new_job.idempotency_key)?
                     .ok_or_else(|| {
@@ -516,7 +519,6 @@ impl OpenMontageJobStore for PgJobStore {
                     created: false,
                 })
             }
-            Err(e) => Err(format!("Insert error: {}", e)),
         }
     }
 
