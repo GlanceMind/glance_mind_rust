@@ -1383,3 +1383,352 @@ async fn snapshot_empty_artifacts_when_malformed() {
         "Should return empty artifacts when malformed, not panic"
     );
 }
+
+// ============================================================================
+// M5-T3: Screen-demo production_mode intake validation (reject real_capture)
+// ============================================================================
+
+#[tokio::test]
+async fn screen_demo_rejects_real_capture_with_422() {
+    use std::sync::Arc;
+
+    let store = Arc::new(InMemoryJobStore::new());
+    let client = Arc::new(MockOpenMontageClient::new());
+    let hub = OpenMontageStreamHub::new();
+    let service = OpenMontageService::new(store.clone(), client.clone(), hub);
+
+    let user = glance_mind_db::entity::user::User {
+        id: 1,
+        email: Some("test@example.com".to_string()),
+        password_hash: "".to_string(),
+        invitation_code: None,
+        referred_by: None,
+        company_name: None,
+        api_key: None,
+        status: "active".to_string(),
+        full_name: "Test User".to_string(),
+        role: "user".to_string(),
+        is_active: true,
+        created_at: chrono::Utc::now(),
+        updated_at: None,
+        username: Some("testuser".to_string()),
+        permissions: 0,
+    };
+
+    let router = glance_mind_api::routes::openmontage::user_routes()
+        .layer(axum::Extension(user))
+        .layer(axum::Extension(service));
+
+    let payload = CreateJobDto {
+        title: "Screen Demo Real Capture".to_string(),
+        prompt: "Terminal session recording".to_string(),
+        target_platform: "youtube".to_string(),
+        pipeline: Some("screen-demo".to_string()),
+        input_mode: Some("text_to_video".to_string()),
+        production_mode: Some("real_capture".to_string()),
+        ..Default::default()
+    };
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/jobs")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_string(&payload).unwrap()))
+        .unwrap();
+
+    let response = router.oneshot(req).await.unwrap();
+
+    // Should reject with 422 Unprocessable Entity
+    assert_eq!(
+        response.status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "screen-demo real_capture should return 422"
+    );
+
+    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let resp: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // Check error code and actionable message
+    assert_eq!(
+        resp["code"], 2010,
+        "Error code should be UnprocessableEntity"
+    );
+    let msg = resp["msg"].as_str().unwrap();
+    assert!(
+        msg.contains("synthetic_terminal") || msg.contains("uploaded_recording"),
+        "Error message should mention valid alternatives, got: {}",
+        msg
+    );
+
+    // CRITICAL: Verify no job was enqueued
+    assert_eq!(
+        client.get_enqueued().len(),
+        0,
+        "Job should not be enqueued for real_capture"
+    );
+}
+
+#[tokio::test]
+async fn screen_demo_accepts_synthetic_terminal() {
+    use std::sync::Arc;
+
+    let store = Arc::new(InMemoryJobStore::new());
+    let client = Arc::new(MockOpenMontageClient::new());
+    let hub = OpenMontageStreamHub::new();
+    let service = OpenMontageService::new(store.clone(), client.clone(), hub);
+
+    let user = glance_mind_db::entity::user::User {
+        id: 1,
+        email: Some("test@example.com".to_string()),
+        password_hash: "".to_string(),
+        invitation_code: None,
+        referred_by: None,
+        company_name: None,
+        api_key: None,
+        status: "active".to_string(),
+        full_name: "Test User".to_string(),
+        role: "user".to_string(),
+        is_active: true,
+        created_at: chrono::Utc::now(),
+        updated_at: None,
+        username: Some("testuser".to_string()),
+        permissions: 0,
+    };
+
+    let router = glance_mind_api::routes::openmontage::user_routes()
+        .layer(axum::Extension(user))
+        .layer(axum::Extension(service));
+
+    let payload = CreateJobDto {
+        title: "Screen Demo Synthetic".to_string(),
+        prompt: "Generate terminal demo".to_string(),
+        target_platform: "youtube".to_string(),
+        pipeline: Some("screen-demo".to_string()),
+        input_mode: Some("text_to_video".to_string()),
+        production_mode: Some("synthetic_terminal".to_string()),
+        ..Default::default()
+    };
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/jobs")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_string(&payload).unwrap()))
+        .unwrap();
+
+    let response = router.oneshot(req).await.unwrap();
+
+    // Should succeed
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let resp: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(resp["code"], 1000);
+
+    // Verify job WAS enqueued
+    assert_eq!(
+        client.get_enqueued().len(),
+        1,
+        "Job should be enqueued for synthetic_terminal"
+    );
+}
+
+#[tokio::test]
+async fn screen_demo_accepts_uploaded_recording() {
+    use std::sync::Arc;
+
+    let store = Arc::new(InMemoryJobStore::new());
+    let client = Arc::new(MockOpenMontageClient::new());
+    let hub = OpenMontageStreamHub::new();
+    let service = OpenMontageService::new(store.clone(), client.clone(), hub);
+
+    let user = glance_mind_db::entity::user::User {
+        id: 1,
+        email: Some("test@example.com".to_string()),
+        password_hash: "".to_string(),
+        invitation_code: None,
+        referred_by: None,
+        company_name: None,
+        api_key: None,
+        status: "active".to_string(),
+        full_name: "Test User".to_string(),
+        role: "user".to_string(),
+        is_active: true,
+        created_at: chrono::Utc::now(),
+        updated_at: None,
+        username: Some("testuser".to_string()),
+        permissions: 0,
+    };
+
+    let router = glance_mind_api::routes::openmontage::user_routes()
+        .layer(axum::Extension(user))
+        .layer(axum::Extension(service));
+
+    let payload = CreateJobDto {
+        title: "Screen Demo Uploaded".to_string(),
+        prompt: "Edit uploaded recording".to_string(),
+        target_platform: "youtube".to_string(),
+        pipeline: Some("screen-demo".to_string()),
+        input_mode: Some("source_clip".to_string()),
+        production_mode: Some("uploaded_recording".to_string()),
+        ..Default::default()
+    };
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/jobs")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_string(&payload).unwrap()))
+        .unwrap();
+
+    let response = router.oneshot(req).await.unwrap();
+
+    // Should succeed
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let resp: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(resp["code"], 1000);
+
+    // Verify job WAS enqueued
+    assert_eq!(
+        client.get_enqueued().len(),
+        1,
+        "Job should be enqueued for uploaded_recording"
+    );
+}
+
+#[tokio::test]
+async fn screen_demo_rejects_absent_production_mode() {
+    use std::sync::Arc;
+
+    let store = Arc::new(InMemoryJobStore::new());
+    let client = Arc::new(MockOpenMontageClient::new());
+    let hub = OpenMontageStreamHub::new();
+    let service = OpenMontageService::new(store.clone(), client.clone(), hub);
+
+    let user = glance_mind_db::entity::user::User {
+        id: 1,
+        email: Some("test@example.com".to_string()),
+        password_hash: "".to_string(),
+        invitation_code: None,
+        referred_by: None,
+        company_name: None,
+        api_key: None,
+        status: "active".to_string(),
+        full_name: "Test User".to_string(),
+        role: "user".to_string(),
+        is_active: true,
+        created_at: chrono::Utc::now(),
+        updated_at: None,
+        username: Some("testuser".to_string()),
+        permissions: 0,
+    };
+
+    let router = glance_mind_api::routes::openmontage::user_routes()
+        .layer(axum::Extension(user))
+        .layer(axum::Extension(service));
+
+    let payload = CreateJobDto {
+        title: "Screen Demo No Mode".to_string(),
+        prompt: "Missing production_mode".to_string(),
+        target_platform: "youtube".to_string(),
+        pipeline: Some("screen-demo".to_string()),
+        input_mode: Some("text_to_video".to_string()),
+        production_mode: None, // absent
+        ..Default::default()
+    };
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/jobs")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_string(&payload).unwrap()))
+        .unwrap();
+
+    let response = router.oneshot(req).await.unwrap();
+
+    // Should reject with 422
+    assert_eq!(
+        response.status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "screen-demo with absent production_mode should return 422"
+    );
+
+    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let resp: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(resp["code"], 2010);
+
+    // Verify no enqueue
+    assert_eq!(
+        client.get_enqueued().len(),
+        0,
+        "Job should not be enqueued when production_mode is absent"
+    );
+}
+
+#[tokio::test]
+async fn non_screen_demo_pipeline_unaffected_by_production_mode() {
+    use std::sync::Arc;
+
+    let store = Arc::new(InMemoryJobStore::new());
+    let client = Arc::new(MockOpenMontageClient::new());
+    let hub = OpenMontageStreamHub::new();
+    let service = OpenMontageService::new(store.clone(), client.clone(), hub);
+
+    let user = glance_mind_db::entity::user::User {
+        id: 1,
+        email: Some("test@example.com".to_string()),
+        password_hash: "".to_string(),
+        invitation_code: None,
+        referred_by: None,
+        company_name: None,
+        api_key: None,
+        status: "active".to_string(),
+        full_name: "Test User".to_string(),
+        role: "user".to_string(),
+        is_active: true,
+        created_at: chrono::Utc::now(),
+        updated_at: None,
+        username: Some("testuser".to_string()),
+        permissions: 0,
+    };
+
+    let router = glance_mind_api::routes::openmontage::user_routes()
+        .layer(axum::Extension(user))
+        .layer(axum::Extension(service));
+
+    // animated-explainer with production_mode=real_capture (should be ignored)
+    let payload = CreateJobDto {
+        title: "Animated Explainer Test".to_string(),
+        prompt: "Non-screen-demo pipeline".to_string(),
+        target_platform: "youtube".to_string(),
+        pipeline: Some("animated-explainer".to_string()),
+        input_mode: Some("text_to_video".to_string()),
+        production_mode: Some("real_capture".to_string()), // ignored for non-screen-demo
+        ..Default::default()
+    };
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/jobs")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_string(&payload).unwrap()))
+        .unwrap();
+
+    let response = router.oneshot(req).await.unwrap();
+
+    // Should succeed (production_mode not validated for other pipelines)
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let resp: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(resp["code"], 1000);
+
+    // Verify enqueued
+    assert_eq!(
+        client.get_enqueued().len(),
+        1,
+        "Non-screen-demo pipeline should not be affected by production_mode"
+    );
+}

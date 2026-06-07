@@ -79,8 +79,14 @@ pub async fn create_job(
     let snapshot = service
         .create_job(user.id, "default-tenant", dto)
         .map_err(|e| {
-            // M0b-T5: Secret material rejection (422 Unprocessable Entity)
-            if e.contains("secret_material_rejected") || e.contains("forbidden token") {
+            // M0b-T5 + M5-T3: 422 Unprocessable Entity cases
+            // - Secret material rejection (forbidden tokens)
+            // - Screen-demo production_mode validation (real_capture, absent/invalid mode)
+            if e.contains("secret_material_rejected")
+                || e.contains("forbidden token")
+                || (e.contains("screen-demo")
+                    && (e.contains("real_capture") || e.contains("production_mode")))
+            {
                 ApiError::UnprocessableEntity(e)
             // M0-T4: Map pipeline validation errors to correct HTTP status codes
             } else if e.contains("not found") {

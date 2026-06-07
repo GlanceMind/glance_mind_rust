@@ -197,6 +197,28 @@ impl OpenMontageService {
                 .map_err(|e| format!("validation_error: {}", e))?;
         }
 
+        // M5-T3: Reject screen-demo real_capture at intake (cannot run server-side)
+        if pipeline == "screen-demo" {
+            match dto.production_mode.as_deref() {
+                Some("synthetic_terminal") | Some("uploaded_recording") => {
+                    // Valid screen-demo production modes — pass through
+                }
+                Some("real_capture") => {
+                    return Err(
+                        "screen-demo real_capture cannot run server-side — choose synthetic_terminal or upload a recording (uploaded_recording)."
+                            .to_string(),
+                    );
+                }
+                None | Some(_) => {
+                    // production_mode absent or invalid value → reject with actionable message
+                    return Err(
+                        "screen-demo requires production_mode (synthetic_terminal or uploaded_recording)."
+                            .to_string(),
+                    );
+                }
+            }
+        }
+
         let new_job = NewJob {
             job_id: job_id.clone(),
             project_id: project_id.clone(),
@@ -758,6 +780,61 @@ mod tests {
 
             prop_assert_eq!(hash1, hash2,
                 "request_hash must be identical when only idempotency_key differs");
+        }
+
+        /// Property: screen-demo create accepted ⟺ production_mode ∈ {synthetic_terminal, uploaded_recording}
+        /// M5-T3: Property test for screen-demo production_mode validation
+        #[test]
+        fn prop_screen_demo_acceptance_iff_valid_production_mode(
+            title in ".{1,100}",
+            prompt in ".{1,200}",
+            production_mode in proptest::option::of("(synthetic_terminal|uploaded_recording|real_capture|invalid_mode)"),
+        ) {
+            use crate::repository::openmontage_repository::InMemoryJobStore;
+            use crate::service::openmontage_client::MockOpenMontageClient;
+            use crate::service::openmontage_stream_hub::OpenMontageStreamHub;
+            use std::sync::Arc;
+
+            let store = Arc::new(InMemoryJobStore::new());
+            let client = Arc::new(MockOpenMontageClient::new());
+            let hub = OpenMontageStreamHub::new();
+            let service = OpenMontageService::new(store.clone(), client.clone(), hub);
+
+            let dto = CreateJobDto {
+                title,
+                prompt,
+                target_platform: "youtube".to_string(),
+                pipeline: Some("screen-demo".to_string()),
+                input_mode: Some("text_to_video".to_string()),
+                production_mode: production_mode.clone(),
+                ..Default::default()
+            };
+
+            let result = service.create_job(1, "test-tenant", dto);
+
+            // Define acceptance condition: production_mode is Some and in {synthetic_terminal, uploaded_recording}
+            let is_valid_mode = production_mode
+                .as_ref()
+                .map(|m| m == "synthetic_terminal" || m == "uploaded_recording")
+                .unwrap_or(false);
+
+            if is_valid_mode {
+                // Should succeed
+                prop_assert!(result.is_ok(), "Valid production_mode should succeed, got error: {:?}", result.err());
+                // Verify job was enqueued
+                prop_assert_eq!(client.get_enqueued().len(), 1, "Valid mode should enqueue job");
+            } else {
+                // Should reject with error mentioning screen-demo or production_mode
+                prop_assert!(result.is_err(), "Invalid or absent production_mode should fail");
+                let err = result.unwrap_err();
+                prop_assert!(
+                    err.contains("screen-demo") || err.contains("production_mode"),
+                    "Error should mention screen-demo or production_mode, got: {}",
+                    err
+                );
+                // Verify no enqueue
+                prop_assert_eq!(client.get_enqueued().len(), 0, "Invalid mode should not enqueue");
+            }
         }
     }
 }
