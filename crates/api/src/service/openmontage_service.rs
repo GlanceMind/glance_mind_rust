@@ -615,6 +615,7 @@ fn derive_idempotency_key(dto: &CreateJobDto) -> Result<(String, String), String
     use sha2::{Digest, Sha256};
 
     // Canonical request body for hashing (exclude idempotency_key itself)
+    // M0b-T6: Include new cross-tier fields in idempotency hash
     let canonical_body = serde_json::json!({
         "title": dto.title,
         "prompt": dto.prompt,
@@ -633,6 +634,12 @@ fn derive_idempotency_key(dto: &CreateJobDto) -> Result<(String, String), String
         "asset_ids": dto.asset_ids,
         "tool_invocations": dto.tool_invocations,
         "metadata": dto.metadata,
+        "source_script": dto.source_script,
+        "voice_selection": dto.voice_selection,
+        "production_mode": dto.production_mode,
+        "audience": dto.audience,
+        "objective": dto.objective,
+        "brand_json": dto.brand_json,
     });
 
     let canonical_str = serde_json::to_string(&canonical_body)

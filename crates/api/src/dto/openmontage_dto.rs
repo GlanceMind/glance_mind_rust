@@ -148,6 +148,19 @@ pub struct CreateJobDto {
     pub idempotency_key: Option<String>,
     #[serde(default)]
     pub metadata: JsonValue,
+    // M0b-T6: Cross-tier contract fields (frontend → Rust → engine)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_script: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice_selection: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub production_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audience: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub objective: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub brand_json: Option<JsonValue>,
 }
 
 impl CreateJobDto {
@@ -183,6 +196,22 @@ impl CreateJobDto {
         }
         if let Some(ref ap) = self.approval_policy {
             fields.push(("approval_policy", ap.clone()));
+        }
+        // M0b-T6: Include new cross-tier string fields in secret scan
+        if let Some(ref ss) = self.source_script {
+            fields.push(("source_script", ss.clone()));
+        }
+        if let Some(ref vs) = self.voice_selection {
+            fields.push(("voice_selection", vs.clone()));
+        }
+        if let Some(ref pm) = self.production_mode {
+            fields.push(("production_mode", pm.clone()));
+        }
+        if let Some(ref aud) = self.audience {
+            fields.push(("audience", aud.clone()));
+        }
+        if let Some(ref obj) = self.objective {
+            fields.push(("objective", obj.clone()));
         }
 
         // Check string fields
@@ -222,6 +251,11 @@ impl CreateJobDto {
         // Check tool_invocations JSON
         if let Some(ref ti) = self.tool_invocations {
             check_json_for_secrets(ti, "tool_invocations")?;
+        }
+
+        // M0b-T6: Check brand_json for secrets (esp. nested API keys)
+        if let Some(ref bj) = self.brand_json {
+            check_json_for_secrets(bj, "brand_json")?;
         }
 
         Ok(())
@@ -276,6 +310,26 @@ impl CreateJobDto {
         }
         if let Some(ref im) = self.input_mode {
             req["input_mode"] = JsonValue::String(im.clone());
+        }
+
+        // M0b-T6: Emit cross-tier contract fields into worker request_json
+        if let Some(ref ss) = self.source_script {
+            req["source_script"] = JsonValue::String(ss.clone());
+        }
+        if let Some(ref vs) = self.voice_selection {
+            req["voice_selection"] = JsonValue::String(vs.clone());
+        }
+        if let Some(ref pm) = self.production_mode {
+            req["production_mode"] = JsonValue::String(pm.clone());
+        }
+        if let Some(ref aud) = self.audience {
+            req["audience"] = JsonValue::String(aud.clone());
+        }
+        if let Some(ref obj) = self.objective {
+            req["objective"] = JsonValue::String(obj.clone());
+        }
+        if let Some(ref bj) = self.brand_json {
+            req["brand_json"] = bj.clone();
         }
 
         // Server-only fields
