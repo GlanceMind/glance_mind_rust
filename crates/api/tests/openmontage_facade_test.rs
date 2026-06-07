@@ -1026,3 +1026,166 @@ async fn create_job_rejects_negative_budget() {
         "Invalid budget should not result in enqueue"
     );
 }
+
+// ============================================================================
+// M0b-T2: Single-writer job status (completed→degraded downgrade)
+// ============================================================================
+
+#[tokio::test]
+async fn ingest_completed_without_primary_video_downgrades_to_degraded() {
+    use glance_mind_api::{
+        handler::openmontage_handler::{ArtifactDto, JobIdentifier, OpenMontageJobEvent},
+        repository::openmontage_repository::NewJob,
+    };
+    use std::sync::Arc;
+
+    let store = Arc::new(InMemoryJobStore::new());
+    let client = Arc::new(MockOpenMontageClient::new());
+    let hub = OpenMontageStreamHub::new();
+    let service = OpenMontageService::new(store.clone(), client.clone(), hub);
+
+    // Seed a job
+    let job_id = "test-job-degraded-1";
+    let new_job = NewJob {
+        job_id: job_id.to_string(),
+        project_id: format!("omx-{}", job_id),
+        user_id: 1,
+        tenant_id: "test-tenant".to_string(),
+        request_id: "req-1".to_string(),
+        idempotency_key: "idem-1".to_string(),
+        request_hash: "hash-1".to_string(),
+        pipeline: "animated-explainer".to_string(),
+        input_mode: Some("text".to_string()),
+        status: "running".to_string(),
+        snapshot_json: serde_json::json!({"title": "Test"}),
+        render_runtime: None,
+        approval_policy: None,
+        budget_limit_usd: None,
+    };
+    OpenMontageJobStore::create_job(&*store, new_job).unwrap();
+
+    // Ingest a completed event with NO primary_video artifact
+    let event = OpenMontageJobEvent {
+        version: "1.0".to_string(),
+        event_id: format!("evt-{}", uuid::Uuid::new_v4()),
+        sequence: 1,
+        job: JobIdentifier {
+            job_id: job_id.to_string(),
+            project_id: format!("omx-{}", job_id),
+            request_id: "req-1".to_string(),
+            correlation_id: String::new(),
+            idempotency_key: "idem-1".to_string(),
+        },
+        event_type: "job_completed".to_string(),
+        status: "completed".to_string(),
+        stage: "finalize".to_string(),
+        progress_pct: 100,
+        emitted_at: chrono::Utc::now().to_rfc3339(),
+        artifacts: vec![
+            // Some artifacts, but NO primary_video
+            ArtifactDto {
+                artifact_id: "art-1".to_string(),
+                kind: "image".to_string(),
+                role: "thumbnail".to_string(),
+                uri: "https://example.com/thumb.png".to_string(),
+                path: "/out/thumb.png".to_string(),
+                mime_type: "image/png".to_string(),
+                width_px: 512,
+                height_px: 512,
+                duration_ms: 0,
+                bytes: 1024,
+            },
+        ],
+    };
+
+    service.ingest_event(event).unwrap();
+
+    // Assert job status is "degraded" (read back via get_job to prove end-state)
+    let job = service
+        .get_job(job_id)
+        .expect("get_job should succeed")
+        .expect("job should exist");
+
+    assert_eq!(
+        job.status, "degraded",
+        "Job status should be degraded when completed event has no primary_video artifact"
+    );
+}
+
+#[tokio::test]
+async fn ingest_completed_with_primary_video_stays_completed() {
+    use glance_mind_api::{
+        handler::openmontage_handler::{ArtifactDto, JobIdentifier, OpenMontageJobEvent},
+        repository::openmontage_repository::NewJob,
+    };
+    use std::sync::Arc;
+
+    let store = Arc::new(InMemoryJobStore::new());
+    let client = Arc::new(MockOpenMontageClient::new());
+    let hub = OpenMontageStreamHub::new();
+    let service = OpenMontageService::new(store.clone(), client.clone(), hub);
+
+    // Seed a job
+    let job_id = "test-job-completed-1";
+    let new_job = NewJob {
+        job_id: job_id.to_string(),
+        project_id: format!("omx-{}", job_id),
+        user_id: 1,
+        tenant_id: "test-tenant".to_string(),
+        request_id: "req-1".to_string(),
+        idempotency_key: "idem-2".to_string(),
+        request_hash: "hash-2".to_string(),
+        pipeline: "animated-explainer".to_string(),
+        input_mode: Some("text".to_string()),
+        status: "running".to_string(),
+        snapshot_json: serde_json::json!({"title": "Test"}),
+        render_runtime: None,
+        approval_policy: None,
+        budget_limit_usd: None,
+    };
+    OpenMontageJobStore::create_job(&*store, new_job).unwrap();
+
+    // Ingest a completed event WITH primary_video artifact
+    let event = OpenMontageJobEvent {
+        version: "1.0".to_string(),
+        event_id: format!("evt-{}", uuid::Uuid::new_v4()),
+        sequence: 1,
+        job: JobIdentifier {
+            job_id: job_id.to_string(),
+            project_id: format!("omx-{}", job_id),
+            request_id: "req-1".to_string(),
+            correlation_id: String::new(),
+            idempotency_key: "idem-2".to_string(),
+        },
+        event_type: "job_completed".to_string(),
+        status: "completed".to_string(),
+        stage: "finalize".to_string(),
+        progress_pct: 100,
+        emitted_at: chrono::Utc::now().to_rfc3339(),
+        artifacts: vec![ArtifactDto {
+            artifact_id: "art-video-1".to_string(),
+            kind: "video".to_string(),
+            role: "primary_video".to_string(),
+            uri: "https://example.com/output.mp4".to_string(),
+            path: "/out/output.mp4".to_string(),
+            mime_type: "video/mp4".to_string(),
+            width_px: 1920,
+            height_px: 1080,
+            duration_ms: 60000,
+            bytes: 10485760,
+        }],
+    };
+
+    service.ingest_event(event).unwrap();
+
+    // Assert job status remains "completed"
+    let job = service
+        .get_job(job_id)
+        .expect("get_job should succeed")
+        .expect("job should exist");
+
+    assert_eq!(
+        job.status, "completed",
+        "Job status should remain completed when event has primary_video artifact"
+    );
+}

@@ -128,6 +128,42 @@ pub struct CreateJobResult {
     pub created: bool, // true if newly inserted, false if existing job returned
 }
 
+/// Derive the final job status from an event, applying downgrade rules.
+///
+/// If event.status is "completed" AND the event's artifacts contain NO primary_video,
+/// returns "degraded". Otherwise returns event.status unchanged.
+///
+/// This is the single source of truth for the completed→degraded rule, applied
+/// consistently in both InMemoryJobStore and PgJobStore.
+fn derive_final_status(event: &NewJobEvent) -> Option<String> {
+    let event_status = event.status.as_ref()?;
+
+    // Only apply the rule if status is "completed"
+    if event_status != "completed" {
+        return Some(event_status.clone());
+    }
+
+    // Check for primary_video artifact in event_json
+    if let Some(artifacts) = event.event_json.get("artifacts").and_then(|v| v.as_array()) {
+        let has_primary_video = artifacts.iter().any(|a| {
+            a.get("role")
+                .and_then(|r| r.as_str())
+                .map(|r| r == "primary_video")
+                .unwrap_or(false)
+        });
+
+        if has_primary_video {
+            return Some("completed".to_string());
+        } else {
+            // Completed without primary_video → degraded
+            return Some("degraded".to_string());
+        }
+    }
+
+    // No artifacts array → degraded
+    Some("degraded".to_string())
+}
+
 /// Job store trait
 pub trait OpenMontageJobStore: Send + Sync {
     fn create_job(&self, job: NewJob) -> Result<CreateJobResult, String>;
@@ -301,8 +337,9 @@ impl OpenMontageJobStore for InMemoryJobStore {
         if gap {
             stored.job.sync_required = true;
         }
-        if let Some(ref status) = event.status {
-            stored.job.status = status.clone();
+        // Apply final status derivation (completed→degraded rule)
+        if let Some(final_status) = derive_final_status(&event) {
+            stored.job.status = final_status;
         }
         stored.job.updated_at = Some(chrono::Utc::now());
 
@@ -340,8 +377,9 @@ impl OpenMontageJobStore for InMemoryJobStore {
             .get_mut(&event.job_id)
             .ok_or_else(|| format!("Job not found: {}", event.job_id))?;
 
-        if let Some(ref status) = event.status {
-            stored.job.status = status.clone();
+        // Apply final status derivation (completed→degraded rule)
+        if let Some(final_status) = derive_final_status(event) {
+            stored.job.status = final_status;
         }
 
         // Extract stage/progress from event_json if present
@@ -669,7 +707,7 @@ impl OpenMontageJobStore for PgJobStore {
                 next_event_sequence: Some(event.sequence + 1),
                 updated_at: Some(chrono::Utc::now()),
                 sync_required: if gap { Some(true) } else { None },
-                status: event.status.clone(),
+                status: derive_final_status(&event),
                 ..Default::default()
             };
 
@@ -732,34 +770,11 @@ impl OpenMontageJobStore for PgJobStore {
                 .select(OpenmontageJob::as_select())
                 .first(conn)?;
 
-            let mut update = UpdateOpenmontageJob::default();
-
-            // Update status
-            if let Some(ref status_val) = event.status {
-                let mut final_status = status_val.clone();
-
-                // If status is "completed", require primary_video artifact
-                if status_val == "completed" {
-                    if let Some(artifacts) =
-                        event.event_json.get("artifacts").and_then(|v| v.as_array())
-                    {
-                        let has_primary_video = artifacts.iter().any(|a| {
-                            a.get("role")
-                                .and_then(|r| r.as_str())
-                                .map(|r| r == "primary_video")
-                                .unwrap_or(false)
-                        });
-
-                        if !has_primary_video {
-                            final_status = "degraded".to_string();
-                        }
-                    } else {
-                        final_status = "degraded".to_string();
-                    }
-                }
-
-                update.status = Some(final_status);
-            }
+            // Apply final status derivation (completed→degraded rule)
+            let mut update = UpdateOpenmontageJob {
+                status: derive_final_status(event),
+                ..Default::default()
+            };
 
             // Extract stage from event_json
             if let Some(stage_val) = event.event_json.get("stage").and_then(|v| v.as_str()) {
