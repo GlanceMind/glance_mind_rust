@@ -60,14 +60,7 @@ pub fn validate_input_mode_for_pipeline(
     // Define the contract table
     let contract = match pipeline {
         "animated-explainer" => (vec![InputMode::TextToVideo], vec![]),
-        "animation" => (
-            vec![
-                InputMode::TextToVideo,
-                InputMode::ImageToVideo,
-                InputMode::FirstLastFrame,
-            ],
-            vec![],
-        ),
+        "animation" => (vec![InputMode::TextToVideo], vec![]),
         "avatar-spokesperson" => (
             vec![InputMode::SourceScript, InputMode::TextToVideo],
             vec!["avatar"],
@@ -350,6 +343,48 @@ impl CreateJobDto {
         // TODO(part-3): map asset_ids to OpenMontageInputAsset[], tool_invocations to OpenMontageToolInvocation[]
 
         req
+    }
+
+    /// Build tool_invocations for the given input_mode and assets (pipeline-independent mapping).
+    /// Returns a vec of tool_invocation JSON objects.
+    /// This is the same mapping logic used in the service, extracted for unit testing.
+    pub fn build_tool_invocations_for_input_mode(
+        input_mode: &str,
+        prompt: &str,
+        duration_seconds: u32,
+        assets: &[serde_json::Value],
+    ) -> Vec<serde_json::Value> {
+        let mut tool_invocations = vec![];
+
+        match input_mode {
+            "image_to_video" => {
+                // Find reference_image asset
+                if let Some(img_asset) = assets.iter().find(|a| a["kind"] == "reference_image") {
+                    tool_invocations.push(serde_json::json!({
+                        "operation": "image_to_video",
+                        "input_json": serde_json::json!({
+                            "prompt": prompt,
+                            "image_url": img_asset["uri"],
+                            "duration": duration_seconds,
+                        }).to_string(),
+                    }));
+                }
+            }
+            "first_last_frame" => {
+                // start_frame and end_frame are already in assets_array, no tool_invocation needed
+            }
+            "reference_driven" => {
+                // reference_video is in assets_array, no direct generation invocation (worker gates it)
+            }
+            "source_clip" => {
+                // source_video is in assets_array, no tool_invocation
+            }
+            _ => {
+                // text_to_video / source_script / unknown: no tool_invocations
+            }
+        }
+
+        tool_invocations
     }
 }
 

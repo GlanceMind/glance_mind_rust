@@ -160,37 +160,14 @@ impl OpenMontageService {
                     }));
                 }
 
-                // Build tool_invocations based on input_mode
+                // Build tool_invocations based on input_mode using the DTO's mapping helper
                 if let Some(ref input_mode) = dto.input_mode {
-                    match input_mode.as_str() {
-                        "image_to_video" => {
-                            // Find reference_image asset
-                            if let Some(img_asset) =
-                                assets_array.iter().find(|a| a["kind"] == "reference_image")
-                            {
-                                tool_invocations.push(serde_json::json!({
-                                    "operation": "image_to_video",
-                                    "input_json": serde_json::json!({
-                                        "prompt": dto.prompt,
-                                        "image_url": img_asset["uri"],
-                                        "duration": dto.duration_seconds.unwrap_or(60),
-                                    }).to_string(),
-                                }));
-                            }
-                        }
-                        "first_last_frame" => {
-                            // start_frame and end_frame are already in assets_array, no tool_invocation needed
-                        }
-                        "reference_driven" => {
-                            // reference_video is in assets_array, no direct generation invocation (worker gates it)
-                        }
-                        "source_clip" => {
-                            // source_video is in assets_array, no tool_invocation
-                        }
-                        _ => {
-                            // text_to_video / source_script / unknown: no assets/tool_invocations
-                        }
-                    }
+                    tool_invocations = CreateJobDto::build_tool_invocations_for_input_mode(
+                        input_mode,
+                        &dto.prompt,
+                        dto.duration_seconds.unwrap_or(60),
+                        &assets_array,
+                    );
                 }
 
                 request_json["assets"] = serde_json::Value::Array(assets_array.clone());
