@@ -2,6 +2,44 @@
 //!
 //! Tests kind/mime/size validation logic without hitting OSS.
 
+use std::collections::HashSet;
+
+/// R011 M3-T2: VALID_ASSET_KINDS must exactly match the documented ROOT role vocabulary
+#[test]
+fn proptest_valid_asset_kinds_matches_role_vocabulary() {
+    // Documented ROOT role vocabulary (from M0b-T5 reconciliation)
+    let expected_vocabulary: HashSet<&str> = [
+        "reference_image",
+        "start_frame",
+        "end_frame",
+        "reference_video",
+        "source_video",
+        "brand_asset",
+        "audio",
+        "music",
+        "subtitle",
+        "avatar", // M3-T2: avatar must be in the allowlist
+    ]
+    .iter()
+    .copied()
+    .collect();
+
+    // Current VALID_ASSET_KINDS from handler (mirrored in helper below)
+    let actual_kinds: HashSet<&str> = get_valid_asset_kinds().iter().copied().collect();
+
+    assert_eq!(
+        actual_kinds,
+        expected_vocabulary,
+        "VALID_ASSET_KINDS must exactly match the ROOT role vocabulary. Missing: {:?}, Extra: {:?}",
+        expected_vocabulary
+            .difference(&actual_kinds)
+            .collect::<Vec<_>>(),
+        actual_kinds
+            .difference(&expected_vocabulary)
+            .collect::<Vec<_>>()
+    );
+}
+
 #[test]
 fn asset_kind_validation_accepts_valid_kinds() {
     let valid_kinds = vec![
@@ -14,6 +52,7 @@ fn asset_kind_validation_accepts_valid_kinds() {
         "audio",
         "music",
         "subtitle",
+        "avatar", // M3-T2: avatar is a valid kind
     ];
 
     for kind in valid_kinds {
@@ -158,19 +197,23 @@ fn audio_size_validation() {
 }
 
 // Helper functions mirroring the handler validation logic
+fn get_valid_asset_kinds() -> Vec<&'static str> {
+    vec![
+        "reference_image",
+        "start_frame",
+        "end_frame",
+        "reference_video",
+        "source_video",
+        "brand_asset",
+        "audio",
+        "music",
+        "subtitle",
+        "avatar", // M3-T2: avatar is now in handler
+    ]
+}
+
 fn is_valid_asset_kind(kind: &str) -> bool {
-    matches!(
-        kind,
-        "reference_image"
-            | "start_frame"
-            | "end_frame"
-            | "reference_video"
-            | "source_video"
-            | "brand_asset"
-            | "audio"
-            | "music"
-            | "subtitle"
-    )
+    get_valid_asset_kinds().contains(&kind)
 }
 
 fn is_valid_image_mime(mime: &str) -> bool {

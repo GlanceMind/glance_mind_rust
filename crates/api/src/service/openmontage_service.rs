@@ -536,7 +536,7 @@ impl OpenMontageService {
         // Determine upload method based on asset family
         let is_image = matches!(
             kind.as_str(),
-            "reference_image" | "start_frame" | "end_frame" | "brand_asset"
+            "reference_image" | "start_frame" | "end_frame" | "brand_asset" | "avatar" // M3-T2: avatar is an image
         );
         let is_video = matches!(kind.as_str(), "reference_video" | "source_video");
         let is_audio = matches!(kind.as_str(), "audio" | "music");

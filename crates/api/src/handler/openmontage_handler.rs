@@ -320,6 +320,8 @@ pub async fn cancel_job(
 // ============================================================================
 
 /// Valid OpenMontage input asset kinds
+/// R011 M3-T2: Reconciled to full ROOT role vocabulary (reference_image, start_frame, end_frame,
+/// reference_video, source_video, brand_asset, audio, music, subtitle, avatar)
 const VALID_ASSET_KINDS: &[&str] = &[
     "reference_image",
     "start_frame",
@@ -330,6 +332,7 @@ const VALID_ASSET_KINDS: &[&str] = &[
     "audio",
     "music",
     "subtitle",
+    "avatar", // M3-T2: user-supplied avatar (uploaded photo or platform avatar)
 ];
 
 /// Maximum file size for images (OpenMontage assets): 30MB
@@ -445,7 +448,7 @@ pub async fn upload_asset(
     // Determine asset family (image/video/audio) and validate mime + size
     let is_image = matches!(
         asset_kind.as_str(),
-        "reference_image" | "start_frame" | "end_frame" | "brand_asset"
+        "reference_image" | "start_frame" | "end_frame" | "brand_asset" | "avatar" // M3-T2: avatar is an image
     );
     let is_video = matches!(asset_kind.as_str(), "reference_video" | "source_video");
     let is_audio = matches!(asset_kind.as_str(), "audio" | "music");
@@ -495,6 +498,7 @@ pub async fn upload_asset(
         "brand_asset" => "brand_logo".to_string(),
         "audio" | "music" => "background_audio".to_string(),
         "subtitle" => "subtitle_file".to_string(),
+        "avatar" => "avatar".to_string(), // M3-T2: avatar role
         _ => "generic".to_string(),
     });
 
