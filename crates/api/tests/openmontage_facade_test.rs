@@ -1048,6 +1048,8 @@ async fn ingest_completed_without_primary_video_downgrades_to_degraded() {
                 height_px: 512,
                 duration_ms: 0,
                 bytes: 1024,
+                artifact_type: String::new(),
+                metadata: None,
             },
         ],
     };
@@ -1128,6 +1130,8 @@ async fn ingest_completed_with_primary_video_stays_completed() {
             height_px: 1080,
             duration_ms: 60000,
             bytes: 10485760,
+            artifact_type: String::new(),
+            metadata: None,
         }],
     };
 
@@ -1142,5 +1146,240 @@ async fn ingest_completed_with_primary_video_stays_completed() {
     assert_eq!(
         job.status, "completed",
         "Job status should remain completed when event has primary_video artifact"
+    );
+}
+
+/// M4-T5b-api: Surface curated brief artifacts on JobSnapshotDto
+#[tokio::test]
+async fn snapshot_surfaces_artifacts_from_approval_event() {
+    use glance_mind_api::handler::openmontage_handler::{
+        ArtifactDto, JobIdentifier, OpenMontageJobEvent,
+    };
+    use glance_mind_api::repository::openmontage_repository::{InMemoryJobStore, NewJob};
+    use glance_mind_api::service::openmontage_client::MockOpenMontageClient;
+    use glance_mind_api::service::openmontage_service::OpenMontageService;
+    use glance_mind_api::service::openmontage_stream_hub::OpenMontageStreamHub;
+    use std::sync::Arc;
+
+    let store = Arc::new(InMemoryJobStore::new());
+    let client = Arc::new(MockOpenMontageClient::new());
+    let hub = OpenMontageStreamHub::new();
+    let service = OpenMontageService::new(store.clone(), client, hub);
+
+    // Create a job
+    let job_id = "job-artifacts-test";
+    let new_job = NewJob {
+        job_id: job_id.to_string(),
+        project_id: "proj-123".to_string(),
+        user_id: 1,
+        tenant_id: "tenant-123".to_string(),
+        request_id: "req-123".to_string(),
+        idempotency_key: "idem-123".to_string(),
+        request_hash: "hash-123".to_string(),
+        pipeline: "animated-explainer".to_string(),
+        input_mode: None,
+        status: "queued".to_string(),
+        snapshot_json: serde_json::json!({}),
+        render_runtime: None,
+        approval_policy: None,
+        budget_limit_usd: None,
+    };
+    store.create_job(new_job).unwrap();
+
+    // Ingest an approval_required event with video_analysis_brief artifact
+    let approval_event = OpenMontageJobEvent {
+        version: "1.0".to_string(),
+        event_id: "evt-001".to_string(),
+        sequence: 1,
+        job: JobIdentifier {
+            job_id: job_id.to_string(),
+            project_id: "proj-123".to_string(),
+            request_id: "req-123".to_string(),
+            correlation_id: String::new(),
+            idempotency_key: "idem-123".to_string(),
+        },
+        event_type: "approval_required".to_string(),
+        status: "paused_for_approval".to_string(),
+        stage: "reference_analysis".to_string(),
+        progress_pct: 50,
+        emitted_at: chrono::Utc::now().to_rfc3339(),
+        artifacts: vec![ArtifactDto {
+            artifact_id: String::new(),
+            kind: String::new(),
+            role: String::new(),
+            uri: String::new(),
+            path: String::new(),
+            mime_type: String::new(),
+            width_px: 0,
+            height_px: 0,
+            duration_ms: 0,
+            bytes: 0,
+            artifact_type: "video_analysis_brief".to_string(),
+            metadata: Some(serde_json::json!({
+                "summary": "A fast-paced tech review video",
+                "topics": ["AI", "technology", "innovation"],
+                "target_audience": "tech enthusiasts",
+                "tone": "energetic",
+                "total_scenes": 0,
+                "pacing_style": "fast",
+                "key_elements_to_replicate": ["dynamic cuts", "visual effects"],
+                "creative_differentiation_seeds": ["unique angle on AI ethics"]
+            })),
+        }],
+        extra: std::collections::HashMap::new(),
+    };
+    service.ingest_event(approval_event).unwrap();
+
+    // Get the snapshot and verify artifacts are surfaced
+    let snapshot = service
+        .get_job(job_id)
+        .expect("get_job should succeed")
+        .expect("job should exist");
+
+    // Test 3a: artifacts extracted from snapshot_json
+    assert_eq!(
+        snapshot.artifacts.len(),
+        1,
+        "Should have 1 artifact from approval event"
+    );
+    assert_eq!(
+        snapshot.artifacts[0].artifact_type, "video_analysis_brief",
+        "Artifact type should match"
+    );
+
+    // Verify metadata is preserved
+    let metadata = snapshot.artifacts[0]
+        .metadata
+        .as_ref()
+        .expect("metadata should be present");
+    assert_eq!(
+        metadata["summary"].as_str().unwrap(),
+        "A fast-paced tech review video"
+    );
+    assert_eq!(metadata["pacing_style"].as_str().unwrap(), "fast");
+    assert_eq!(metadata["tone"].as_str().unwrap(), "energetic");
+}
+
+/// M4-T5b-api: Empty artifacts when snapshot_json has no artifacts key
+#[tokio::test]
+async fn snapshot_empty_artifacts_when_no_artifacts_in_event() {
+    use glance_mind_api::handler::openmontage_handler::{JobIdentifier, OpenMontageJobEvent};
+    use glance_mind_api::repository::openmontage_repository::{InMemoryJobStore, NewJob};
+    use glance_mind_api::service::openmontage_client::MockOpenMontageClient;
+    use glance_mind_api::service::openmontage_service::OpenMontageService;
+    use glance_mind_api::service::openmontage_stream_hub::OpenMontageStreamHub;
+    use std::sync::Arc;
+
+    let store = Arc::new(InMemoryJobStore::new());
+    let client = Arc::new(MockOpenMontageClient::new());
+    let hub = OpenMontageStreamHub::new();
+    let service = OpenMontageService::new(store.clone(), client, hub);
+
+    let job_id = "job-no-artifacts";
+    let new_job = NewJob {
+        job_id: job_id.to_string(),
+        project_id: "proj-456".to_string(),
+        user_id: 1,
+        tenant_id: "tenant-456".to_string(),
+        request_id: "req-456".to_string(),
+        idempotency_key: "idem-456".to_string(),
+        request_hash: "hash-456".to_string(),
+        pipeline: "animated-explainer".to_string(),
+        input_mode: None,
+        status: "queued".to_string(),
+        snapshot_json: serde_json::json!({}),
+        render_runtime: None,
+        approval_policy: None,
+        budget_limit_usd: None,
+    };
+    store.create_job(new_job).unwrap();
+
+    // Ingest a running event with NO artifacts key
+    let running_event = OpenMontageJobEvent {
+        version: "1.0".to_string(),
+        event_id: "evt-002".to_string(),
+        sequence: 1,
+        job: JobIdentifier {
+            job_id: job_id.to_string(),
+            project_id: "proj-456".to_string(),
+            request_id: "req-456".to_string(),
+            correlation_id: String::new(),
+            idempotency_key: "idem-456".to_string(),
+        },
+        event_type: "running".to_string(),
+        status: "running".to_string(),
+        stage: "compose".to_string(),
+        progress_pct: 75,
+        emitted_at: chrono::Utc::now().to_rfc3339(),
+        artifacts: vec![],
+        extra: std::collections::HashMap::new(),
+    };
+    service.ingest_event(running_event).unwrap();
+
+    let snapshot = service
+        .get_job(job_id)
+        .expect("get_job should succeed")
+        .expect("job should exist");
+
+    // Test 3b: artifacts should be empty array, not error
+    assert_eq!(
+        snapshot.artifacts.len(),
+        0,
+        "Should have empty artifacts when event has no artifacts key"
+    );
+}
+
+/// M4-T5b-api: Defensive parsing when artifacts is malformed
+/// Note: This test validates defensive parsing at the extract_artifacts level by
+/// directly manipulating snapshot_json with malformed data, which can't happen
+/// through OpenMontageJobEvent (serde would reject it). We test by creating a job
+/// with malformed snapshot_json directly in the store.
+#[tokio::test]
+async fn snapshot_empty_artifacts_when_malformed() {
+    use glance_mind_api::repository::openmontage_repository::{InMemoryJobStore, NewJob};
+    use glance_mind_api::service::openmontage_client::MockOpenMontageClient;
+    use glance_mind_api::service::openmontage_service::OpenMontageService;
+    use glance_mind_api::service::openmontage_stream_hub::OpenMontageStreamHub;
+    use std::sync::Arc;
+
+    let store = Arc::new(InMemoryJobStore::new());
+    let client = Arc::new(MockOpenMontageClient::new());
+    let hub = OpenMontageStreamHub::new();
+    let service = OpenMontageService::new(store.clone(), client, hub);
+
+    let job_id = "job-malformed";
+    let new_job = NewJob {
+        job_id: job_id.to_string(),
+        project_id: "proj-789".to_string(),
+        user_id: 1,
+        tenant_id: "tenant-789".to_string(),
+        request_id: "req-789".to_string(),
+        idempotency_key: "idem-789".to_string(),
+        request_hash: "hash-789".to_string(),
+        pipeline: "animated-explainer".to_string(),
+        input_mode: None,
+        status: "queued".to_string(),
+        // Malformed snapshot_json: artifacts is a string, not an array
+        snapshot_json: serde_json::json!({
+            "event_id": "evt-003",
+            "event_type": "approval_required",
+            "artifacts": "oops-not-an-array"
+        }),
+        render_runtime: None,
+        approval_policy: None,
+        budget_limit_usd: None,
+    };
+    store.create_job(new_job).unwrap();
+
+    let snapshot = service
+        .get_job(job_id)
+        .expect("get_job should succeed")
+        .expect("job should exist");
+
+    // Test 3c: defensive - returns empty array, no panic
+    assert_eq!(
+        snapshot.artifacts.len(),
+        0,
+        "Should return empty artifacts when malformed, not panic"
     );
 }

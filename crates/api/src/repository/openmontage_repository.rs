@@ -396,6 +396,9 @@ impl OpenMontageJobStore for InMemoryJobStore {
             stored.job.progress_pct = progress as i32;
         }
 
+        // M4-T5b: Update snapshot_json with latest event data (matches Postgres impl)
+        stored.job.snapshot_json = event.event_json.clone();
+
         stored.job.updated_at = Some(chrono::Utc::now());
         Ok(())
     }

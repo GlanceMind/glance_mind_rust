@@ -566,10 +566,13 @@ pub struct JobIdentifier {
     pub idempotency_key: String,
 }
 
-#[derive(serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct ArtifactDto {
+    #[serde(default)]
     pub artifact_id: String,
+    #[serde(default)]
     pub kind: String,
+    #[serde(default)]
     pub role: String,
     #[serde(default)]
     pub uri: String,
@@ -585,6 +588,12 @@ pub struct ArtifactDto {
     pub duration_ms: i32,
     #[serde(default)]
     pub bytes: i64,
+    /// M4-T5b: artifact_type for curated brief artifacts (e.g., "video_analysis_brief")
+    #[serde(default)]
+    pub artifact_type: String,
+    /// M4-T5b: metadata for curated brief artifacts
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
 }
 
 #[derive(serde::Serialize)]

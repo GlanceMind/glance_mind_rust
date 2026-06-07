@@ -230,19 +230,20 @@ impl OpenMontageService {
             if result.job.request_hash == request_hash {
                 // Same key + same body → return existing job (NO enqueue)
                 return Ok(JobSnapshotDto {
-                    job_id: result.job.job_id,
-                    project_id: result.job.project_id,
-                    status: result.job.status,
-                    pipeline: result.job.pipeline,
-                    current_stage: result.job.current_stage,
+                    job_id: result.job.job_id.clone(),
+                    project_id: result.job.project_id.clone(),
+                    status: result.job.status.clone(),
+                    pipeline: result.job.pipeline.clone(),
+                    current_stage: result.job.current_stage.clone(),
                     progress_pct: result.job.progress_pct,
-                    error_json: result.job.error_json,
+                    error_json: result.job.error_json.clone(),
                     last_event_sequence: result.job.last_event_sequence,
                     next_event_sequence: result.job.next_event_sequence,
                     sync_required: result.job.sync_required,
-                    snapshot_json: result.job.snapshot_json,
+                    snapshot_json: result.job.snapshot_json.clone(),
                     created_at: result.job.created_at.to_rfc3339(),
                     updated_at: result.job.updated_at.map(|t| t.to_rfc3339()),
+                    artifacts: Self::extract_artifacts(&result.job.snapshot_json),
                 });
             } else {
                 // Same key + different body → HTTP 409 conflict (NO enqueue)
@@ -270,19 +271,20 @@ impl OpenMontageService {
         self.client.enqueue_run(envelope)?;
 
         Ok(JobSnapshotDto {
-            job_id: result.job.job_id,
-            project_id: result.job.project_id,
-            status: result.job.status,
-            pipeline: result.job.pipeline,
-            current_stage: result.job.current_stage,
+            job_id: result.job.job_id.clone(),
+            project_id: result.job.project_id.clone(),
+            status: result.job.status.clone(),
+            pipeline: result.job.pipeline.clone(),
+            current_stage: result.job.current_stage.clone(),
             progress_pct: result.job.progress_pct,
-            error_json: result.job.error_json,
+            error_json: result.job.error_json.clone(),
             last_event_sequence: result.job.last_event_sequence,
             next_event_sequence: result.job.next_event_sequence,
             sync_required: result.job.sync_required,
-            snapshot_json: result.job.snapshot_json,
+            snapshot_json: result.job.snapshot_json.clone(),
             created_at: result.job.created_at.to_rfc3339(),
             updated_at: result.job.updated_at.map(|t| t.to_rfc3339()),
+            artifacts: Self::extract_artifacts(&result.job.snapshot_json),
         })
     }
 
@@ -293,6 +295,17 @@ impl OpenMontageService {
         job_id: &str,
     ) -> Result<Option<crate::repository::openmontage_repository::Job>, String> {
         self.store.get_job(job_id)
+    }
+
+    /// M4-T5b: Extract artifacts from snapshot_json (defensive - returns [] if missing/malformed).
+    fn extract_artifacts(
+        snapshot_json: &serde_json::Value,
+    ) -> Vec<crate::handler::openmontage_handler::ArtifactDto> {
+        snapshot_json
+            .get("artifacts")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| serde_json::from_value(serde_json::Value::Array(arr.clone())).ok())
+            .unwrap_or_default()
     }
 
     /// Convert a Job entity to JobSnapshotDto.
@@ -314,6 +327,7 @@ impl OpenMontageService {
             snapshot_json: job.snapshot_json.clone(),
             created_at: job.created_at.to_rfc3339(),
             updated_at: job.updated_at.map(|t| t.to_rfc3339()),
+            artifacts: Self::extract_artifacts(&job.snapshot_json),
         }
     }
 

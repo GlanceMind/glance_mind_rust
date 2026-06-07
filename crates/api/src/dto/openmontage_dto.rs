@@ -439,6 +439,9 @@ pub struct JobSnapshotDto {
     pub created_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
+    /// M4-T5b: artifacts extracted from snapshot_json (curated brief, etc.)
+    #[serde(default)]
+    pub artifacts: Vec<crate::handler::openmontage_handler::ArtifactDto>,
 }
 
 /// Job Event DTO
