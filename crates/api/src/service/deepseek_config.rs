@@ -2,7 +2,7 @@ use rig::providers::openai;
 use std::env;
 
 const DEFAULT_DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com";
-const DEFAULT_DEEPSEEK_MODEL: &str = "deepseek-v4-pro";
+const DEFAULT_DEEPSEEK_MODEL: &str = "deepseek-chat";
 const DEEPSEEK_OPENAI_PATH: &str = "/v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,7 +111,12 @@ mod tests {
             .expect("defaulted config should resolve");
 
         assert_eq!(config.base_url, "https://api.deepseek.com/v1");
-        assert_eq!(config.model, "deepseek-v4-pro");
+        // ASSERTION-CHANGE-JUSTIFIED: the previous default "deepseek-v4-pro" is
+        // not a valid model on the public DeepSeek API (real models are
+        // deepseek-chat / deepseek-reasoner), so it caused HTTP 400 model-not-exist
+        // in any environment that relied on the default. The corrected default is
+        // the canonical chat model.
+        assert_eq!(config.model, "deepseek-chat");
     }
 
     #[test]
