@@ -375,7 +375,14 @@ Generate the analysis results in strict JSON format."#,
                     ),
                 ))
             })?
-            .map_err(|_| {
+            .map_err(|e| {
+                // Log the real provider error before redaction so production
+                // incidents are diagnosable; the caller gets only the safe string.
+                tracing::error!(
+                    model = %DEEPSEEK_CONFIG.model,
+                    error = ?e,
+                    "DeepSeek completion request failed (agent analysis)"
+                );
                 ApiError::InfrastructureError(InfrastructureError::ExternalApiRequestFailed(
                     deepseek_config::safe_provider_error("AI Provider Error"),
                 ))
