@@ -58,7 +58,7 @@ services:
       # DeepSeek OpenAI-compatible runtime (assistant chat/reply templates)
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
-      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-pro}
       # LaoZhang API Configuration (video/image generation only)
       LAOZHANG_BASE_URL: ${LAOZHANG_BASE_URL:-https://api.laozhang.ai}
       LAOZHANG_API_KEY: ${LAOZHANG_API_KEY}
