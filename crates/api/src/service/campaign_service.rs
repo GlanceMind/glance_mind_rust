@@ -6,8 +6,10 @@ use crate::dto::campaign_lead_metrics_dto::CampaignLeadMetricsDto;
 use crate::error::db_error::DbError;
 use crate::error::{api_error::ApiError, business_error::BusinessError};
 use crate::repository::campaign_repository::CampaignRepository;
+use crate::repository::social_group_repository::SocialGroupRepository;
 use crate::repository::template_repository::TemplateRepository;
 use crate::repository::wallet_repository::WalletRepository;
+use crate::service::campaign_social_group_validation::validate_campaign_social_group;
 use chrono::Utc;
 use diesel::result::Error as DieselError;
 use glance_mind_db::entity::campaign::{Campaign, NewCampaign};
@@ -22,6 +24,7 @@ pub struct CampaignService {
     pool: DBPool,
     wallet_repo: WalletRepository,
     template_repo: TemplateRepository,
+    social_group_repo: SocialGroupRepository,
 }
 
 impl CampaignService {
@@ -31,6 +34,7 @@ impl CampaignService {
             pool: db.pool.clone(),
             wallet_repo: WalletRepository::new(db.pool.clone()),
             template_repo: TemplateRepository::new(db.pool.clone()),
+            social_group_repo: SocialGroupRepository::new(db.pool.clone()),
         }
     }
 
@@ -42,6 +46,13 @@ impl CampaignService {
         // Validate schedule_type
         validate_schedule_type(&dto.schedule_type)?;
         validate_schedule_config(&dto.schedule_type, &dto.schedule_config)?;
+
+        // An account group is unconditionally required at create and must be
+        // valid (exists, owned by this user, same platform). Incident: prod
+        // campaign 271 activated with a null group and generated 50 AI
+        // suggestions that could never be sent.
+        self.validate_social_group(user_id, dto.social_group_id, dto.platform_id)
+            .await?;
 
         // Validate max_scan_count
         let scan_count = dto.max_scan_count.unwrap_or(0);
@@ -283,6 +294,14 @@ impl CampaignService {
             validate_schedule_config(st, &config.cloned())?;
         }
 
+        // Validate the EFFECTIVE account group after the merge. An update must
+        // never remove the group (effective null → reject) and any group it
+        // resolves to must be valid for the effective platform.
+        let effective_platform_id = dto.platform_id.unwrap_or(existing.platform_id);
+        let effective_social_group_id = dto.social_group_id.or(existing.social_group_id);
+        self.validate_social_group(user_id, effective_social_group_id, effective_platform_id)
+            .await?;
+
         // Build changeset
         let should_replace_reply_template_ids = dto.reply_template_ids.is_some();
         let reply_template_ids = if let Some(raw_ids) = dto.reply_template_ids {
@@ -422,6 +441,17 @@ impl CampaignService {
             CampaignStatus::Active => {
                 // Check if this is first activation (not frozen yet)
                 if !campaign.is_frozen {
+                    // Defense-in-depth: re-validate the campaign's current
+                    // account group before freezing budget and going live. This
+                    // intentionally blocks activating legacy campaigns whose
+                    // group is null or no longer valid (e.g. prod campaign 271).
+                    self.validate_social_group(
+                        user_id,
+                        campaign.social_group_id,
+                        campaign.platform_id,
+                    )
+                    .await?;
+
                     // First activation - use stored procedure to freeze budget
                     let result = self.repo.activate_campaign(id).await.map_err(|e| {
                         tracing::error!("Failed to activate campaign: {:?}", e);
@@ -573,6 +603,41 @@ impl CampaignService {
         }
 
         Ok(())
+    }
+
+    /// Validate that `social_group_id` resolves to a valid account group for
+    /// this campaign: non-null, exists, owned by `user_id`, and on the same
+    /// `platform_id` as the campaign.
+    ///
+    /// Ownership is enforced by `find_by_id(id, user_id)`: a missing or
+    /// non-owned group resolves to `None`, which the pure validator rejects as
+    /// required-missing. A genuine DB error (not `NotFound`) is surfaced as an
+    /// internal error rather than being silently treated as "missing".
+    async fn validate_social_group(
+        &self,
+        user_id: i32,
+        social_group_id: Option<i32>,
+        campaign_platform_id: i32,
+    ) -> Result<(), ApiError> {
+        let group = match social_group_id {
+            None => None,
+            Some(id) => match self.social_group_repo.find_by_id(id, user_id).await {
+                Ok(group) => Some(group),
+                Err(DieselError::NotFound) => None,
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to fetch social group {} for validation: {:?}",
+                        id,
+                        e
+                    );
+                    return Err(ApiError::InternalServerError(
+                        "Failed to validate account group".to_string(),
+                    ));
+                }
+            },
+        };
+
+        validate_campaign_social_group(group.as_ref(), campaign_platform_id)
     }
 
     async fn calculate_min_cost(

@@ -9,6 +9,7 @@ pub mod audientry_worker_dispatcher;
 pub mod batch_task_service;
 pub mod behavior_validation;
 pub mod campaign_service;
+pub mod campaign_social_group_validation;
 pub mod config_service;
 pub mod crawler_service;
 pub(crate) mod dashboard_service;
