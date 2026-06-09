@@ -63,18 +63,39 @@ class TestCampaignCRUD:
         resp = api_client.get("/api/v1/config/ai-models")
         models = extract_data(resp.json())
         ai_model_id = models[0]["id"]
-        
+
         return platform_id, region_id, ai_model_id
+
+    def _create_social_group(self, auth_client, platform_id):
+        """Create a valid account group owned by the auth user on `platform_id`.
+
+        A valid (non-null, owned) account group is an unconditional requirement
+        on campaign create and activation (incident: prod campaign 271 activated
+        with a null group). There is NO platform check (decision E1), so the
+        group's platform_id need not match the campaign — tests just need a real
+        owned group to satisfy the required-group rule.
+        """
+        resp = auth_client.post(
+            "/api/v1/social-groups",
+            json={
+                "platform_id": platform_id,
+                "group_name": f"E2E group {uuid.uuid4().hex[:8]}",
+            },
+        )
+        assert_response_success(resp)
+        return extract_data(resp.json())["id"]
 
     def test_create_campaign(self, auth_client, api_client):
         """Test creating a new campaign."""
         platform_id, region_id, ai_model_id = self._get_config_ids(api_client)
-        
+        social_group_id = self._create_social_group(auth_client, platform_id)
+
         campaign_payload = {
             "name": "E2E Test Campaign",
             "platform_id": platform_id,
             "region_id": region_id,
             "ai_model_id": ai_model_id,
+            "social_group_id": social_group_id,
             "schedule_type": "ONCE",
             "product_prompt": "E2E Test Product",
             "max_scan_count": 1,
@@ -94,6 +115,92 @@ class TestCampaignCRUD:
         assert data.get("name") == "E2E Test Campaign"
         assert data.get("status") in ["DRAFT", "draft"]
 
+    def test_create_campaign_without_social_group_is_rejected(self, auth_client, api_client):
+        """An account group is unconditionally required on create.
+
+        Incident: prod campaign 271 activated with social_group_id=NULL and 0
+        linked accounts, generating 50 AI suggestions that could never be sent.
+        Creating a campaign without a group must now be rejected.
+        """
+        platform_id, region_id, ai_model_id = self._get_config_ids(api_client)
+        payload = {
+            "name": "No-group campaign",
+            "platform_id": platform_id,
+            "region_id": region_id,
+            "ai_model_id": ai_model_id,
+            "schedule_type": "ONCE",
+            "product_prompt": "no group product",
+            "max_scan_count": 1,
+            # social_group_id intentionally omitted
+        }
+
+        resp = auth_client.post("/api/v1/campaigns", json=payload)
+        assert resp.status_code in (400, 422), (
+            f"Expected create to be rejected without an account group, "
+            f"got {resp.status_code}: {resp.text}"
+        )
+
+    def test_create_campaign_with_valid_social_group_succeeds(self, auth_client, api_client):
+        """Creating with a valid owned group succeeds and the campaign is
+        persisted with that group id (no platform check — decision E1)."""
+        platform_id, region_id, ai_model_id = self._get_config_ids(api_client)
+        social_group_id = self._create_social_group(auth_client, platform_id)
+        payload = {
+            "name": "Valid-group campaign",
+            "platform_id": platform_id,
+            "region_id": region_id,
+            "ai_model_id": ai_model_id,
+            "social_group_id": social_group_id,
+            "schedule_type": "ONCE",
+            "product_prompt": "valid group product",
+            "max_scan_count": 1,
+        }
+
+        resp = auth_client.post("/api/v1/campaigns", json=payload)
+        assert_response_success(resp)
+        data = extract_data(resp.json())
+        assert "id" in data, "Should return campaign ID"
+        assert data.get("social_group_id") == social_group_id
+
+    # NOTE: test_create_campaign_with_mismatched_platform_group_is_rejected was
+    # deleted wholesale.
+    # ASSERTION-CHANGE-JUSTIFIED: platform-match removed — gm_social_groups.platform_id
+    # is unreliable (68/69 prod groups defaulted to reddit); validation now requires
+    # only a non-null owned group, with no platform check. Per product decision E1.
+
+    def test_update_campaign_without_changing_group_succeeds(
+        self, auth_client, api_client
+    ):
+        """Update is relaxed (decision E2): it does NOT re-validate the account
+        group. Editing a campaign that already has a group, without sending a
+        different group, must succeed and keep the existing group."""
+        platform_id, region_id, ai_model_id = self._get_config_ids(api_client)
+        social_group_id = self._create_social_group(auth_client, platform_id)
+        create_payload = {
+            "name": "Update-relaxed campaign",
+            "platform_id": platform_id,
+            "region_id": region_id,
+            "ai_model_id": ai_model_id,
+            "social_group_id": social_group_id,
+            "schedule_type": "ONCE",
+            "product_prompt": "update relaxed product",
+            "max_scan_count": 1,
+        }
+        create_resp = auth_client.post("/api/v1/campaigns", json=create_payload)
+        assert_response_success(create_resp)
+        campaign_id = extract_data(create_resp.json())["id"]
+
+        # Update only an unrelated field; omit social_group_id entirely.
+        update_resp = auth_client.put(
+            f"/api/v1/campaigns/{campaign_id}",
+            json={"name": "Update-relaxed campaign (edited)"},
+        )
+        assert_response_success(update_resp)
+        data = extract_data(update_resp.json())
+        assert data.get("name") == "Update-relaxed campaign (edited)"
+        # The existing group is preserved by the .or() merge.
+        assert data.get("social_group_id") == social_group_id
+
     def _create_reusable_template(self, auth_client, suffix=None):
         unique = suffix or uuid.uuid4().hex[:8]
         resp = auth_client.post(
@@ -108,7 +215,7 @@ class TestCampaignCRUD:
         assert_response_success(resp)
         return extract_data(resp.json())
 
-    def _create_campaign_payload(self, api_client, suffix=None, **overrides):
+    def _create_campaign_payload(self, api_client, auth_client, suffix=None, **overrides):
         platform_id, region_id, ai_model_id = self._get_config_ids(api_client)
         unique = suffix or uuid.uuid4().hex[:8]
         payload = {
@@ -121,6 +228,14 @@ class TestCampaignCRUD:
             "max_scan_count": 1,
         }
         payload.update(overrides)
+        # An account group is unconditionally required (no platform check —
+        # decision E1). Provision one unless the caller explicitly supplied a
+        # social_group_id (including None to test the missing-group rejection
+        # path).
+        if "social_group_id" not in overrides:
+            payload["social_group_id"] = self._create_social_group(
+                auth_client, payload["platform_id"]
+            )
         return payload
 
     def _db_reply_template_ids(self, db_cursor, db_connection, campaign_id):
@@ -138,6 +253,7 @@ class TestCampaignCRUD:
         second = self._create_reusable_template(auth_client)
         payload = self._create_campaign_payload(
             api_client,
+            auth_client,
             reply_template_ids=[first["id"], second["id"], first["id"]],
         )
 
@@ -159,7 +275,7 @@ class TestCampaignCRUD:
     def test_create_campaign_null_reply_template_ids_serializes_empty(
         self, auth_client, api_client, db_cursor, db_connection
     ):
-        payload = self._create_campaign_payload(api_client, reply_template_ids=None)
+        payload = self._create_campaign_payload(api_client, auth_client, reply_template_ids=None)
 
         resp = auth_client.post("/api/v1/campaigns", json=payload)
         assert_response_success(resp)
@@ -175,7 +291,7 @@ class TestCampaignCRUD:
         db_side_reusable = self._create_reusable_template(auth_client)
         create_resp = auth_client.post(
             "/api/v1/campaigns",
-            json=self._create_campaign_payload(api_client, reply_template_ids=[reusable["id"]]),
+            json=self._create_campaign_payload(api_client, auth_client, reply_template_ids=[reusable["id"]]),
         )
         assert_response_success(create_resp)
         campaign_id = extract_data(create_resp.json())["id"]
@@ -208,7 +324,7 @@ class TestCampaignCRUD:
         reusable = self._create_reusable_template(auth_client)
         create_resp = auth_client.post(
             "/api/v1/campaigns",
-            json=self._create_campaign_payload(api_client, reply_template_ids=[reusable["id"]]),
+            json=self._create_campaign_payload(api_client, auth_client, reply_template_ids=[reusable["id"]]),
         )
         assert_response_success(create_resp)
         campaign_id = extract_data(create_resp.json())["id"]
@@ -236,7 +352,7 @@ class TestCampaignCRUD:
         replacement_second = self._create_reusable_template(auth_client)
         create_resp = auth_client.post(
             "/api/v1/campaigns",
-            json=self._create_campaign_payload(api_client, reply_template_ids=[original["id"]]),
+            json=self._create_campaign_payload(api_client, auth_client, reply_template_ids=[original["id"]]),
         )
         assert_response_success(create_resp)
         campaign_id = extract_data(create_resp.json())["id"]
@@ -269,7 +385,7 @@ class TestCampaignCRUD:
         reusable = self._create_reusable_template(auth_client)
         create_resp = auth_client.post(
             "/api/v1/campaigns",
-            json=self._create_campaign_payload(api_client, reply_template_ids=[reusable["id"]]),
+            json=self._create_campaign_payload(api_client, auth_client, reply_template_ids=[reusable["id"]]),
         )
         assert_response_success(create_resp)
         campaign_id = extract_data(create_resp.json())["id"]
@@ -293,6 +409,7 @@ class TestCampaignCRUD:
             "/api/v1/campaigns",
             json=self._create_campaign_payload(
                 api_client,
+                auth_client,
                 reply_template_ids=[kept["id"], stale["id"]],
             ),
         )
@@ -380,7 +497,7 @@ class TestCampaignCRUD:
         for candidate_id in (2147480000, foreign_id):
             resp = auth_client.post(
                 "/api/v1/campaigns",
-                json=self._create_campaign_payload(api_client, reply_template_ids=[candidate_id]),
+                json=self._create_campaign_payload(api_client, auth_client, reply_template_ids=[candidate_id]),
             )
             assert resp.status_code == 404, (
                 f"Expected TemplateNotFound for user={user_id} template={candidate_id}, got {resp.text}"
@@ -394,7 +511,7 @@ class TestCampaignCRUD:
     ):
         create_resp = auth_client.post(
             "/api/v1/campaigns",
-            json=self._create_campaign_payload(api_client),
+            json=self._create_campaign_payload(api_client, auth_client),
         )
         assert_response_success(create_resp)
         campaign_id = extract_data(create_resp.json())["id"]
@@ -402,7 +519,7 @@ class TestCampaignCRUD:
         for ids in ([0], [-1], list(range(1, 102))):
             resp = auth_client.post(
                 "/api/v1/campaigns",
-                json=self._create_campaign_payload(api_client, reply_template_ids=ids),
+                json=self._create_campaign_payload(api_client, auth_client, reply_template_ids=ids),
             )
             assert resp.status_code == 400, f"Expected bad request for ids={ids[:3]}, got {resp.text}"
 
@@ -427,6 +544,7 @@ class TestCampaignCRUD:
             campaign_id = result["id"]
         else:
             platform_id, region_id, ai_model_id = self._get_config_ids(api_client)
+            social_group_id = self._create_social_group(auth_client, platform_id)
             create_resp = auth_client.post(
                 "/api/v1/campaigns",
                 json={
@@ -434,6 +552,7 @@ class TestCampaignCRUD:
                     "platform_id": platform_id,
                     "region_id": region_id,
                     "ai_model_id": ai_model_id,
+                    "social_group_id": social_group_id,
                     "schedule_type": "ONCE",
                     "product_prompt": "Owned detail test product",
                 },
