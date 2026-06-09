@@ -48,10 +48,10 @@ impl CampaignService {
         validate_schedule_config(&dto.schedule_type, &dto.schedule_config)?;
 
         // An account group is unconditionally required at create and must be
-        // valid (exists, owned by this user, same platform). Incident: prod
-        // campaign 271 activated with a null group and generated 50 AI
-        // suggestions that could never be sent.
-        self.validate_social_group(user_id, dto.social_group_id, dto.platform_id)
+        // valid (exists, owned by this user). No platform check — decision E1.
+        // Incident: prod campaign 271 activated with a null group and generated
+        // 50 AI suggestions that could never be sent.
+        self.validate_social_group(user_id, dto.social_group_id)
             .await?;
 
         // Validate max_scan_count
@@ -294,13 +294,12 @@ impl CampaignService {
             validate_schedule_config(st, &config.cloned())?;
         }
 
-        // Validate the EFFECTIVE account group after the merge. An update must
-        // never remove the group (effective null → reject) and any group it
-        // resolves to must be valid for the effective platform.
-        let effective_platform_id = dto.platform_id.unwrap_or(existing.platform_id);
-        let effective_social_group_id = dto.social_group_id.or(existing.social_group_id);
-        self.validate_social_group(user_id, effective_social_group_id, effective_platform_id)
-            .await?;
+        // Update intentionally does NOT re-validate the account group (decision
+        // E2). The merge below uses `dto.social_group_id.or(existing.social_group_id)`,
+        // so an absent/null dto value falls back to the existing group — the group
+        // cannot be cleared through this endpoint. Editing any field on a legacy
+        // null-group campaign must succeed; a missing/invalid group is caught at
+        // activation instead (see update_status ACTIVE branch).
 
         // Build changeset
         let should_replace_reply_template_ids = dto.reply_template_ids.is_some();
@@ -445,12 +444,8 @@ impl CampaignService {
                     // account group before freezing budget and going live. This
                     // intentionally blocks activating legacy campaigns whose
                     // group is null or no longer valid (e.g. prod campaign 271).
-                    self.validate_social_group(
-                        user_id,
-                        campaign.social_group_id,
-                        campaign.platform_id,
-                    )
-                    .await?;
+                    self.validate_social_group(user_id, campaign.social_group_id)
+                        .await?;
 
                     // First activation - use stored procedure to freeze budget
                     let result = self.repo.activate_campaign(id).await.map_err(|e| {
@@ -606,8 +601,9 @@ impl CampaignService {
     }
 
     /// Validate that `social_group_id` resolves to a valid account group for
-    /// this campaign: non-null, exists, owned by `user_id`, and on the same
-    /// `platform_id` as the campaign.
+    /// this campaign: non-null, exists, and owned by `user_id`. There is
+    /// intentionally NO platform check (gm_social_groups.platform_id is
+    /// unreliable; see campaign_social_group_validation module docs, decision E1).
     ///
     /// Ownership is enforced by `find_by_id(id, user_id)`: a missing or
     /// non-owned group resolves to `None`, which the pure validator rejects as
@@ -617,7 +613,6 @@ impl CampaignService {
         &self,
         user_id: i32,
         social_group_id: Option<i32>,
-        campaign_platform_id: i32,
     ) -> Result<(), ApiError> {
         let group = match social_group_id {
             None => None,
@@ -637,7 +632,7 @@ impl CampaignService {
             },
         };
 
-        validate_campaign_social_group(group.as_ref(), campaign_platform_id)
+        validate_campaign_social_group(group.as_ref())
     }
 
     async fn calculate_min_cost(

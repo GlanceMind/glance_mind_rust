@@ -69,10 +69,11 @@ class TestCampaignCRUD:
     def _create_social_group(self, auth_client, platform_id):
         """Create a valid account group owned by the auth user on `platform_id`.
 
-        A valid account group is now an unconditional requirement on campaign
-        create/update/activate (incident: prod campaign 271 activated with a
-        null group). Tests that exercise the campaign happy-path must therefore
-        provision a matching-platform group first.
+        A valid (non-null, owned) account group is an unconditional requirement
+        on campaign create and activation (incident: prod campaign 271 activated
+        with a null group). There is NO platform check (decision E1), so the
+        group's platform_id need not match the campaign — tests just need a real
+        owned group to satisfy the required-group rule.
         """
         resp = auth_client.post(
             "/api/v1/social-groups",
@@ -140,8 +141,8 @@ class TestCampaignCRUD:
         )
 
     def test_create_campaign_with_valid_social_group_succeeds(self, auth_client, api_client):
-        """Creating with a valid owned, same-platform group succeeds and the
-        campaign is persisted with that group id."""
+        """Creating with a valid owned group succeeds and the campaign is
+        persisted with that group id (no platform check — decision E1)."""
         platform_id, region_id, ai_model_id = self._get_config_ids(api_client)
         social_group_id = self._create_social_group(auth_client, platform_id)
         payload = {
@@ -161,35 +162,44 @@ class TestCampaignCRUD:
         assert "id" in data, "Should return campaign ID"
         assert data.get("social_group_id") == social_group_id
 
-    def test_create_campaign_with_mismatched_platform_group_is_rejected(
+    # NOTE: test_create_campaign_with_mismatched_platform_group_is_rejected was
+    # deleted wholesale.
+    # ASSERTION-CHANGE-JUSTIFIED: platform-match removed — gm_social_groups.platform_id
+    # is unreliable (68/69 prod groups defaulted to reddit); validation now requires
+    # only a non-null owned group, with no platform check. Per product decision E1.
+
+    def test_update_campaign_without_changing_group_succeeds(
         self, auth_client, api_client
     ):
-        """A group on a different platform than the campaign must be rejected."""
+        """Update is relaxed (decision E2): it does NOT re-validate the account
+        group. Editing a campaign that already has a group, without sending a
+        different group, must succeed and keep the existing group."""
         platform_id, region_id, ai_model_id = self._get_config_ids(api_client)
-        # Pick a different, real platform id than the campaign's for the group.
-        # Must be a KNOWN/creatable platform constant so _create_social_group
-        # succeeds; this guarantees the campaign-create rejection comes from the
-        # platform-mismatch validation, not a failed group creation.
-        other_platform_id = (
-            PLATFORM_TWITTER if platform_id != PLATFORM_TWITTER else PLATFORM_REDDIT
-        )
-        mismatched_group_id = self._create_social_group(auth_client, other_platform_id)
-        payload = {
-            "name": "Mismatched-platform group campaign",
+        social_group_id = self._create_social_group(auth_client, platform_id)
+        create_payload = {
+            "name": "Update-relaxed campaign",
             "platform_id": platform_id,
             "region_id": region_id,
             "ai_model_id": ai_model_id,
-            "social_group_id": mismatched_group_id,
+            "social_group_id": social_group_id,
             "schedule_type": "ONCE",
-            "product_prompt": "mismatched platform product",
+            "product_prompt": "update relaxed product",
             "max_scan_count": 1,
         }
+        create_resp = auth_client.post("/api/v1/campaigns", json=create_payload)
+        assert_response_success(create_resp)
+        campaign_id = extract_data(create_resp.json())["id"]
 
-        resp = auth_client.post("/api/v1/campaigns", json=payload)
-        assert resp.status_code in (400, 422), (
-            f"Expected rejection for platform-mismatched group, "
-            f"got {resp.status_code}: {resp.text}"
+        # Update only an unrelated field; omit social_group_id entirely.
+        update_resp = auth_client.put(
+            f"/api/v1/campaigns/{campaign_id}",
+            json={"name": "Update-relaxed campaign (edited)"},
         )
+        assert_response_success(update_resp)
+        data = extract_data(update_resp.json())
+        assert data.get("name") == "Update-relaxed campaign (edited)"
+        # The existing group is preserved by the .or() merge.
+        assert data.get("social_group_id") == social_group_id
 
     def _create_reusable_template(self, auth_client, suffix=None):
         unique = suffix or uuid.uuid4().hex[:8]
@@ -218,10 +228,10 @@ class TestCampaignCRUD:
             "max_scan_count": 1,
         }
         payload.update(overrides)
-        # An account group is now unconditionally required and must match the
-        # campaign platform. Provision one for the effective platform unless the
-        # caller explicitly supplied a social_group_id (including None to test
-        # the missing-group rejection path).
+        # An account group is unconditionally required (no platform check —
+        # decision E1). Provision one unless the caller explicitly supplied a
+        # social_group_id (including None to test the missing-group rejection
+        # path).
         if "social_group_id" not in overrides:
             payload["social_group_id"] = self._create_social_group(
                 auth_client, payload["platform_id"]
