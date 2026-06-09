@@ -166,8 +166,13 @@ class TestCampaignCRUD:
     ):
         """A group on a different platform than the campaign must be rejected."""
         platform_id, region_id, ai_model_id = self._get_config_ids(api_client)
-        # Pick a different platform id than the campaign's for the group.
-        other_platform_id = platform_id + 1 if platform_id != PLATFORM_TWITTER else PLATFORM_REDDIT
+        # Pick a different, real platform id than the campaign's for the group.
+        # Must be a KNOWN/creatable platform constant so _create_social_group
+        # succeeds; this guarantees the campaign-create rejection comes from the
+        # platform-mismatch validation, not a failed group creation.
+        other_platform_id = (
+            PLATFORM_TWITTER if platform_id != PLATFORM_TWITTER else PLATFORM_REDDIT
+        )
         mismatched_group_id = self._create_social_group(auth_client, other_platform_id)
         payload = {
             "name": "Mismatched-platform group campaign",

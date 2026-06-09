@@ -44,7 +44,7 @@ pub fn validate_campaign_social_group(
 
     if group.platform_id != campaign_platform_id {
         return Err(ApiError::BadRequest(format!(
-            "Account group platform ({}) does not match campaign platform ({}) / 账号分组所属平台（{}）与广告活动平台（{}）不一致",
+            "Account group platform ({}) does not match campaign platform ({}) — choose an account group on the same platform as the campaign / 账号分组所属平台（{}）与广告活动平台（{}）不一致，请选择与该广告活动同一平台的账号分组",
             group.platform_id, campaign_platform_id, group.platform_id, campaign_platform_id
         )));
     }
