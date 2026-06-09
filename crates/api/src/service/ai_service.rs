@@ -27,10 +27,18 @@ impl AiService {
 
         let agent = client.agent(model).preamble(&system_prompt).build();
 
-        let response = agent
-            .prompt(&user_prompt)
-            .await
-            .map_err(|_| deepseek_config::safe_provider_error("AI Provider Error"))?;
+        let response = agent.prompt(&user_prompt).await.map_err(|e| {
+            // Log the real provider error (status/body/transport) server-side
+            // BEFORE redaction so production incidents are diagnosable. The
+            // caller still receives only the redacted, secret-safe string.
+            tracing::error!(
+                model = %model,
+                generation_type = %req.generation_type,
+                error = ?e,
+                "DeepSeek completion request failed (rig agent.prompt)"
+            );
+            deepseek_config::safe_provider_error("AI Provider Error")
+        })?;
 
         Ok(AiGenerateResponse { content: response })
     }
