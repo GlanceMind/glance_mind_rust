@@ -277,11 +277,11 @@ impl SocialAccountService {
             ));
         }
 
-        // Validate the group ONCE before generating candidates (fail fast: no accounts created on error)
-        if let Some(gid) = dto.group_id {
-            if gid != 0 {
-                load_and_check_group(&self.group_repo, gid, user_id, dto.platform_id).await?;
-            }
+        // Normalize the 0-sentinel: treat group_id=0 as "no group" (NULL in DB).
+        // Validate via load_and_check_group only when a real group id is provided.
+        let group_id = dto.group_id.filter(|&g| g != 0);
+        if let Some(gid) = group_id {
+            load_and_check_group(&self.group_repo, gid, user_id, dto.platform_id).await?;
         }
 
         info!(
@@ -299,7 +299,7 @@ impl SocialAccountService {
             candidates.push(NewSocialAccount {
                 user_id,
                 platform_id: dto.platform_id,
-                group_id: dto.group_id,
+                group_id,
                 username,
                 cookie: String::new(),
                 proxy_url: None,

@@ -27,6 +27,12 @@ pub fn check_group_platform(
 
 /// Load a social group by id + user_id from the repo, then call
 /// `check_group_platform`.  Returns the loaded `SocialGroup` on success.
+///
+/// A wrong-owner request deliberately returns 404 `GroupNotFound` (not 403) to
+/// prevent cross-tenant group-id enumeration — an attacker must not learn
+/// whether a given group id exists in another tenant's data.
+/// Ownership is checked BEFORE platform so that a non-owner can never infer a
+/// group's platform from a 400 `GroupPlatformMismatch` response.
 pub async fn load_and_check_group(
     repo: &SocialGroupRepository,
     group_id: i32,
@@ -36,7 +42,15 @@ pub async fn load_and_check_group(
     let group = repo
         .find_by_id(group_id, user_id)
         .await
-        .map_err(|_| ApiError::BusinessError(BusinessError::GroupNotFound))?;
+        .map_err(|e| match e {
+            diesel::result::Error::NotFound => {
+                ApiError::BusinessError(BusinessError::GroupNotFound)
+            }
+            other => {
+                tracing::error!("Failed to load group {}: {:?}", group_id, other);
+                ApiError::InternalServerError("Failed to load group".into())
+            }
+        })?;
     check_group_platform(&group, user_id, expected_platform_id)?;
     Ok(group)
 }
