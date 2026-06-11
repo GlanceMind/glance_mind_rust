@@ -148,10 +148,18 @@ impl AgentService {
             if group_ctx_map.contains_key(&key) {
                 continue;
             }
-            let matched_accounts = self
-                .agent_repo
-                .get_group_active_accounts(gid, pid)
-                .unwrap_or_default();
+            let matched_accounts = match self.agent_repo.get_group_active_accounts(gid, pid) {
+                Ok(accounts) => accounts,
+                Err(e) => {
+                    tracing::warn!(
+                        group_id = gid,
+                        platform_id = pid,
+                        error = %e,
+                        "get_group_active_accounts failed — skipping ctx registration for this group/platform"
+                    );
+                    continue;
+                }
+            };
             let total_account_count = self.agent_repo.get_group_account_count(gid).unwrap_or(0);
             group_ctx_map.insert(
                 key,
@@ -478,14 +486,6 @@ mod tests {
         GroupAssemblyCtx {
             matched_accounts: accounts,
             total_account_count: total,
-        }
-    }
-
-    // Helper: build a truly empty GroupAssemblyCtx (legacy passthrough)
-    fn make_empty_ctx() -> GroupAssemblyCtx {
-        GroupAssemblyCtx {
-            matched_accounts: vec![],
-            total_account_count: 0,
         }
     }
 
