@@ -5,6 +5,8 @@ use crate::dto::social_account_dto::{
 };
 use crate::error::{api_error::ApiError, business_error::BusinessError};
 use crate::repository::social_account_repository::SocialAccountRepository;
+use crate::repository::social_group_repository::SocialGroupRepository;
+use crate::service::validation::group_platform::load_and_check_group;
 use glance_mind_db::entity::social_account::{NewSocialAccount, SocialAccount};
 use std::sync::Arc;
 use tracing::{error, info};
@@ -12,12 +14,14 @@ use tracing::{error, info};
 #[derive(Clone)]
 pub struct SocialAccountService {
     repo: SocialAccountRepository,
+    group_repo: SocialGroupRepository,
 }
 
 impl SocialAccountService {
     pub fn new(db: &Arc<Database>) -> Self {
         Self {
             repo: SocialAccountRepository::new(db.pool.clone()),
+            group_repo: SocialGroupRepository::new(db.pool.clone()),
         }
     }
 
@@ -128,6 +132,7 @@ impl SocialAccountService {
             if gid == 0 {
                 updated.group_id = None;
             } else {
+                load_and_check_group(&self.group_repo, gid, user_id, account.platform_id).await?;
                 updated.group_id = Some(gid);
             }
         }
@@ -270,6 +275,13 @@ impl SocialAccountService {
             return Err(ApiError::BadRequest(
                 "Invalid profile range: start must be less than or equal to end".to_string(),
             ));
+        }
+
+        // Validate the group ONCE before generating candidates (fail fast: no accounts created on error)
+        if let Some(gid) = dto.group_id {
+            if gid != 0 {
+                load_and_check_group(&self.group_repo, gid, user_id, dto.platform_id).await?;
+            }
         }
 
         info!(

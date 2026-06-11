@@ -8,25 +8,37 @@ use crate::repository::social_group_repository::SocialGroupRepository;
 /// `expected_platform_id`.  Returns `Err(GroupNotFound)` if the group does
 /// not belong to the caller, `Err(GroupPlatformMismatch{…})` if the platform
 /// differs, and `Ok(())` when both checks pass.
-#[allow(unused_variables)]
 pub fn check_group_platform(
     group: &SocialGroup,
     user_id: i32,
     expected_platform_id: i32,
 ) -> Result<(), BusinessError> {
-    todo!()
+    if group.user_id != user_id {
+        return Err(BusinessError::GroupNotFound);
+    }
+    if group.platform_id != expected_platform_id {
+        return Err(BusinessError::GroupPlatformMismatch {
+            group_platform_id: group.platform_id,
+            expected_platform_id,
+        });
+    }
+    Ok(())
 }
 
 /// Load a social group by id + user_id from the repo, then call
 /// `check_group_platform`.  Returns the loaded `SocialGroup` on success.
-#[allow(unused_variables)]
 pub async fn load_and_check_group(
     repo: &SocialGroupRepository,
     group_id: i32,
     user_id: i32,
     expected_platform_id: i32,
 ) -> Result<SocialGroup, ApiError> {
-    todo!()
+    let group = repo
+        .find_by_id(group_id, user_id)
+        .await
+        .map_err(|_| ApiError::BusinessError(BusinessError::GroupNotFound))?;
+    check_group_platform(&group, user_id, expected_platform_id)?;
+    Ok(group)
 }
 
 // ---------------------------------------------------------------------------
