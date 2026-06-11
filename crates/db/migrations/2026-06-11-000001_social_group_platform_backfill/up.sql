@@ -74,8 +74,8 @@
 -- NOTICE report that follows.  Transaction-scoped; dropped automatically on
 -- ROLLBACK or COMMIT.
 
-DROP TABLE IF EXISTS _mig_pre_state;
-CREATE TEMP TABLE _mig_pre_state AS
+DROP TABLE IF EXISTS pg_temp._mig_pre_state;
+CREATE TEMP TABLE pg_temp._mig_pre_state AS
 SELECT
     g.id          AS group_id,
     g.user_id,
@@ -234,7 +234,7 @@ BEGIN
     -- Groups whose platform_id changed (homogeneous relabel or winner relabel)
     SELECT COUNT(*)
     INTO   cnt_relabeled
-    FROM   _mig_pre_state pre
+    FROM   pg_temp._mig_pre_state pre
     JOIN   gm_social_groups g ON g.id = pre.group_id
     WHERE  g.platform_id <> pre.old_platform_id
       AND  pre.member_count > 0;
@@ -244,7 +244,7 @@ BEGIN
     INTO   cnt_split_groups
     FROM   gm_social_groups g
     WHERE  NOT EXISTS (
-        SELECT 1 FROM _mig_pre_state pre WHERE pre.group_id = g.id
+        SELECT 1 FROM pg_temp._mig_pre_state pre WHERE pre.group_id = g.id
     );
 
     -- Accounts now in newly-created split groups (re-hung accounts)
@@ -254,14 +254,14 @@ BEGIN
     WHERE  a.group_id IN (
         SELECT g2.id FROM gm_social_groups g2
         WHERE NOT EXISTS (
-            SELECT 1 FROM _mig_pre_state pre WHERE pre.group_id = g2.id
+            SELECT 1 FROM pg_temp._mig_pre_state pre WHERE pre.group_id = g2.id
         )
     );
 
     -- Empty groups (zero members at migration start; left untouched)
     SELECT COUNT(*)
     INTO   cnt_empty
-    FROM   _mig_pre_state
+    FROM   pg_temp._mig_pre_state
     WHERE  member_count = 0;
 
     RAISE NOTICE '[backfill] groups relabeled: %; split groups created: %; accounts re-hung: %; empty groups skipped: %',

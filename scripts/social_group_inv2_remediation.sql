@@ -38,8 +38,8 @@
 -- ============================================================
 -- Audit snapshot
 -- ============================================================
-DROP TABLE IF EXISTS _rem_pre_state;
-CREATE TEMP TABLE _rem_pre_state AS
+DROP TABLE IF EXISTS pg_temp._rem_pre_state;
+CREATE TEMP TABLE pg_temp._rem_pre_state AS
 SELECT
     a.id          AS account_id,
     a.user_id,
@@ -50,6 +50,12 @@ SELECT
 FROM gm_social_accounts a
 JOIN gm_social_groups   g ON a.group_id = g.id
 WHERE a.platform_id <> g.platform_id;
+
+-- Snapshot of ALL group IDs that exist before this run starts.
+-- Used by the NOTICE report to identify groups created by this run.
+DROP TABLE IF EXISTS pg_temp._rem_pre_group_ids;
+CREATE TEMP TABLE pg_temp._rem_pre_group_ids AS
+SELECT id FROM gm_social_groups;
 
 
 -- ============================================================
@@ -118,17 +124,14 @@ DECLARE
 BEGIN
     -- Accounts that were re-hung
     SELECT COUNT(*) INTO cnt_rehung
-    FROM _rem_pre_state;
+    FROM pg_temp._rem_pre_state;
 
-    -- New groups created during this run
+    -- New groups created during this run: groups absent from the pre-run snapshot.
     SELECT COUNT(*) INTO cnt_new_groups
     FROM gm_social_groups g
     WHERE NOT EXISTS (
-        SELECT 1 FROM _rem_pre_state r
-        WHERE  r.old_group_id = g.id
-           OR  r.account_id   IS NOT NULL  -- any pre-state entry
-    )
-    AND g.created_at >= NOW() - INTERVAL '5 minutes';  -- rough heuristic
+        SELECT 1 FROM pg_temp._rem_pre_group_ids pre WHERE pre.id = g.id
+    );
 
     RAISE NOTICE '[inv2-remediation] accounts re-hung: %; new split groups created (approx): %',
         cnt_rehung, cnt_new_groups;
