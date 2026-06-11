@@ -269,6 +269,40 @@ impl AipubService {
             .await?;
         }
 
+        // =====================================================================
+        // Pre-insert 0-match guard: reject if group has accounts but none match
+        // the plan's platform.  Runs BEFORE plan insert to avoid the insert+
+        // delete race and swallowed delete errors of the old post-insert guard.
+        // Gate: total > 0 && matched == 0 → plain 400 (no insert, no delete).
+        // Empty groups (total == 0) pass through unchanged (IT5j locked behaviour).
+        // =====================================================================
+        if let Some(gid) = dto.group_id {
+            let total_ids = self
+                .repo
+                .get_group_account_ids(gid)
+                .await
+                .map_err(|e| ApiError::from(DbError::SomethingWentWrong(e.to_string())))?;
+            if !total_ids.is_empty() {
+                let matched_ids = self
+                    .repo
+                    .get_group_account_ids_for_platform(gid, dto.platform_id)
+                    .await
+                    .map_err(|e| ApiError::from(DbError::SomethingWentWrong(e.to_string())))?;
+                if matched_ids.is_empty() {
+                    tracing::warn!(
+                        user_id,
+                        group_id = gid,
+                        total = total_ids.len(),
+                        plan_platform = dto.platform_id,
+                        "pre-insert 0-match guard: rejecting plan creation (no matching accounts)"
+                    );
+                    return Err(ApiError::BusinessError(BusinessError::InvalidInput(
+                        "no accounts matching plan platform".into(),
+                    )));
+                }
+            }
+        }
+
         // Determine initial status based on whether AI tasks are needed
         let initial_status = if dto.ai_task_types.is_some() && dto.content.is_none() {
             PlanStatus::Pending.as_str() // Will transition to ai_processing when AI tasks are created
@@ -383,41 +417,6 @@ impl AipubService {
         if let Some(mid) = plan.image_ai_model_id {
             if let Ok(name) = self.repo.get_model_name(mid) {
                 response.image_ai_model_name = Some(name);
-            }
-        }
-
-        // =====================================================================
-        // Create-time 0-match guard: reject if group has accounts but none match
-        // the plan's platform.  This catches legacy "dirty" groups where all
-        // accounts were bound to a different platform before the M2 invariant.
-        // Gate: total > 0 && matched == 0 → roll back plan row and return 400.
-        // Empty groups (total == 0) pass through unchanged (IT5j locked behaviour).
-        // =====================================================================
-        if let Some(gid) = plan.group_id {
-            let total_ids = self
-                .repo
-                .get_group_account_ids(gid)
-                .await
-                .unwrap_or_default();
-            if !total_ids.is_empty() {
-                let matched_ids = self
-                    .repo
-                    .get_group_account_ids_for_platform(gid, plan.platform_id)
-                    .await
-                    .unwrap_or_default();
-                if matched_ids.is_empty() {
-                    tracing::warn!(
-                        plan_id = plan.id,
-                        group_id = gid,
-                        total = total_ids.len(),
-                        plan_platform = plan.platform_id,
-                        "create-time 0-match: rolling back plan"
-                    );
-                    self.repo.delete_plan(plan.id).await.ok();
-                    return Err(ApiError::BusinessError(BusinessError::InvalidInput(
-                        "no accounts matching plan platform".into(),
-                    )));
-                }
             }
         }
 
@@ -1693,6 +1692,17 @@ impl AipubService {
     /// spurious empty typed sub-key — the worker would treat that as
     /// e.g. "override platform defaults to UNSPECIFIED visibility" or
     /// "publish at empty-string time", both wrong).
+    ///
+    /// Return value semantics:
+    ///
+    /// - `> 0`: N publish tasks created; caller MUST set plan status to ready.
+    /// - `= 0`: one of two cases:
+    ///   - billing was `"frozen"` and 0 accounts matched: plan finalized as
+    ///     `"failed"` + refund triggered; caller MUST NOT overwrite status.
+    ///   - billing was not frozen (empty-group / no-billing legacy path):
+    ///     no-op; caller MUST NOT set ready (plan stays pending/un-ready).
+    ///
+    /// Callers must not set plan status to `"ready"` when the return value is 0.
     async fn expand_plan_to_tasks(
         &self,
         plan_id: i32,
@@ -1729,15 +1739,29 @@ impl AipubService {
                 );
             }
 
-            // 0-match with non-empty group: fail the plan + refund billing.
-            if matched_ids.is_empty() && !total_ids.is_empty() {
-                tracing::error!(
-                    plan_id,
-                    group_id = gid,
-                    plan_platform = plan.platform_id,
-                    "expand_plan_to_tasks: no accounts matching plan platform — failing plan with refund"
-                );
-                self.repo.finalize_plan(plan_id, "failed").await.ok();
+            // Billing-aware 0-match handling:
+            // When matched_ids is empty for a group-bearing plan we branch on
+            // billing_status to ensure frozen funds are always refunded:
+            //
+            //   "frozen"        → budget is held; we MUST finalize+refund now to
+            //                     prevent stranded funds.  Log error (plan_id,
+            //                     group_id, total, platform) and fail the plan.
+            //   anything else   → legacy empty-group or billing-none path; no
+            //                     budget is at risk.  Keep current no-op behaviour
+            //                     (return 0, leave plan in current status) so
+            //                     IT5j (empty-group regression lock) stays green.
+            if matched_ids.is_empty() {
+                if plan.billing_status == "frozen" {
+                    tracing::error!(
+                        plan_id,
+                        group_id = gid,
+                        total = total_ids.len(),
+                        plan_platform = plan.platform_id,
+                        "expand_plan_to_tasks: 0 accounts match plan platform (billing=frozen) — failing plan with refund"
+                    );
+                    self.repo.finalize_plan(plan_id, "failed").await.ok();
+                }
+                // Both branches return 0; caller must not set status=ready.
                 return Ok(0);
             }
 

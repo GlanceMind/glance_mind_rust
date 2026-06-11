@@ -193,6 +193,12 @@ SELECT setval('gm_admin_users_id_seq', (SELECT MAX(id) FROM gm_admin_users));
 --   enforce campaign_user == group_user, so the old campaign rows remain valid.
 -- NOTE: group id=101 is inserted HERE (before section 9 accounts) so that
 -- accounts 1,2 referencing group_id=101 pass the FK constraint on a fresh DB.
+--
+-- WARNING: Re-running this file OVERWRITES groups 1,2,3,4,5,10,101 and accounts
+-- 1,2,3,4,5,6,7,50 via ON CONFLICT DO UPDATE.  On a long-lived DB that already
+-- has test data pointing at these rows you MUST re-seed or hand-patch dependent
+-- tables; simply re-running here is safe but will reset names/platform_ids/user_ids
+-- to the values in the allocation table above.
 INSERT INTO gm_social_groups (id, user_id, platform_id, group_name) VALUES
 (1,   999, 3, 'Facebook Test Group (E2E)'),    -- Test-user Facebook group (heap-first)
 (2,   999, 1, 'Reddit Marketing'),             -- M3 fix: user 999 reddit group (was user 2)
