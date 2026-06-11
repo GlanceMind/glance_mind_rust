@@ -37,7 +37,7 @@ struct IdRow {
 // Seed / cleanup helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn seed_mixed_group(conn: &mut PgConnection, user_id: i32, tag: &str) -> Option<(i32, i32, i32)> {
+fn seed_mixed_group(conn: &mut PgConnection, user_id: i32, tag: &str) -> (i32, i32, i32) {
     let group_id = diesel::sql_query(
         "INSERT INTO gm_social_groups (user_id, platform_id, group_name, created_at)
          VALUES ($1, 3, $2, NOW()) RETURNING id",
@@ -45,7 +45,7 @@ fn seed_mixed_group(conn: &mut PgConnection, user_id: i32, tag: &str) -> Option<
     .bind::<diesel::sql_types::Integer, _>(user_id)
     .bind::<diesel::sql_types::Text, _>(format!("it6i_grp_{}", tag))
     .get_result::<IdRow>(conn)
-    .ok()?
+    .expect("seed_mixed_group: group insert failed")
     .id;
 
     let fb_acc_id = diesel::sql_query(
@@ -58,7 +58,7 @@ fn seed_mixed_group(conn: &mut PgConnection, user_id: i32, tag: &str) -> Option<
     .bind::<diesel::sql_types::Text, _>(format!("fb_acc_{}", tag))
     .bind::<diesel::sql_types::Text, _>(format!("FBProfile_{}", tag))
     .get_result::<IdRow>(conn)
-    .ok()?
+    .expect("seed_mixed_group: facebook account insert failed")
     .id;
 
     let reddit_acc_id = diesel::sql_query(
@@ -71,10 +71,10 @@ fn seed_mixed_group(conn: &mut PgConnection, user_id: i32, tag: &str) -> Option<
     .bind::<diesel::sql_types::Text, _>(format!("reddit_acc_{}", tag))
     .bind::<diesel::sql_types::Text, _>(format!("RedditProfile_{}", tag))
     .get_result::<IdRow>(conn)
-    .ok()?
+    .expect("seed_mixed_group: reddit account insert failed")
     .id;
 
-    Some((group_id, fb_acc_id, reddit_acc_id))
+    (group_id, fb_acc_id, reddit_acc_id)
 }
 
 fn delete_accounts(conn: &mut PgConnection, ids: &[i32]) {
@@ -117,13 +117,7 @@ fn it6i_platform_filter_returns_only_matching_account() {
     let tag = uuid::Uuid::new_v4().simple().to_string();
     let tag = &tag[..8];
 
-    let (group_id, fb_acc_id, reddit_acc_id) = match seed_mixed_group(&mut conn, 999, tag) {
-        Some(ids) => ids,
-        None => {
-            eprintln!("Skipping it6i: seed failed");
-            return;
-        }
-    };
+    let (group_id, fb_acc_id, reddit_acc_id) = seed_mixed_group(&mut conn, 999, tag);
 
     let repo = AgentRepository::new(pool.clone());
 
