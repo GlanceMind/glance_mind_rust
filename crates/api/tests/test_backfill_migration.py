@@ -44,10 +44,10 @@ MIGRATION_UP = (
 )
 
 # ---------------------------------------------------------------------------
-# Platform constants (read from DB at module level once)
+# Platform constants
 # ---------------------------------------------------------------------------
-# We fetch platform names dynamically so the test never hardcodes them.
-# These are populated by _load_platforms() inside each test via the live conn.
+# IDs verified against gm_platforms seed data in the test DB.
+# Names are fetched dynamically via _load_platforms() to avoid string coupling.
 
 PLATFORM_REDDIT = 1
 PLATFORM_FACEBOOK = 3
@@ -73,10 +73,9 @@ def _execute_migration(cur, sql: str) -> None:
     """
     Execute up.sql content inside the current transaction.
 
-    If the file contains no executable statements (empty shell), psycopg2
-    raises 'can\'t execute an empty query'.  We detect this by stripping
-    comments and whitespace; if nothing remains, we skip execution so the
-    test reaches the post-migration assertions and fails THERE (correct RED).
+    If the file contains no executable statements (empty shell) the migration
+    has not been implemented yet — fail loudly with pytest.fail so the cause
+    is obvious rather than surfacing as a confusing assertion error downstream.
     """
     # Strip SQL comments (-- line comments and /* block */ comments) and whitespace
     import re
@@ -86,8 +85,7 @@ def _execute_migration(cur, sql: str) -> None:
     # Remove statement-only whitespace/semicolons
     statements = [s.strip() for s in stripped.split(';') if s.strip()]
     if not statements:
-        # Empty shell — skip; test will fail at post-migration assertions (RED)
-        return
+        pytest.fail("up.sql contains no executable statements — migration not yet implemented")
     cur.execute(sql)
 
 
@@ -394,16 +392,20 @@ def test_it7_backfill_migration():
             f"for user_a, found {f5_count} (duplicate insert?)"
         )
 
-        # --- F6: user-B groups unchanged ---
+        # --- F6: user-B homogeneous mislabel — migration is global, not user-A-scoped ---
+        # F6 group had platform=reddit but 1 facebook account (homogeneous mislabel).
+        # The migration must fix user-B's group too (F1-style relabel).
         cur.execute(
             "SELECT platform_id FROM gm_social_groups WHERE id = %s",
             (fx["f6_group"],),
         )
         f6_platform = cur.fetchone()[0]
-        # user-B's group had platform=reddit but 1 facebook account — after migration it
-        # should ALSO be fixed (the migration is global, not user-A-scoped).
-        # However the key invariant is: the migration must not corrupt user-B rows.
-        # We assert no violations for user_b specifically.
+        assert f6_platform == PLATFORM_FACEBOOK, (
+            f"F6: user-B's homogeneous-mislabel group should be relabeled to "
+            f"platform_id={PLATFORM_FACEBOOK}, got {f6_platform}"
+        )
+
+        # Zero violations for user_b (belt-and-suspenders)
         cur.execute(
             """
             SELECT COUNT(*)
@@ -442,7 +444,6 @@ def test_it7_backfill_migration_idempotent():
         platforms = _load_platforms(cur)
         s = _uid()
         reddit_name = platforms[PLATFORM_REDDIT]
-        facebook_name = platforms[PLATFORM_FACEBOOK]
 
         # Insert a minimal mixed fixture (F2-style) for the idempotency check
         user = _insert_user(cur, f"idem_{s}")
@@ -457,33 +458,63 @@ def test_it7_backfill_migration_idempotent():
         # First run
         _execute_migration(cur, sql)
 
-        # Capture group count for this user after first run
-        cur.execute(
-            "SELECT COUNT(*) FROM gm_social_groups WHERE user_id = %s",
-            (user,),
-        )
-        count_after_first = cur.fetchone()[0]
-
         violations_after_first = _violations_for_users(cur, [user])
         assert violations_after_first == 0, (
             f"Idempotency: after first run expected 0 violations, got {violations_after_first}"
         )
 
-        # Second run
-        _execute_migration(cur, sql)
-
-        # Group count must be identical (no duplicate groups inserted)
+        # Snapshot state after run 1: {group_id: platform_id} and {account_id: group_id}
+        # for all groups/accounts belonging to this fixture user.
         cur.execute(
-            "SELECT COUNT(*) FROM gm_social_groups WHERE user_id = %s",
+            "SELECT id, platform_id FROM gm_social_groups WHERE user_id = %s",
             (user,),
         )
-        count_after_second = cur.fetchone()[0]
-        assert count_after_second == count_after_first, (
-            f"Idempotency: group count changed from {count_after_first} to "
-            f"{count_after_second} on second run (not idempotent)"
+        groups_snap1: dict[int, int] = {row[0]: row[1] for row in cur.fetchall()}
+
+        cur.execute(
+            """
+            SELECT a.id, a.group_id
+            FROM gm_social_accounts a
+            JOIN gm_social_groups g ON a.group_id = g.id
+            WHERE g.user_id = %s
+            """,
+            (user,),
+        )
+        accounts_snap1: dict[int, int] = {row[0]: row[1] for row in cur.fetchall()}
+
+        # Second run — must be a true no-op
+        _execute_migration(cur, sql)
+
+        # Re-snapshot after run 2 and assert dict-equality (true no-op proof)
+        cur.execute(
+            "SELECT id, platform_id FROM gm_social_groups WHERE user_id = %s",
+            (user,),
+        )
+        groups_snap2: dict[int, int] = {row[0]: row[1] for row in cur.fetchall()}
+
+        cur.execute(
+            """
+            SELECT a.id, a.group_id
+            FROM gm_social_accounts a
+            JOIN gm_social_groups g ON a.group_id = g.id
+            WHERE g.user_id = %s
+            """,
+            (user,),
+        )
+        accounts_snap2: dict[int, int] = {row[0]: row[1] for row in cur.fetchall()}
+
+        assert groups_snap2 == groups_snap1, (
+            f"Idempotency: group platform_ids changed on second run.\n"
+            f"  run-1: {groups_snap1}\n"
+            f"  run-2: {groups_snap2}"
+        )
+        assert accounts_snap2 == accounts_snap1, (
+            f"Idempotency: account group_ids changed on second run.\n"
+            f"  run-1: {accounts_snap1}\n"
+            f"  run-2: {accounts_snap2}"
         )
 
-        # Still zero violations
+        # Still zero violations (belt-and-suspenders)
         violations_after_second = _violations_for_users(cur, [user])
         assert violations_after_second == 0, (
             f"Idempotency: after second run expected 0 violations, got {violations_after_second}"
