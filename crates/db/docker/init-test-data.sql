@@ -171,20 +171,40 @@ SELECT setval('gm_admin_users_id_seq', (SELECT MAX(id) FROM gm_admin_users));
 -- ============================================================================
 -- 8. Social Groups (for account management)
 -- ============================================================================
--- Groups must exist for all platforms with campaigns that need device-based queries
--- NOTE: group id=1 is intentionally owned by the E2E test user (999) with
--- platform_id=3 (Facebook).  Several aipub/grooming tests use
--- `SELECT id FROM gm_social_groups LIMIT 1` (no ORDER BY) which relies on
--- heap insertion order — group 1 is inserted first so it appears first.
--- Keeping it as the test-user's primary group avoids 404/platform-mismatch
--- rejections once the M3 group-platform guard is wired into create_plan.
+-- Groups must exist for all platforms with campaigns that need device-based queries.
+--
+-- M3 group-platform picker invariant (2026-06-11):
+--   Tests use `ORDER BY g.id LIMIT 1` (with active-account JOIN + platform filter)
+--   to pick the first group per platform. For the M3 ownership guard to allow user 999
+--   to create aipub plans, the LOWEST group id per platform that has ≥1 ACTIVE account
+--   MUST be owned by user 999.
+--
+-- Allocation:
+--   id=1  platform 3 (Facebook) user 999  — heap-first for LIMIT 1 without ORDER BY
+--   id=2  platform 1 (Reddit)   user 999  — lowest platform-1 group with accounts
+--   id=3  platform 4 (Instagram) user 999 — lowest platform-4 group with accounts
+--   id=4  platform 3 (Facebook)  user 2   — legacy Facebook Business group
+--   id=5  platform 5 (Twitter)   user 999 — lowest platform-5 group with accounts
+--   id=10 platform 2 (TikTok)    user 999 — lower than id=101, platform-2 with accounts
+--   id=101 platform 2 (TikTok)   user 2  — TikTok Single Account Group (daily-limit tests)
+--
+-- NOTE: groups 2/3/5 user_id changed from 2/3/2 to 999 (M3 seed fix). The legacy
+--   campaigns that reference these groups (gm_campaigns.social_group_id) do NOT
+--   enforce campaign_user == group_user, so the old campaign rows remain valid.
+-- NOTE: group id=101 is inserted HERE (before section 9 accounts) so that
+-- accounts 1,2 referencing group_id=101 pass the FK constraint on a fresh DB.
 INSERT INTO gm_social_groups (id, user_id, platform_id, group_name) VALUES
-(1, 999, 3, 'Facebook Test Group (E2E)'), -- Test-user Facebook group — for aipub/grooming fixtures
-(2, 2, 1, 'Reddit Marketing'),        -- For Reddit campaigns
-(3, 3, 4, 'Instagram Business'),      -- For Instagram campaigns
-(4, 2, 3, 'Facebook Business'),       -- For Facebook campaigns
-(5, 2, 5, 'Twitter Engagement')       -- For Twitter campaigns
-ON CONFLICT (id) DO NOTHING;
+(1,   999, 3, 'Facebook Test Group (E2E)'),    -- Test-user Facebook group (heap-first)
+(2,   999, 1, 'Reddit Marketing'),             -- M3 fix: user 999 reddit group (was user 2)
+(3,   999, 4, 'Instagram Business'),           -- M3 fix: user 999 instagram group (was user 3)
+(4,     2, 3, 'Facebook Business'),            -- Legacy Facebook group for user 2
+(5,   999, 5, 'Twitter Engagement'),           -- M3 fix: user 999 twitter group (was user 2)
+(10,  999, 2, 'TikTok E2E Group (user-999)'),  -- M3 fix: user 999 tiktok group (new, id < 101)
+(101,   2, 2, 'TikTok Single Account Group')   -- Promoted from section 19 to satisfy FK for accounts 1,2
+ON CONFLICT (id) DO UPDATE SET
+    user_id    = EXCLUDED.user_id,
+    platform_id = EXCLUDED.platform_id,
+    group_name  = EXCLUDED.group_name;
 
 SELECT setval('social_groups_id_seq', (SELECT MAX(id) FROM gm_social_groups));
 
@@ -194,22 +214,36 @@ SELECT setval('social_groups_id_seq', (SELECT MAX(id) FROM gm_social_groups));
 -- NOTE: device_id is critical for get_comments_by_device API
 -- Test device IDs: test_device_001 (TikTok/Facebook), test_device_002 (Instagram), test_device_003 (Reddit/Twitter)
 --
+-- M3 group-platform fix: accounts 3, 4, 6 changed to user_id=999 so they match
+-- the M3-reassigned groups 2 (reddit), 3 (instagram), 5 (twitter) now owned by 999.
+-- Account id=50 is a new TikTok account for user 999 in group 10 (M3 tiktok fix).
+--
 -- Accounts id=1,2 were originally TikTok in group 1, but group 1 is now a
--- test-user Facebook group (see above).  They are moved to group 101 (TikTok
+-- test-user Facebook group (see above). They are moved to group 101 (TikTok
 -- Single Account Group, user 2) so the TikTok campaign device queries still work.
 -- Account id=7 is a new Facebook account for the test user in group 1 so
 -- the account_grooming and billing fixtures have at least one platform-matched account.
 INSERT INTO gm_social_accounts (id, user_id, platform_id, username, group_id, status, health_score, cookie, daily_max_replies, device_id, profile_name) VALUES
-(1, 2, 2, 'test_tiktok_1', 101, 'ACTIVE', 100, '{}', 50, 'test_device_001', 'TikTok Profile 1'),
-(2, 2, 2, 'test_tiktok_2', 101, 'ACTIVE', 95, '{}', 50, 'test_device_001', 'TikTok Profile 2'),
-(3, 2, 1, 'test_reddit_1', 2, 'ACTIVE', 100, '{}', 30, 'test_device_003', 'Reddit Profile'),
-(4, 3, 4, 'test_instagram_1', 3, 'ACTIVE', 100, '{}', 40, 'test_device_002', 'Instagram Profile'),
--- Additional accounts for Facebook and Twitter
-(5, 2, 3, 'test_facebook_1', 4, 'ACTIVE', 100, '{}', 40, 'test_device_001', 'Facebook Profile'),
-(6, 2, 5, 'test_twitter_1', 5, 'ACTIVE', 100, '{}', 40, 'test_device_003', 'Twitter Profile'),
+(1,   2, 2, 'test_tiktok_1',    101, 'ACTIVE', 100, '{}', 50, 'test_device_001',    'TikTok Profile 1'),
+(2,   2, 2, 'test_tiktok_2',    101, 'ACTIVE',  95, '{}', 50, 'test_device_001',    'TikTok Profile 2'),
+-- M3 fix: account 3 changed to user 999 (was user 2) — matches group 2 now owned by 999
+(3, 999, 1, 'test_reddit_1',      2, 'ACTIVE', 100, '{}', 30, 'test_device_003',    'Reddit Profile'),
+-- M3 fix: account 4 changed to user 999 (was user 3) — matches group 3 now owned by 999
+(4, 999, 4, 'test_instagram_1',   3, 'ACTIVE', 100, '{}', 40, 'test_device_002',    'Instagram Profile'),
+-- Legacy accounts for Facebook (user 2) and Twitter (user 2)
+(5,   2, 3, 'test_facebook_1',    4, 'ACTIVE', 100, '{}', 40, 'test_device_001',    'Facebook Profile'),
+-- M3 fix: account 6 changed to user 999 (was user 2) — matches group 5 now owned by 999
+(6, 999, 5, 'test_twitter_1',     5, 'ACTIVE', 100, '{}', 40, 'test_device_003',    'Twitter Profile'),
 -- Facebook account for E2E test user in group 1 (required for grooming/billing tests)
-(7, 999, 3, 'e2e_facebook_1', 1, 'ACTIVE', 100, '{}', 40, 'test_device_e2e', 'E2E Facebook Profile')
-ON CONFLICT (id) DO NOTHING;
+(7, 999, 3, 'e2e_facebook_1',     1, 'ACTIVE', 100, '{}', 40, 'test_device_e2e',    'E2E Facebook Profile'),
+-- M3 fix: TikTok account for user 999 in group 10 (new group for platform-2 picker)
+(50, 999, 2, 'e2e_tiktok_1',     10, 'ACTIVE', 100, '{}', 50, 'test_device_e2e_tk', 'E2E TikTok Profile')
+ON CONFLICT (id) DO UPDATE SET
+    user_id    = EXCLUDED.user_id,
+    platform_id = EXCLUDED.platform_id,
+    group_id    = EXCLUDED.group_id,
+    username    = EXCLUDED.username,
+    status      = EXCLUDED.status;
 
 SELECT setval('social_accounts_id_seq', (SELECT MAX(id) FROM gm_social_accounts));
 
@@ -517,13 +551,21 @@ VALUES
    'Test', 'Reply 3', '2025-06-01 10:02:00', 101, 0)
 ON CONFLICT (id) DO NOTHING;
 
--- Update sequences to accommodate new IDs
-SELECT setval('social_groups_id_seq', GREATEST((SELECT MAX(id) FROM gm_social_groups), currval('social_groups_id_seq')));
-SELECT setval('social_accounts_id_seq', GREATEST((SELECT MAX(id) FROM gm_social_accounts), currval('social_accounts_id_seq')));
-SELECT setval('campaigns_id_seq', GREATEST((SELECT MAX(id) FROM gm_campaigns), currval('campaigns_id_seq')));
-SELECT setval('crawler_tasks_id_seq', GREATEST((SELECT MAX(id) FROM gm_crawler_tasks), currval('crawler_tasks_id_seq')));
-SELECT setval('agent_videos_id_seq', GREATEST((SELECT MAX(id) FROM gm_agent_videos), currval('agent_videos_id_seq')));
-SELECT setval('agent_comments_id_seq', GREATEST((SELECT MAX(id) FROM gm_agent_comments), currval('agent_comments_id_seq')));
+-- Update sequences to accommodate new IDs (use MAX to avoid currval-not-called errors)
+SELECT setval('social_groups_id_seq',  (SELECT MAX(id) FROM gm_social_groups));
+SELECT setval('social_accounts_id_seq', (SELECT MAX(id) FROM gm_social_accounts));
+SELECT setval('campaigns_id_seq',       (SELECT MAX(id) FROM gm_campaigns));
+SELECT setval('crawler_tasks_id_seq',   (SELECT MAX(id) FROM gm_crawler_tasks));
+SELECT setval('agent_videos_id_seq',    (SELECT MAX(id) FROM gm_agent_videos));
+SELECT setval('agent_comments_id_seq',  (SELECT MAX(id) FROM gm_agent_comments));
+
+-- M3 seed fix: re-cluster gm_social_groups by primary key and re-analyze so that
+-- `SELECT id FROM gm_social_groups LIMIT 1` (used by TestPlatformContentTypeMatrixDb's
+-- _resolve_group helper) consistently returns heap-first row id=1 (platform_id=3, user 999).
+-- The ORDER BY g.id picker queries (used by TestPlanPublishBehaviorAcrossPlanTypes and
+-- TestCreatePlanPlatformMatrix) are unaffected by cluster order.
+CLUSTER gm_social_groups USING social_groups_pkey;
+ANALYZE gm_social_groups;
 
 -- ============================================================================
 -- Verification Queries (for testing)
