@@ -699,13 +699,10 @@ class TestSocialDatabaseState:
 
 
 class TestSocialGroupPlatformFilter:
-    """M1 RED tests: platform_id filter on group list + create validation.
+    """M1 tests: platform_id filter on group list + create validation.
 
     IT3a, IT3b, IT3c — GET /api/v1/social-groups?platform_id=<N>
     IT1, IT2         — POST /api/v1/social-groups with valid/invalid platform_id
-
-    IT3a, IT3c, IT1 are expected RED today (bugs not yet fixed).
-    IT3b, IT2      are expected GREEN today (regression lock / baseline).
     """
 
     # ------------------------------------------------------------------ #
@@ -762,11 +759,7 @@ class TestSocialGroupPlatformFilter:
     # ------------------------------------------------------------------ #
 
     def test_it3b_no_filter_returns_all_seeded_groups(self, auth_client):
-        """IT3b (GREEN): GET without platform_id returns all seeded groups
-        and response items have the required fields.
-
-        This test is expected GREEN today and serves as a regression lock.
-        """
+        """IT3b: GET without platform_id returns all seeded groups and response items have the required fields."""
         groups, data = self._extract_list_data(
             auth_client.get("/api/v1/social-groups", params={"page_size": 100})
         )
@@ -802,27 +795,25 @@ class TestSocialGroupPlatformFilter:
     # ------------------------------------------------------------------ #
 
     def test_it3a_filter_by_platform_facebook(self, auth_client):
-        """IT3a (RED): GET ?platform_id=3 should return only the 1 facebook group.
-
-        EXPECTED FAILURE today: backend ignores the param → returns all 3.
-        After fix: total==1, list[0].platform_id==3.
-        """
+        """IT3a: GET ?platform_id=3 returns only facebook groups; run-seeded names confirm correct filtering."""
         groups, data = self._extract_list_data(
             auth_client.get(
                 "/api/v1/social-groups",
                 params={"platform_id": PLATFORM_FACEBOOK, "page_size": 100},
             )
         )
-        # Must find exactly our one facebook group
-        assert len(groups) == 1, (
-            f"IT3a: expected 1 group (platform_id=3), got {len(groups)} — "
-            f"backend probably ignores platform_id filter"
+        names = {g["group_name"] for g in groups}
+        assert self._facebook_name in names, (
+            f"IT3a: seeded facebook group '{self._facebook_name}' not returned by platform_id=3 filter"
         )
-        assert groups[0]["platform_id"] == PLATFORM_FACEBOOK, (
-            f"IT3a: returned group has platform_id={groups[0]['platform_id']}, expected 3"
+        assert self._reddit1_name not in names, (
+            f"IT3a: reddit group '{self._reddit1_name}' leaked into platform_id=3 results"
         )
-        assert data["total"] == 1, (
-            f"IT3a: expected total==1, got {data['total']}"
+        assert self._reddit2_name not in names, (
+            f"IT3a: reddit group '{self._reddit2_name}' leaked into platform_id=3 results"
+        )
+        assert all(g["platform_id"] == PLATFORM_FACEBOOK for g in groups), (
+            f"IT3a: some returned groups have platform_id != {PLATFORM_FACEBOOK}"
         )
         print(f"\n  IT3a: len={len(groups)} total={data['total']}")
 
@@ -831,10 +822,7 @@ class TestSocialGroupPlatformFilter:
     # ------------------------------------------------------------------ #
 
     def test_it3c_filter_platform_id_zero_returns_empty(self, auth_client):
-        """IT3c (RED): ?platform_id=0 should return 200 + empty list.
-
-        EXPECTED FAILURE today: param ignored → returns all groups.
-        """
+        """IT3c: ?platform_id=0 should return 200 + empty list (no valid platform has id=0)."""
         groups, data = self._extract_list_data(
             auth_client.get(
                 "/api/v1/social-groups",
@@ -850,10 +838,7 @@ class TestSocialGroupPlatformFilter:
         )
 
     def test_it3c_filter_platform_id_negative_returns_empty(self, auth_client):
-        """IT3c (RED): ?platform_id=-1 should return 200 + empty list.
-
-        EXPECTED FAILURE today: param ignored → returns all groups.
-        """
+        """IT3c: ?platform_id=-1 should return 200 + empty list (no valid platform has id<0)."""
         groups, data = self._extract_list_data(
             auth_client.get(
                 "/api/v1/social-groups",
@@ -869,13 +854,9 @@ class TestSocialGroupPlatformFilter:
         )
 
     def test_it3c_filter_platform_id_alpha_returns_400(self, auth_client):
-        """IT3c (RED): ?platform_id=abc should return HTTP 400.
-
-        EXPECTED FAILURE today: field not in PageRequest → axum ignores it
-        and returns 200 with all groups.
+        """IT3c: ?platform_id=abc should return HTTP 400 (non-integer must be rejected).
 
         NOTE: the 400 body may be a plain-text Axum rejection, not JSON.
-        This test asserts status code only.
         """
         resp = auth_client.get(
             "/api/v1/social-groups",
@@ -893,12 +874,7 @@ class TestSocialGroupPlatformFilter:
     def test_it1_create_group_invalid_platform_id_rejected(
         self, auth_client, db_cursor
     ):
-        """IT1 (RED): POST with platform_id=999 should return HTTP 400 with
-        a message containing "Invalid platform_id", and NO row should be created.
-
-        EXPECTED FAILURE today: returns HTTP 500 (FK violation) or 200
-        without proper validation.
-        """
+        """IT1: POST with platform_id=999 must return HTTP 400 with a message containing "invalid platform_id", and NO row should be created."""
         group_name = f"m1_invalid_platform_{uuid.uuid4().hex[:8]}"
         resp = auth_client.post(
             "/api/v1/social-groups",
@@ -914,7 +890,7 @@ class TestSocialGroupPlatformFilter:
         # Assert: error message must mention "Invalid platform_id"
         body = resp.json()
         error_msg = (body.get("msg") or "").lower() + (body.get("msg_cn") or "").lower()
-        assert "invalid platform_id" in error_msg or "invalid" in error_msg, (
+        assert "invalid platform_id" in error_msg, (
             f"IT1: expected error message to contain 'Invalid platform_id', got: {resp.text[:200]}"
         )
 
@@ -934,50 +910,48 @@ class TestSocialGroupPlatformFilter:
     # ------------------------------------------------------------------ #
 
     def test_it2_create_group_valid_platform_id(self, auth_client, db_cursor):
-        """IT2 (GREEN): POST with platform_id=3 (Facebook) should return
-        HTTP 200 + code==1000, and the row should appear in the DB with
-        platform_id==3.
-
-        This test is expected GREEN today and serves as a regression lock.
-        """
+        """IT2: POST with platform_id=3 (Facebook) must return HTTP 200 + code==1000 and persist the row with platform_id==3."""
         group_name = f"m1_fb_group_it2_{uuid.uuid4().hex[:8]}"
         resp = auth_client.post(
             "/api/v1/social-groups",
             json={"platform_id": PLATFORM_FACEBOOK, "group_name": group_name},
         )
 
-        assert resp.status_code == 200, (
-            f"IT2: expected HTTP 200, got {resp.status_code} — body: {resp.text[:200]}"
-        )
-        body = resp.json()
-        assert body.get("code") == 1000, (
-            f"IT2: expected code==1000, got {body.get('code')}"
-        )
+        group_id = None
+        try:
+            assert resp.status_code == 200, (
+                f"IT2: expected HTTP 200, got {resp.status_code} — body: {resp.text[:200]}"
+            )
+            body = resp.json()
+            assert body.get("code") == 1000, (
+                f"IT2: expected code==1000, got {body.get('code')}"
+            )
 
-        created = body.get("data", {})
-        group_id = created.get("id")
-        assert group_id is not None, "IT2: response missing 'id' in data"
+            created = body.get("data", {})
+            group_id = created.get("id")
+            assert group_id is not None, "IT2: response missing 'id' in data"
 
-        # DB verification
-        db_cursor.execute(
-            "SELECT id, platform_id FROM gm_social_groups WHERE id = %s",
-            (group_id,),
-        )
-        row = db_cursor.fetchone()
-        assert row is not None, (
-            f"IT2: no row found in DB for group id={group_id}"
-        )
-        assert row["platform_id"] == PLATFORM_FACEBOOK, (
-            f"IT2: DB row has platform_id={row['platform_id']}, expected {PLATFORM_FACEBOOK}"
-        )
+            # DB verification
+            db_cursor.execute(
+                "SELECT id, platform_id FROM gm_social_groups WHERE id = %s",
+                (group_id,),
+            )
+            row = db_cursor.fetchone()
+            assert row is not None, (
+                f"IT2: no row found in DB for group id={group_id}"
+            )
+            assert row["platform_id"] == PLATFORM_FACEBOOK, (
+                f"IT2: DB row has platform_id={row['platform_id']}, expected {PLATFORM_FACEBOOK}"
+            )
 
-        print(
-            f"\n  IT2 GREEN: HTTP 200, code=1000, "
-            f"DB row id={group_id} platform_id={row['platform_id']}"
-        )
-
-        # Cleanup
-        auth_client.delete(f"/api/v1/social-groups/{group_id}")
+            print(
+                f"\n  IT2 GREEN: HTTP 200, code=1000, "
+                f"DB row id={group_id} platform_id={row['platform_id']}"
+            )
+        finally:
+            # Cleanup: always delete the created group if it was created
+            if group_id is not None:
+                auth_client.delete(f"/api/v1/social-groups/{group_id}")
 
 
 if __name__ == "__main__":
