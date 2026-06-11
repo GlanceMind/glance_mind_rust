@@ -50,6 +50,7 @@ impl TemplateService {
             page: req.page.max(1),
             page_size: req.page_size.clamp(1, 100),
             group_id: req.group_id,
+            platform_id: req.platform_id,
         }
     }
 

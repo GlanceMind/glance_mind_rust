@@ -27,7 +27,7 @@ impl SocialGroupService {
     ) -> Result<crate::dto::common::PageResponse<SocialGroupDto>, ApiError> {
         let (groups, total) = self
             .repo
-            .find_by_user(user_id, req.page, req.page_size)
+            .find_by_user(user_id, req.page, req.page_size, req.platform_id)
             .await
             .map_err(|_| ApiError::InternalServerError("Failed to list groups".to_string()))?;
 
@@ -55,6 +55,17 @@ impl SocialGroupService {
         user_id: i32,
         dto: CreateSocialGroupDto,
     ) -> Result<SocialGroupDto, ApiError> {
+        // Validate that the platform exists in gm_platforms before inserting.
+        let platform_valid = self
+            .repo
+            .platform_exists(dto.platform_id)
+            .map_err(|e| ApiError::InternalServerError(e.to_string()))?;
+        if !platform_valid {
+            return Err(ApiError::BusinessError(BusinessError::InvalidInput(
+                format!("Invalid platform_id: {}", dto.platform_id),
+            )));
+        }
+
         let new_group = NewSocialGroup {
             user_id,
             platform_id: dto.platform_id,

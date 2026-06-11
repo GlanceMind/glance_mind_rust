@@ -1162,6 +1162,7 @@ impl ToolRegistry {
                     page: 1,
                     page_size: 100,
                     group_id: None,
+                    platform_id: None,
                 },
             )
             .await
@@ -1626,6 +1627,7 @@ impl ToolRegistry {
                     page,
                     page_size,
                     group_id: None,
+                    platform_id: None,
                 };
                 let groups = state.social_group_service.list_groups(user_id, req).await?;
                 serde_json::to_value(&groups).unwrap_or_default()
@@ -1640,6 +1642,7 @@ impl ToolRegistry {
                     page,
                     page_size,
                     group_id: None,
+                    platform_id: None,
                 };
                 let campaigns = state.campaign_service.list_campaigns(user_id, req).await?;
                 serde_json::to_value(&campaigns).unwrap_or_default()
@@ -1696,6 +1699,7 @@ impl ToolRegistry {
                     page,
                     page_size,
                     group_id: None,
+                    platform_id: None,
                 };
                 let templates = state
                     .template_service
@@ -1717,6 +1721,7 @@ impl ToolRegistry {
                     page,
                     page_size,
                     group_id: None,
+                    platform_id: None,
                 };
                 let txns = state.wallet_service.get_transactions(user_id, req).await?;
                 serde_json::to_value(&txns).unwrap_or_default()
@@ -2392,6 +2397,7 @@ impl ToolRegistry {
                     page,
                     page_size,
                     group_id: None,
+                    platform_id: None,
                 };
                 let result = state
                     .crawler_service
@@ -2413,6 +2419,7 @@ impl ToolRegistry {
                     page,
                     page_size,
                     group_id: None,
+                    platform_id: None,
                 };
                 let result = state
                     .crawler_service

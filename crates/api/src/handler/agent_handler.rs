@@ -45,6 +45,7 @@ pub async fn get_unified_comments(
         page: query.page,
         page_size: query.page_size,
         group_id: None,
+        platform_id: None,
     };
     let response = state
         .agent_service
