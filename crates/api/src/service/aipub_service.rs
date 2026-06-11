@@ -1759,7 +1759,11 @@ impl AipubService {
                         plan_platform = plan.platform_id,
                         "expand_plan_to_tasks: 0 accounts match plan platform (billing=frozen) — failing plan with refund"
                     );
-                    self.repo.finalize_plan(plan_id, "failed").await.ok();
+                    if let Err(e) = self.repo.finalize_plan(plan_id, "failed").await {
+                        // Refund failure must be loud: frozen funds stay stuck
+                        // until this plan is re-finalized manually.
+                        tracing::error!(plan_id, error = %e, "finalize_plan(failed) errored — frozen budget NOT refunded");
+                    }
                 }
                 // Both branches return 0; caller must not set status=ready.
                 return Ok(0);
