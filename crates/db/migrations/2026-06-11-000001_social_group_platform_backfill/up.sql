@@ -75,7 +75,7 @@
 -- ROLLBACK or COMMIT.
 
 DROP TABLE IF EXISTS pg_temp._mig_pre_state;
-CREATE TEMP TABLE pg_temp._mig_pre_state AS
+CREATE TEMP TABLE pg_temp._mig_pre_state ON COMMIT DROP AS
 SELECT
     g.id          AS group_id,
     g.user_id,
@@ -86,6 +86,16 @@ SELECT
     (SELECT COUNT(DISTINCT a2.platform_id) FROM gm_social_accounts a2
      WHERE a2.group_id = g.id) AS distinct_platforms
 FROM gm_social_groups g;
+
+-- Pre-migration account→group snapshot for rehung-count metric.
+-- Captures each account's group_id BEFORE any re-hanging so we can count
+-- accounts whose group_id actually changed (F5-style re-hangs into pre-existing
+-- groups would be invisible to the "new group" approach).
+DROP TABLE IF EXISTS pg_temp._mig_acct_pre_group;
+CREATE TEMP TABLE pg_temp._mig_acct_pre_group ON COMMIT DROP AS
+SELECT id AS account_id, group_id AS pre_group_id
+FROM gm_social_accounts
+WHERE group_id IS NOT NULL;
 
 
 -- ============================================================
@@ -247,16 +257,14 @@ BEGIN
         SELECT 1 FROM pg_temp._mig_pre_state pre WHERE pre.group_id = g.id
     );
 
-    -- Accounts now in newly-created split groups (re-hung accounts)
+    -- Accounts whose group_id changed vs the Step-0 pre-migration snapshot.
+    -- This counts ALL re-hangs, including those into pre-existing groups
+    -- (F5-style collisions) that the "new groups" metric would miss.
     SELECT COUNT(*)
     INTO   cnt_rehung
     FROM   gm_social_accounts a
-    WHERE  a.group_id IN (
-        SELECT g2.id FROM gm_social_groups g2
-        WHERE NOT EXISTS (
-            SELECT 1 FROM pg_temp._mig_pre_state pre WHERE pre.group_id = g2.id
-        )
-    );
+    JOIN   pg_temp._mig_acct_pre_group snap ON snap.account_id = a.id
+    WHERE  a.group_id <> snap.pre_group_id;
 
     -- Empty groups (zero members at migration start; left untouched)
     SELECT COUNT(*)
@@ -306,6 +314,7 @@ BEGIN
                    format('(g=%s,a=%s,gp=%s,ap=%s)',
                           g.id, a.id, g.platform_id, a.platform_id),
                    ' '
+                   ORDER BY g.id, a.id
                )
         INTO   violation_sample
         FROM (

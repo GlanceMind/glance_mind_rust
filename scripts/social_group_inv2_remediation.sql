@@ -3,7 +3,11 @@
 --
 -- Usage
 -- -----
---   psql --single-transaction -f scripts/social_group_inv2_remediation.sql
+--   psql -f scripts/social_group_inv2_remediation.sql
+--
+-- NOTE: --single-transaction is NOT required; this script contains explicit
+-- BEGIN/COMMIT statements so atomicity is built-in.  The script also sets
+-- ON_ERROR_STOP so any error aborts execution before COMMIT is reached.
 --
 -- IMPORTANT: This is NOT the backfill migration.
 -- The backfill migration (2026-06-11-000001_social_group_platform_backfill/up.sql)
@@ -22,7 +26,7 @@
 --
 -- Safety
 -- ------
--- * Runs inside a single transaction (--single-transaction psql flag).
+-- * Runs inside an explicit transaction (BEGIN/COMMIT in this script).
 -- * NULL group_id accounts are ungrouped and are never touched.
 -- * Every subquery is scoped by user_id (cross-user isolation guaranteed).
 -- * SELECT-then-INSERT pattern (not ON CONFLICT) because no unique constraint
@@ -31,15 +35,19 @@
 --
 -- Roll-back
 -- ---------
--- If the final INV2 assertion fails, the --single-transaction flag ensures
--- the entire script is rolled back atomically.
+-- If the final INV2 assertion raises EXCEPTION, the transaction is rolled back
+-- atomically before COMMIT is reached.
+
+\set ON_ERROR_STOP on
+
+BEGIN;
 
 
 -- ============================================================
 -- Audit snapshot
 -- ============================================================
 DROP TABLE IF EXISTS pg_temp._rem_pre_state;
-CREATE TEMP TABLE pg_temp._rem_pre_state AS
+CREATE TEMP TABLE pg_temp._rem_pre_state ON COMMIT DROP AS
 SELECT
     a.id          AS account_id,
     a.user_id,
@@ -54,7 +62,7 @@ WHERE a.platform_id <> g.platform_id;
 -- Snapshot of ALL group IDs that exist before this run starts.
 -- Used by the NOTICE report to identify groups created by this run.
 DROP TABLE IF EXISTS pg_temp._rem_pre_group_ids;
-CREATE TEMP TABLE pg_temp._rem_pre_group_ids AS
+CREATE TEMP TABLE pg_temp._rem_pre_group_ids ON COMMIT DROP AS
 SELECT id FROM gm_social_groups;
 
 
@@ -174,6 +182,7 @@ BEGIN
                    format('(g=%s,a=%s,gp=%s,ap=%s)',
                           g.id, a.id, g.platform_id, a.platform_id),
                    ' '
+                   ORDER BY g.id, a.id
                )
         INTO   violation_sample
         FROM (
@@ -193,3 +202,5 @@ BEGIN
     END IF;
 END;
 $$;
+
+COMMIT;
