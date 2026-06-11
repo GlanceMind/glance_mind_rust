@@ -554,6 +554,29 @@ impl AipubRepository {
             .load(&mut conn)
     }
 
+    /// Like `get_group_account_ids` but additionally filters by `platform_id`.
+    /// Used for billing freeze counts and expand-to-tasks so that cross-platform
+    /// "dirty" accounts (legacy data pre-M2) are excluded.
+    pub async fn get_group_account_ids_for_platform(
+        &self,
+        group_id_param: i32,
+        platform_id_param: i32,
+    ) -> Result<Vec<i32>, DieselError> {
+        use glance_mind_db::schema::gm_social_accounts::dsl::*;
+
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|_| DieselError::BrokenTransactionManager)?;
+
+        gm_social_accounts
+            .filter(group_id.eq(group_id_param))
+            .filter(status.eq("ACTIVE"))
+            .filter(platform_id.eq(platform_id_param))
+            .select(id)
+            .load(&mut conn)
+    }
+
     pub fn get_platform_name(&self, platform_id_param: i32) -> Result<String, DieselError> {
         use glance_mind_db::schema::gm_platforms::dsl::*;
 

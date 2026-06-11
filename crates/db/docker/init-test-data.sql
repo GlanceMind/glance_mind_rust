@@ -172,8 +172,14 @@ SELECT setval('gm_admin_users_id_seq', (SELECT MAX(id) FROM gm_admin_users));
 -- 8. Social Groups (for account management)
 -- ============================================================================
 -- Groups must exist for all platforms with campaigns that need device-based queries
+-- NOTE: group id=1 is intentionally owned by the E2E test user (999) with
+-- platform_id=3 (Facebook).  Several aipub/grooming tests use
+-- `SELECT id FROM gm_social_groups LIMIT 1` (no ORDER BY) which relies on
+-- heap insertion order — group 1 is inserted first so it appears first.
+-- Keeping it as the test-user's primary group avoids 404/platform-mismatch
+-- rejections once the M3 group-platform guard is wired into create_plan.
 INSERT INTO gm_social_groups (id, user_id, platform_id, group_name) VALUES
-(1, 2, 2, 'TikTok Main Group'),       -- For TikTok campaigns
+(1, 999, 3, 'Facebook Test Group (E2E)'), -- Test-user Facebook group — for aipub/grooming fixtures
 (2, 2, 1, 'Reddit Marketing'),        -- For Reddit campaigns
 (3, 3, 4, 'Instagram Business'),      -- For Instagram campaigns
 (4, 2, 3, 'Facebook Business'),       -- For Facebook campaigns
@@ -187,14 +193,22 @@ SELECT setval('social_groups_id_seq', (SELECT MAX(id) FROM gm_social_groups));
 -- ============================================================================
 -- NOTE: device_id is critical for get_comments_by_device API
 -- Test device IDs: test_device_001 (TikTok/Facebook), test_device_002 (Instagram), test_device_003 (Reddit/Twitter)
+--
+-- Accounts id=1,2 were originally TikTok in group 1, but group 1 is now a
+-- test-user Facebook group (see above).  They are moved to group 101 (TikTok
+-- Single Account Group, user 2) so the TikTok campaign device queries still work.
+-- Account id=7 is a new Facebook account for the test user in group 1 so
+-- the account_grooming and billing fixtures have at least one platform-matched account.
 INSERT INTO gm_social_accounts (id, user_id, platform_id, username, group_id, status, health_score, cookie, daily_max_replies, device_id, profile_name) VALUES
-(1, 2, 2, 'test_tiktok_1', 1, 'ACTIVE', 100, '{}', 50, 'test_device_001', 'TikTok Profile 1'),
-(2, 2, 2, 'test_tiktok_2', 1, 'ACTIVE', 95, '{}', 50, 'test_device_001', 'TikTok Profile 2'),
+(1, 2, 2, 'test_tiktok_1', 101, 'ACTIVE', 100, '{}', 50, 'test_device_001', 'TikTok Profile 1'),
+(2, 2, 2, 'test_tiktok_2', 101, 'ACTIVE', 95, '{}', 50, 'test_device_001', 'TikTok Profile 2'),
 (3, 2, 1, 'test_reddit_1', 2, 'ACTIVE', 100, '{}', 30, 'test_device_003', 'Reddit Profile'),
 (4, 3, 4, 'test_instagram_1', 3, 'ACTIVE', 100, '{}', 40, 'test_device_002', 'Instagram Profile'),
 -- Additional accounts for Facebook and Twitter
 (5, 2, 3, 'test_facebook_1', 4, 'ACTIVE', 100, '{}', 40, 'test_device_001', 'Facebook Profile'),
-(6, 2, 5, 'test_twitter_1', 5, 'ACTIVE', 100, '{}', 40, 'test_device_003', 'Twitter Profile')
+(6, 2, 5, 'test_twitter_1', 5, 'ACTIVE', 100, '{}', 40, 'test_device_003', 'Twitter Profile'),
+-- Facebook account for E2E test user in group 1 (required for grooming/billing tests)
+(7, 999, 3, 'e2e_facebook_1', 1, 'ACTIVE', 100, '{}', 40, 'test_device_e2e', 'E2E Facebook Profile')
 ON CONFLICT (id) DO NOTHING;
 
 SELECT setval('social_accounts_id_seq', (SELECT MAX(id) FROM gm_social_accounts));
@@ -219,10 +233,11 @@ INSERT INTO gm_campaigns (
  'marketing automation, AI tools', 30, 500.00, false, false, false, true, 0.00, 0.00, 0, 2,
  true, false),
 
--- Platform 2: TikTok - Active (social_group_id = 1)
+-- Platform 2: TikTok - Active (social_group_id = 101, TikTok Single Account Group)
+-- NOTE: was social_group_id=1 but group 1 is now user-999 Facebook group (M3 fixture fix)
 (2, 2, 'TikTok Travel Promo', 'ACTIVE', 2, 1, 1,
  'We sell premium travel packages to China.', 'INTERVAL', '{"interval_seconds": 3600}',
- 'travel china, china tour', 50, 1000.00, true, true, false, true, 0.00, 0.00, 0, 1,
+ 'travel china, china tour', 50, 1000.00, true, true, false, true, 0.00, 0.00, 0, 101,
  true, true),
 
 -- Platform 3: Facebook - Active (social_group_id = 4)
@@ -244,9 +259,10 @@ INSERT INTO gm_campaigns (
  true, false),
 
 -- Draft campaign (should not be processed by scheduler)
+-- NOTE: social_group_id changed from 1 to 101 (group 1 is now user-999 Facebook, M3 fixture fix)
 (6, 2, 'Draft TikTok Campaign', 'DRAFT', 2, 1, 1,
  'Draft product description.', 'IMMEDIATE', NULL,
- 'test keyword', 20, 200.00, true, true, true, false, 0.00, 0.00, 0, 1,
+ 'test keyword', 20, 200.00, true, true, true, false, 0.00, 0.00, 0, 101,
  false, false),
 
 -- Completed campaign (for history testing)
@@ -419,13 +435,14 @@ SELECT setval('gm_agent_twitter_comments_id_seq', (SELECT MAX(id) FROM gm_agent_
 -- ============================================================================
 
 -- Low-limit accounts (daily_max_replies = 2) to quickly hit the cap
+-- NOTE: group_id changed from 1 to 101 (group 1 is now user-999 Facebook, M3 fixture fix)
 INSERT INTO gm_social_accounts
   (id, user_id, platform_id, username, group_id, status, health_score,
    cookie, daily_max_replies, device_id, profile_name)
 VALUES
-  (101, 2, 2, 'tiktok_low_limit_1', 1, 'ACTIVE', 100,
+  (101, 2, 2, 'tiktok_low_limit_1', 101, 'ACTIVE', 100,
    '{}', 2, 'test_device_limit', 'LowLimit Profile A'),
-  (102, 2, 2, 'tiktok_low_limit_2', 1, 'ACTIVE', 100,
+  (102, 2, 2, 'tiktok_low_limit_2', 101, 'ACTIVE', 100,
    '{}', 2, 'test_device_limit', 'LowLimit Profile B')
 ON CONFLICT (id) DO NOTHING;
 
