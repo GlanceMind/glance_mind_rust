@@ -1,4 +1,4 @@
-pub(crate) mod agent_repository;
+pub mod agent_repository;
 pub(crate) mod ai_model_repository;
 pub mod aipub_repository;
 pub(crate) mod campaign_repository;
