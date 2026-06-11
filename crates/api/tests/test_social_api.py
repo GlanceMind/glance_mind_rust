@@ -954,5 +954,358 @@ class TestSocialGroupPlatformFilter:
                 auth_client.delete(f"/api/v1/social-groups/{group_id}")
 
 
+class TestAccountGroupBinding:
+    """IT4: M2 binding-invariant validation tests.
+
+    Exercises PUT /api/v1/accounts/{id} group_id binding and
+    POST /api/v1/accounts/batch with group_id + platform_id cross-check.
+
+    Batch endpoint: POST /api/v1/accounts/batch  (BatchCreateAccountsDto)
+    Fields: platform_id (int), username, device_id?, profile_start, profile_end,
+            daily_max_replies (default 50), group_id? (int)
+
+    Current state (before M2 implementation):
+      IT4a, IT4b, IT4c, IT4f → RED (returns 200 instead of 4xx)
+      IT4d, IT4e, IT4g        → GREEN baseline
+    """
+
+    # ---------------------------------------------------------------------- #
+    # Fixture: seed users A resources                                         #
+    # ---------------------------------------------------------------------- #
+
+    @pytest.fixture(autouse=True)
+    def setup_resources(self, auth_client, db_cursor, db_connection):
+        """Seed resources for user A (auth_client) and user B (direct-insert).
+
+        User A:
+          - gF: facebook group (platform_id=3)
+          - gR: reddit group   (platform_id=1)
+          - a1: facebook account (platform_id=3), initially unbound
+
+        User B (direct DB insert — no API token):
+          - gB: facebook group (platform_id=3)
+        """
+        suffix = uuid.uuid4().hex[:8]
+        self._created_account_ids = []
+        self._created_group_ids = []
+        self._batch_prefix = f"it4batch_{suffix}"
+
+        # Resolve user A's id from DB (profile endpoint is POST-only)
+        from conftest import resolve_test_user_id
+        self._user_a_id = resolve_test_user_id(db_connection)
+
+        # Create facebook group gF for user A
+        resp = auth_client.post(
+            "/api/v1/social-groups",
+            json={"platform_id": PLATFORM_FACEBOOK, "group_name": f"it4_gF_{suffix}"},
+        )
+        assert resp.status_code == 200, f"Failed to create gF: {resp.text}"
+        self._gF_id = resp.json()["data"]["id"]
+        self._created_group_ids.append(self._gF_id)
+
+        # Create reddit group gR for user A
+        resp = auth_client.post(
+            "/api/v1/social-groups",
+            json={"platform_id": PLATFORM_REDDIT, "group_name": f"it4_gR_{suffix}"},
+        )
+        assert resp.status_code == 200, f"Failed to create gR: {resp.text}"
+        self._gR_id = resp.json()["data"]["id"]
+        self._created_group_ids.append(self._gR_id)
+
+        # Create facebook account a1 for user A (unbound initially)
+        resp = auth_client.post(
+            "/api/v1/accounts",
+            json={
+                "platform_id": PLATFORM_FACEBOOK,
+                "username": f"it4_a1_{suffix}",
+                "profile_name": f"it4_a1_{suffix}",
+                "daily_max_replies": 10,
+            },
+        )
+        assert resp.status_code == 200, f"Failed to create a1: {resp.text}"
+        self._a1_id = resp.json()["data"]["id"]
+        self._created_account_ids.append(self._a1_id)
+
+        # Create user B (direct DB insert)
+        user_b_email = f"it4_userB_{suffix}@test.invalid"
+        db_cursor.execute(
+            """
+            INSERT INTO gm_users (email, username, password_hash, permissions)
+            VALUES (%s, %s, 'no-login', 0)
+            RETURNING id
+            """,
+            (user_b_email, f"it4_userB_{suffix}"),
+        )
+        db_cursor.connection.commit()
+        self._user_b_id = db_cursor.fetchone()["id"]
+
+        # Create gB: facebook group owned by user B (direct DB insert)
+        db_cursor.execute(
+            """
+            INSERT INTO gm_social_groups (user_id, platform_id, group_name)
+            VALUES (%s, %s, %s)
+            RETURNING id
+            """,
+            (self._user_b_id, PLATFORM_FACEBOOK, f"it4_gB_{suffix}"),
+        )
+        db_cursor.connection.commit()
+        self._gB_id = db_cursor.fetchone()["id"]
+
+        yield
+
+        # ------------------------------------------------------------------ #
+        # Teardown: delete created accounts (batch + single) and groups       #
+        # ------------------------------------------------------------------ #
+        # Delete batch-created accounts by prefix
+        try:
+            db_cursor.execute(
+                """
+                DELETE FROM gm_social_accounts
+                WHERE user_id = %s AND username LIKE %s
+                """,
+                (self._user_a_id, f"{self._batch_prefix}%"),
+            )
+            db_cursor.connection.commit()
+        except Exception:
+            db_cursor.connection.rollback()
+
+        # Delete individually tracked accounts
+        for aid in self._created_account_ids:
+            try:
+                auth_client.delete(f"/api/v1/accounts/{aid}")
+            except Exception:
+                pass
+
+        # Delete groups owned by user A
+        for gid in self._created_group_ids:
+            try:
+                auth_client.delete(f"/api/v1/social-groups/{gid}")
+            except Exception:
+                pass
+
+        # Delete user B's group and user B
+        try:
+            db_cursor.execute(
+                "DELETE FROM gm_social_groups WHERE id = %s", (self._gB_id,)
+            )
+            db_cursor.execute(
+                "DELETE FROM gm_users WHERE id = %s", (self._user_b_id,)
+            )
+            db_cursor.connection.commit()
+        except Exception:
+            db_cursor.connection.rollback()
+
+    # ---------------------------------------------------------------------- #
+    # IT4a: bind to non-existent group → 404                                 #
+    # Current: RED (returns 200)                                              #
+    # ---------------------------------------------------------------------- #
+
+    def test_it4a_bind_nonexistent_group_returns_404(self, auth_client):
+        """IT4a: PUT account/{a1} {"group_id": 99999999} must return 404.
+        RED today: API returns 200 (no validation)."""
+        resp = auth_client.put(
+            f"/api/v1/accounts/{self._a1_id}",
+            json={"group_id": 99999999},
+        )
+        assert resp.status_code == 404, (
+            f"IT4a: expected HTTP 404 for non-existent group_id, "
+            f"got {resp.status_code} — body: {resp.text[:300]}"
+        )
+
+    # ---------------------------------------------------------------------- #
+    # IT4b: bind user B's group → 404                                        #
+    # Current: RED (returns 200)                                              #
+    # ---------------------------------------------------------------------- #
+
+    def test_it4b_bind_other_users_group_returns_404(self, auth_client):
+        """IT4b: PUT account/{a1} {"group_id": gB} (user B's group) must return 404.
+        RED today: API returns 200 (no ownership check)."""
+        resp = auth_client.put(
+            f"/api/v1/accounts/{self._a1_id}",
+            json={"group_id": self._gB_id},
+        )
+        assert resp.status_code == 404, (
+            f"IT4b: expected HTTP 404 for another user's group, "
+            f"got {resp.status_code} — body: {resp.text[:300]}"
+        )
+
+    # ---------------------------------------------------------------------- #
+    # IT4c: bind platform-mismatched group → 400 + code 2001 + error msg     #
+    # Current: RED (returns 200)                                              #
+    # ---------------------------------------------------------------------- #
+
+    def test_it4c_bind_platform_mismatch_returns_400(self, auth_client):
+        """IT4c: PUT account/{a1 (facebook)} {"group_id": gR (reddit)} must return 400
+        with code==2001 and error message containing 'does not match required platform'.
+        RED today: API returns 200."""
+        resp = auth_client.put(
+            f"/api/v1/accounts/{self._a1_id}",
+            json={"group_id": self._gR_id},
+        )
+        assert resp.status_code == 400, (
+            f"IT4c: expected HTTP 400 for platform mismatch (facebook acc → reddit group), "
+            f"got {resp.status_code} — body: {resp.text[:300]}"
+        )
+        body = resp.json()
+        assert body.get("code") == 2001, (
+            f"IT4c: expected code==2001 (BadRequest), got {body.get('code')}"
+        )
+        combined_msg = (body.get("msg") or "") + " " + (body.get("msg_cn") or "")
+        assert "does not match required platform" in combined_msg, (
+            f"IT4c: expected 'does not match required platform' in error message, "
+            f"got: {combined_msg!r}"
+        )
+
+    # ---------------------------------------------------------------------- #
+    # IT4d: bind valid same-platform group → 200 + DB reflects new group_id  #
+    # GREEN baseline (currently works)                                        #
+    # ---------------------------------------------------------------------- #
+
+    def test_it4d_bind_valid_same_platform_group(self, auth_client, db_cursor):
+        """IT4d: PUT account/{a1 (facebook)} {"group_id": gF (facebook)} must return 200
+        and DB must reflect group_id==gF.  GREEN baseline today."""
+        # Ensure a1 is unbound first
+        auth_client.put(f"/api/v1/accounts/{self._a1_id}", json={"group_id": 0})
+
+        resp = auth_client.put(
+            f"/api/v1/accounts/{self._a1_id}",
+            json={"group_id": self._gF_id},
+        )
+        assert resp.status_code == 200, (
+            f"IT4d: expected HTTP 200 for valid same-platform bind, "
+            f"got {resp.status_code} — body: {resp.text[:300]}"
+        )
+
+        # DB verification
+        db_cursor.execute(
+            "SELECT group_id FROM gm_social_accounts WHERE id = %s",
+            (self._a1_id,),
+        )
+        row = db_cursor.fetchone()
+        assert row is not None, f"IT4d: account {self._a1_id} not found in DB"
+        assert row["group_id"] == self._gF_id, (
+            f"IT4d: expected group_id=={self._gF_id} in DB, got {row['group_id']}"
+        )
+        print(f"\n  IT4d GREEN: account {self._a1_id} bound to group {self._gF_id}")
+
+    # ---------------------------------------------------------------------- #
+    # IT4e: unbind (group_id=0) → 200 + DB group_id IS NULL                 #
+    # GREEN baseline                                                          #
+    # ---------------------------------------------------------------------- #
+
+    def test_it4e_unbind_sets_group_id_null(self, auth_client, db_cursor):
+        """IT4e: PUT {"group_id": 0} must return 200 and set group_id to NULL in DB.
+        GREEN baseline today (unbind semantics already implemented)."""
+        # First bind to gF to ensure it is bound
+        auth_client.put(
+            f"/api/v1/accounts/{self._a1_id}",
+            json={"group_id": self._gF_id},
+        )
+
+        resp = auth_client.put(
+            f"/api/v1/accounts/{self._a1_id}",
+            json={"group_id": 0},
+        )
+        assert resp.status_code == 200, (
+            f"IT4e: expected HTTP 200 for unbind, "
+            f"got {resp.status_code} — body: {resp.text[:300]}"
+        )
+
+        db_cursor.execute(
+            "SELECT group_id FROM gm_social_accounts WHERE id = %s",
+            (self._a1_id,),
+        )
+        row = db_cursor.fetchone()
+        assert row is not None, f"IT4e: account {self._a1_id} not found in DB"
+        assert row["group_id"] is None, (
+            f"IT4e: expected group_id IS NULL after unbind, got {row['group_id']}"
+        )
+        print(f"\n  IT4e GREEN: account {self._a1_id} unbound (group_id IS NULL)")
+
+    # ---------------------------------------------------------------------- #
+    # IT4f: batch-create with platform_id=3 + group_id=gR (reddit) → 400    #
+    # + ZERO accounts created                                                 #
+    # Current: RED (returns 200 and creates accounts)                        #
+    # ---------------------------------------------------------------------- #
+
+    def test_it4f_batch_create_platform_mismatch_returns_400(self, auth_client, db_cursor):
+        """IT4f: POST /api/v1/accounts/batch with platform_id=3 (facebook) and
+        group_id=gR (reddit) must return 400 AND create ZERO accounts.
+        RED today: succeeds and creates accounts."""
+        prefix = self._batch_prefix + "_f_"
+        payload = {
+            "platform_id": PLATFORM_FACEBOOK,
+            "username": prefix + "user",
+            "profile_start": prefix + "p001",
+            "profile_end": prefix + "p005",
+            "daily_max_replies": 10,
+            "group_id": self._gR_id,
+        }
+        resp = auth_client.post("/api/v1/accounts/batch", json=payload)
+        assert resp.status_code == 400, (
+            f"IT4f: expected HTTP 400 for batch with platform mismatch "
+            f"(facebook accounts → reddit group), "
+            f"got {resp.status_code} — body: {resp.text[:300]}"
+        )
+
+        # Verify zero accounts were created
+        db_cursor.execute(
+            "SELECT COUNT(*) AS cnt FROM gm_social_accounts WHERE user_id = %s AND username LIKE %s",
+            (self._user_a_id, f"{prefix}%"),
+        )
+        count = db_cursor.fetchone()["cnt"]
+        assert count == 0, (
+            f"IT4f: expected 0 accounts created after 400, but found {count}"
+        )
+
+    # ---------------------------------------------------------------------- #
+    # IT4g: batch-create with group_id=gF (same platform) → success          #
+    # + every created row has group_id==gF                                   #
+    # GREEN baseline candidate                                                #
+    # ---------------------------------------------------------------------- #
+
+    def test_it4g_batch_create_valid_group_succeeds(self, auth_client, db_cursor):
+        """IT4g: POST /api/v1/accounts/batch with platform_id=3 and group_id=gF (facebook)
+        must succeed and every created account must have group_id==gF.
+        GREEN baseline today (no platform check, batch just assigns group)."""
+        prefix = self._batch_prefix + "_g_"
+        payload = {
+            "platform_id": PLATFORM_FACEBOOK,
+            "username": prefix + "user",
+            "profile_start": prefix + "p001",
+            "profile_end": prefix + "p003",
+            "daily_max_replies": 10,
+            "group_id": self._gF_id,
+        }
+        resp = auth_client.post("/api/v1/accounts/batch", json=payload)
+        assert resp.status_code == 200, (
+            f"IT4g: expected HTTP 200 for valid batch with same-platform group, "
+            f"got {resp.status_code} — body: {resp.text[:300]}"
+        )
+
+        body = resp.json()
+        result = body.get("data", {})
+        created_ids = result.get("created_ids", [])
+        assert len(created_ids) > 0, "IT4g: expected at least 1 account to be created"
+
+        # DB verification: every created account has group_id==gF
+        for acc_id in created_ids:
+            db_cursor.execute(
+                "SELECT group_id FROM gm_social_accounts WHERE id = %s",
+                (acc_id,),
+            )
+            row = db_cursor.fetchone()
+            assert row is not None, f"IT4g: created account id={acc_id} not found in DB"
+            assert row["group_id"] == self._gF_id, (
+                f"IT4g: account {acc_id} has group_id={row['group_id']}, "
+                f"expected {self._gF_id}"
+            )
+
+        print(
+            f"\n  IT4g GREEN: batch created {len(created_ids)} accounts, "
+            f"all bound to gF={self._gF_id}"
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])

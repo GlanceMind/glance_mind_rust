@@ -52,6 +52,7 @@ pub mod openmontage_stream_hub;
 pub mod redis_service;
 pub mod upload_task_service;
 pub mod user_service;
+pub mod validation;
 pub mod video_capabilities;
 pub mod video_case_service;
 pub mod video_service;

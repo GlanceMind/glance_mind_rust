@@ -64,6 +64,12 @@ pub enum BusinessError {
     #[error("Group not found")]
     GroupNotFound,
 
+    #[error("Group platform {group_platform_id} does not match required platform {expected_platform_id}")]
+    GroupPlatformMismatch {
+        group_platform_id: i32,
+        expected_platform_id: i32,
+    },
+
     #[error("Item not found")]
     ItemNotFound,
 
@@ -141,6 +147,7 @@ impl BusinessError {
             BusinessError::VideoTaskNotFound(_) => ErrorCode::VideoNotFound,
             BusinessError::AccountNotFound => ErrorCode::NotFound,
             BusinessError::GroupNotFound => ErrorCode::NotFound,
+            BusinessError::GroupPlatformMismatch { .. } => ErrorCode::BadRequest,
             BusinessError::ItemNotFound => ErrorCode::NotFound,
             BusinessError::ResourceNotFound(_) => ErrorCode::NotFound,
 
@@ -204,6 +211,15 @@ impl BusinessError {
             BusinessError::VideoTaskNotFound(task_id) => format!("视频任务未找到: {}", task_id),
             BusinessError::AccountNotFound => "账号未找到".to_string(),
             BusinessError::GroupNotFound => "分组未找到".to_string(),
+            BusinessError::GroupPlatformMismatch {
+                group_platform_id,
+                expected_platform_id,
+            } => {
+                format!(
+                    "分组平台 {} 与所需平台 {} 不匹配",
+                    group_platform_id, expected_platform_id
+                )
+            }
             BusinessError::ItemNotFound => "项目未找到".to_string(),
             BusinessError::ResourceNotFound(resource) => format!("{}未找到", resource),
 
