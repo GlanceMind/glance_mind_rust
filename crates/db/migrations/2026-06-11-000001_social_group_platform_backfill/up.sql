@@ -1,0 +1,50 @@
+-- Migration: backfill gm_social_groups.platform_id from member accounts' real platforms
+--
+-- Background
+-- ----------
+-- Legacy group rows were created with platform_id=1 (reddit) regardless of the
+-- platform of the member accounts that belong to them.  This migration corrects
+-- the mismatch so that gm_social_groups.platform_id always matches
+-- gm_social_accounts.platform_id for every member account.
+--
+-- Algorithm
+-- ---------
+-- For each mislabelled group (i.e. any group whose platform_id differs from at
+-- least one member account's platform_id):
+--
+--   1. Determine the "correct" platform: majority-vote over member accounts;
+--      ties broken by earliest account created_at; empty groups left untouched.
+--
+--   2. Homogeneous group (all members agree on one platform, differs from
+--      current group.platform_id): UPDATE gm_social_groups SET platform_id=<correct>.
+--
+--   3. Mixed group (accounts span more than one platform):
+--      a. UPDATE the group's platform_id to the majority/tie-break winner.
+--      b. For each minority platform P ≠ winner:
+--         - Look for an existing group owned by the same user with
+--           name = '<original_name>-<platform.name>' and platform_id = P.
+--         - If found: re-hang the minority accounts to that group's id.
+--         - If not found: INSERT a new group with that name and platform_id = P,
+--           then re-hang the minority accounts to the new group's id.
+--
+-- Invariants enforced (INV2 assertion inside this transaction)
+-- ------------------------------------------------------------
+-- After all updates, the following query must return 0 rows:
+--   SELECT a.id FROM gm_social_accounts a
+--   JOIN gm_social_groups g ON a.group_id = g.id
+--   WHERE a.platform_id <> g.platform_id
+--
+-- Idempotency
+-- -----------
+-- Running this migration twice must be a no-op on the second run:
+-- all groups will already have the correct platform_id after the first pass,
+-- and mixed-group splitting produces no work when accounts are already
+-- correctly distributed.
+--
+-- Transaction boundary
+-- --------------------
+-- Diesel executes each migration file inside its own BEGIN/COMMIT wrapper.
+-- DO NOT add explicit BEGIN or COMMIT statements here.
+--
+-- NOTE: This file contains no executable SQL yet.
+-- The implementer fills in the executable statements after IT7 is RED.
