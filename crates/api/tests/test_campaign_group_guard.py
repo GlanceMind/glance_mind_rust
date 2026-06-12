@@ -208,7 +208,10 @@ class TestCampaignGroupGuard:
         IT6a, IT6b, IT6e, IT6h
 
     GREEN-baseline tests (should pass today and after M4):
-        IT6c, IT6d, IT6f, IT6g
+        IT6d, IT6f, IT6g
+
+    IT6c asserts upstream #46's mandatory-group rule (create without a group
+    is rejected); it was an optional-group green baseline before #46.
     """
 
     # ── class-level seed state ────────────────────────────────────────────
@@ -363,12 +366,19 @@ class TestCampaignGroupGuard:
             if campaign_id is not None:
                 _delete_campaign(db_cursor, campaign_id)
 
-    # ── IT6c: create without social_group_id → GREEN baseline ───────────────
+    # ── IT6c: create without social_group_id → rejected (mandatory group) ───
 
-    def test_IT6c_create_without_group_succeeds(self, db_cursor, db_connection):
+    def test_IT6c_create_without_group_is_rejected(self, db_cursor, db_connection):
         """
-        GREEN baseline: create campaign without social_group_id must succeed.
-        This behavior must be preserved after M4.
+        Upstream #46 (prod incident 271) made an account group UNCONDITIONALLY
+        REQUIRED on campaign create: a campaign without social_group_id must be
+        rejected with 400/422 (mirrors main's
+        test_create_campaign_without_social_group_is_rejected).
+
+        ASSERTION-CHANGE-JUSTIFIED: upstream #46 (prod incident 271) made
+        account group mandatory on campaign create; IT6c's optional-group
+        green-baseline encoded the pre-#46 contract and is updated to assert
+        the new mandatory-group rejection.
         """
         auth = self._auth
         region_id, ai_model_id = self._region_model(db_cursor, PLATFORM_FACEBOOK)
@@ -381,19 +391,28 @@ class TestCampaignGroupGuard:
             "schedule_type": "ONCE",
             "product_prompt": "IT6c test",
             "max_scan_count": 1,
-            # no social_group_id
+            # no social_group_id — must now be rejected (#46)
         }
         resp = auth.post("/api/v1/campaigns", json=payload)
         campaign_id = None
         try:
-            assert_response_success(resp)
-            data = extract_data(resp.json())
-            assert "id" in data, "IT6c: response must include id"
-            campaign_id = data["id"]
-            assert data.get("social_group_id") is None, (
-                f"IT6c: social_group_id should be null, got {data.get('social_group_id')}"
+            assert resp.status_code in (400, 422), (
+                f"IT6c: expected create to be rejected without an account group "
+                f"(upstream #46 mandatory-group rule), got {resp.status_code}: {resp.text}"
+            )
+            body = resp.json()
+            msg = (body.get("msg") or "") + (body.get("msg_cn") or "")
+            assert ("account group" in msg) or ("账号分组" in msg), (
+                f"IT6c: expected required-group message, got: {body}"
             )
         finally:
+            # Defensive cleanup: if the guard regressed and a campaign was
+            # created, remove it so the failure does not leak state.
+            if resp.status_code == 200:
+                try:
+                    campaign_id = extract_data(resp.json()).get("id")
+                except Exception:
+                    campaign_id = None
             if campaign_id is not None:
                 _delete_campaign(db_cursor, campaign_id)
 
