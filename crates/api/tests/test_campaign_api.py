@@ -71,9 +71,10 @@ class TestCampaignCRUD:
 
         A valid (non-null, owned) account group is an unconditional requirement
         on campaign create and activation (incident: prod campaign 271 activated
-        with a null group). There is NO platform check (decision E1), so the
-        group's platform_id need not match the campaign — tests just need a real
-        owned group to satisfy the required-group rule.
+        with a null group). The M4 platform guard additionally requires the
+        group's platform_id to match the campaign's (premised on the M5
+        backfill repairing gm_social_groups.platform_id), so callers must pass
+        the campaign's platform here.
         """
         resp = auth_client.post(
             "/api/v1/social-groups",
@@ -688,6 +689,10 @@ class TestCampaignTemplates:
         models = extract_data(resp.json())
         ai_model_id = models[0]["id"]
         
+        # A valid owned account group is required on create (#46), and its
+        # platform must match the campaign's (M4 platform guard).
+        social_group_id = TestCampaignCRUD()._create_social_group(auth_client, platform_id)
+
         create_resp = auth_client.post(
             "/api/v1/campaigns",
             json={
@@ -698,6 +703,7 @@ class TestCampaignTemplates:
                 "schedule_type": "ONCE",
                 "product_prompt": "Test",
                 "max_scan_count": 1,
+                "social_group_id": social_group_id,
             }
         )
         return extract_data(create_resp.json()).get("id")
@@ -771,6 +777,9 @@ class TestCampaignTemplates:
 
     def _create_fresh_campaign(self, auth_client, api_client, name_suffix):
         platform_id, region_id, ai_model_id = TestCampaignCRUD()._get_config_ids(api_client)
+        # A valid owned account group is required on create (#46), and its
+        # platform must match the campaign's (M4 platform guard).
+        social_group_id = TestCampaignCRUD()._create_social_group(auth_client, platform_id)
         create_resp = auth_client.post(
             "/api/v1/campaigns",
             json={
@@ -781,6 +790,7 @@ class TestCampaignTemplates:
                 "schedule_type": "ONCE",
                 "product_prompt": f"Reusable template product {name_suffix}",
                 "max_scan_count": 1,
+                "social_group_id": social_group_id,
             },
         )
         assert_response_success(create_resp)
@@ -958,9 +968,11 @@ class TestCampaignTemplates:
         self, auth_client, api_client, db_cursor, db_connection
     ):
         """Reusable template assignment should persist the DB shape consumed by agent_rs."""
-        campaign_id = self._get_or_create_campaign(auth_client, api_client, db_cursor)
-        if not campaign_id:
-            pytest.skip("No campaign available")
+        # Use a fresh campaign: _get_or_create_campaign picks the user's most
+        # recent campaign, which the preceding over-cap tests intentionally
+        # fill to the 100-id reply_template_ids cap — assigning to it would
+        # fail for the wrong reason (cap exceeded, not assignment behavior).
+        campaign_id = self._create_fresh_campaign(auth_client, api_client, uuid.uuid4().hex[:8])
 
         unique = uuid.uuid4().hex[:8]
         library_payload = {
@@ -1063,10 +1075,26 @@ class TestCampaignTemplates:
         assert campaign_row["reply_template_ids"] == [reusable["id"]]
         assert campaign_row["reply_template_id_count"] == 1
 
-        reusable_list_resp = auth_client.get("/api/v1/reply-template-library?page=1&page_size=10")
-        assert_response_success(reusable_list_resp)
-        reusable_list = extract_data(reusable_list_resp.json())["list"]
-        listed_reusable = next(item for item in reusable_list if item["id"] == reusable["id"])
+        # Paginate until the template is found: the library accumulates rows
+        # across e2e runs and orders by updated_at DESC NULLS LAST, so a fixed
+        # page-1 lookup is brittle against previously-updated templates.
+        listed_reusable = None
+        page = 1
+        while listed_reusable is None:
+            reusable_list_resp = auth_client.get(
+                f"/api/v1/reply-template-library?page={page}&page_size=100"
+            )
+            assert_response_success(reusable_list_resp)
+            reusable_list = extract_data(reusable_list_resp.json())["list"]
+            if not reusable_list:
+                break
+            listed_reusable = next(
+                (item for item in reusable_list if item["id"] == reusable["id"]), None
+            )
+            page += 1
+        assert listed_reusable is not None, (
+            f"created reusable template {reusable['id']} must appear in the library listing"
+        )
         assert listed_reusable["usage_count"] == 1
 
         updated_reply_prompt = f"library reply prompt updated {unique}"
@@ -1481,6 +1509,9 @@ class TestCampaignPlatformRouting:
 
     def _create_owned_campaign(self, auth_client, db_cursor, platform_id, suffix):
         region_id, ai_model_id = self._get_region_and_model_ids(db_cursor, platform_id)
+        # A valid owned account group is required on create (#46), and its
+        # platform must match the campaign's (M4 platform guard).
+        social_group_id = TestCampaignCRUD()._create_social_group(auth_client, platform_id)
         resp = auth_client.post(
             "/api/v1/campaigns",
             json={
@@ -1491,6 +1522,7 @@ class TestCampaignPlatformRouting:
                 "schedule_type": "ONCE",
                 "product_prompt": f"Cross platform routing test {suffix}",
                 "max_scan_count": 1,
+                "social_group_id": social_group_id,
             },
         )
         assert_response_success(resp)
