@@ -1,0 +1,19 @@
+-- down.sql: no-op — pure data migration, not auto-reversible.
+--
+-- This migration back-fills platform_id values that were historically wrong.
+-- There is no safe automatic rollback because:
+--   1. The original (incorrect) platform_id values are not stored anywhere;
+--      re-applying the wrong value would corrupt data.
+--   2. Newly inserted split groups (minority-platform groups) cannot be
+--      automatically removed without knowing which accounts they held before
+--      the split.
+--
+-- Recovery (NC1 process)
+-- ----------------------
+-- Per the NC1 process, a full PostgreSQL snapshot (pg_dump / RDS snapshot)
+-- MUST be taken immediately before this migration is merged and applied to
+-- production.  That snapshot is the recovery point.  To roll back:
+--   1. Restore from the pre-migration snapshot into a clean instance.
+--   2. Promote / switch traffic to the restored instance.
+--
+-- Do NOT add executable SQL here.

@@ -29,19 +29,31 @@ impl SocialGroupRepository {
         user_id: i32,
         page: i64,
         page_size: i64,
+        platform_id: Option<i32>,
     ) -> Result<(Vec<SocialGroup>, i64), diesel::result::Error> {
         let mut conn = self.pool.get().expect("Failed to get DB connection");
 
-        let total = social_groups::table
-            .filter(social_groups::user_id.eq(user_id))
-            .count()
-            .get_result(&mut conn)?;
+        let total = {
+            let mut q = social_groups::table
+                .filter(social_groups::user_id.eq(user_id))
+                .into_boxed();
+            if let Some(p) = platform_id {
+                q = q.filter(social_groups::platform_id.eq(p));
+            }
+            q.count().get_result(&mut conn)?
+        };
 
-        let items = social_groups::table
-            .filter(social_groups::user_id.eq(user_id))
-            .limit(page_size)
-            .offset((page - 1) * page_size)
-            .load::<SocialGroup>(&mut conn)?;
+        let items = {
+            let mut q = social_groups::table
+                .filter(social_groups::user_id.eq(user_id))
+                .into_boxed();
+            if let Some(p) = platform_id {
+                q = q.filter(social_groups::platform_id.eq(p));
+            }
+            q.limit(page_size)
+                .offset((page - 1) * page_size)
+                .load::<SocialGroup>(&mut conn)?
+        };
 
         Ok((items, total))
     }
@@ -85,5 +97,19 @@ impl SocialGroupRepository {
                 .filter(social_groups::user_id.eq(user_id)),
         )
         .execute(&mut conn)
+    }
+
+    /// Returns Ok(true) if the platform exists in gm_platforms, Ok(false) otherwise.
+    pub fn platform_exists(&self, platform_id_param: i32) -> Result<bool, diesel::result::Error> {
+        use glance_mind_db::schema::gm_platforms::dsl::*;
+
+        let mut conn = self.pool.get().expect("Failed to get DB connection");
+
+        let count: i64 = gm_platforms
+            .filter(id.eq(platform_id_param))
+            .count()
+            .get_result(&mut conn)?;
+
+        Ok(count > 0)
     }
 }

@@ -8,6 +8,8 @@ pub struct PageRequest {
     pub page_size: i64,
     /// Optional group_id filter for accounts
     pub group_id: Option<i32>,
+    /// Optional platform_id filter for group list
+    pub platform_id: Option<i32>,
 }
 
 fn default_page() -> i64 {
