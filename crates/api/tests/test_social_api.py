@@ -760,9 +760,22 @@ class TestSocialGroupPlatformFilter:
 
     def test_it3b_no_filter_returns_all_seeded_groups(self, auth_client):
         """IT3b: GET without platform_id returns all seeded groups and response items have the required fields."""
-        groups, data = self._extract_list_data(
-            auth_client.get("/api/v1/social-groups", params={"page_size": 100})
-        )
+        # Paginate over ALL pages: other e2e suites accumulate groups for this
+        # user across runs (>100 by now), so a single fixed-size page can miss
+        # the groups seeded by this fixture.
+        groups = []
+        page = 1
+        while True:
+            page_groups, data = self._extract_list_data(
+                auth_client.get(
+                    "/api/v1/social-groups",
+                    params={"page": page, "page_size": 100},
+                )
+            )
+            if not page_groups:
+                break
+            groups.extend(page_groups)
+            page += 1
         # At least 3 groups we just created
         assert data["total"] >= 3, (
             f"IT3b: expected total >= 3, got {data['total']}"
