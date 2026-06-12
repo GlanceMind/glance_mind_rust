@@ -93,8 +93,38 @@ def _read_plan_row(db_cursor, plan_id: int) -> Dict[str, Any]:
     return row
 
 
-def _resolve_group(db_cursor) -> Optional[int]:
-    db_cursor.execute("SELECT id FROM gm_social_groups LIMIT 1")
+def _resolve_group(db_cursor, platform_id: Optional[int] = None) -> Optional[int]:
+    """Return the lowest-id social group suitable for plan creation.
+
+    When *platform_id* is provided, select the lowest-id group owned by
+    user 999 on that platform that has at least one ACTIVE account bound to
+    it — mirroring the picker conventions used at lines ~1739 and ~2586 of
+    test_aipub_api.py.  This ensures platform-specific callers (e.g.
+    TestPlatformContentTypeMatrixDb) never receive a mismatched group.
+
+    When *platform_id* is None the original unconstrained query is used so
+    that existing callers (which always pass a matching platform_id in the
+    payload) continue to work unchanged.
+    """
+    if platform_id is not None:
+        db_cursor.execute(
+            """
+            SELECT g.id
+              FROM gm_social_groups g
+              JOIN gm_social_accounts a
+                ON a.group_id = g.id
+               AND a.status = 'ACTIVE'
+             WHERE g.platform_id = %s
+               AND g.user_id = 999
+             GROUP BY g.id
+             HAVING COUNT(a.id) >= 1
+             ORDER BY g.id
+             LIMIT 1
+            """,
+            (platform_id,),
+        )
+    else:
+        db_cursor.execute("SELECT id FROM gm_social_groups LIMIT 1")
     row = db_cursor.fetchone()
     return row["id"] if row else None
 
@@ -899,9 +929,9 @@ class TestPlatformContentTypeMatrixDb:
             if not account_id:
                 pytest.skip(f"No account seeded for platform {platform_id}")
         else:
-            group_id = _resolve_group(db_cursor)
+            group_id = _resolve_group(db_cursor, platform_id)
             if not group_id:
-                pytest.skip("No social group seeded")
+                pytest.skip(f"No user-999 group with ACTIVE account seeded for platform {platform_id}")
 
         payload: Dict[str, Any] = {
             "platform_id": platform_id,

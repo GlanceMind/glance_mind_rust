@@ -15,6 +15,17 @@ use std::collections::{HashMap, HashSet};
 
 type AccountQuotaEntry = (i32, Option<String>, i32);
 
+/// Per-group assembly context: platform-matched accounts + total account count.
+/// The total count is used to distinguish:
+///   - truly empty group (total == 0)  → keep comment (legacy passthrough)
+///   - accounts exist but none match platform (total > 0, matched == 0) → drop comment + warn
+struct GroupAssemblyCtx {
+    /// Platform-matched ACTIVE accounts (id, profile_name, daily_max_replies)
+    matched_accounts: Vec<AccountQuotaEntry>,
+    /// Total ACTIVE accounts in the group (regardless of platform)
+    total_account_count: i64,
+}
+
 #[derive(Clone)]
 pub struct AgentService {
     agent_repo: AgentRepository,
@@ -95,7 +106,7 @@ impl AgentService {
 
     /// Service-layer post-processing: dedup by comment_id, then quota-aware profile reassignment.
     ///
-    /// Fetches campaign→group and group→accounts mappings from DB, then delegates
+    /// Fetches campaign→(group, platform) and group→accounts mappings from DB, then delegates
     /// to `enforce_daily_limits_inner` for pure-logic processing.
     pub fn enforce_daily_limits(
         &self,
@@ -116,27 +127,53 @@ impl AgentService {
             .into_iter()
             .collect();
 
-        // Batch-query campaign → group mapping from DB
-        let campaign_to_group: HashMap<i32, i32> = self
+        // Batch-query campaign → (group_id, platform_id) from DB
+        // Triple: (campaign_id, group_id, platform_id)
+        let campaign_triples: Vec<(i32, i32, i32)> = self
             .agent_repo
             .get_campaign_group_ids(&campaign_ids)
-            .unwrap_or_default()
-            .into_iter()
+            .unwrap_or_default();
+
+        // campaign_id → (group_id, platform_id)
+        let campaign_to_group_platform: HashMap<i32, (i32, i32)> = campaign_triples
+            .iter()
+            .map(|&(cid, gid, pid)| (cid, (gid, pid)))
             .collect();
 
-        // Cache group → accounts from DB
-        let group_ids: HashSet<i32> = campaign_to_group.values().copied().collect();
-        let mut group_accounts: HashMap<i32, Vec<(i32, Option<String>, i32)>> = HashMap::new();
-        for gid in &group_ids {
-            if let Ok(accounts) = self.agent_repo.get_group_active_accounts(*gid) {
-                group_accounts.insert(*gid, accounts);
+        // Cache group+platform → GroupAssemblyCtx from DB
+        // Key: (group_id, platform_id)
+        let mut group_ctx_map: HashMap<(i32, i32), GroupAssemblyCtx> = HashMap::new();
+        for &(_cid, gid, pid) in &campaign_triples {
+            let key = (gid, pid);
+            if group_ctx_map.contains_key(&key) {
+                continue;
             }
+            let matched_accounts = match self.agent_repo.get_group_active_accounts(gid, pid) {
+                Ok(accounts) => accounts,
+                Err(e) => {
+                    tracing::warn!(
+                        group_id = gid,
+                        platform_id = pid,
+                        error = %e,
+                        "get_group_active_accounts failed — skipping ctx registration for this group/platform"
+                    );
+                    continue;
+                }
+            };
+            let total_account_count = self.agent_repo.get_group_account_count(gid).unwrap_or(0);
+            group_ctx_map.insert(
+                key,
+                GroupAssemblyCtx {
+                    matched_accounts,
+                    total_account_count,
+                },
+            );
         }
 
         Self::enforce_daily_limits_inner(
             deduped,
-            &campaign_to_group,
-            &group_accounts,
+            &campaign_to_group_platform,
+            &group_ctx_map,
             self.redis_service.as_ref(),
         )
     }
@@ -154,13 +191,19 @@ impl AgentService {
 
     /// Pure-logic quota enforcement. Testable without DB.
     ///
-    /// - `campaign_to_group`: campaign_id → social_group_id
-    /// - `group_accounts`: group_id → Vec<(account_id, profile_name, daily_max_replies)>
+    /// - `campaign_to_group_platform`: campaign_id → (social_group_id, platform_id)
+    /// - `group_ctx_map`: (group_id, platform_id) → GroupAssemblyCtx
+    ///   (matched_accounts = platform-filtered ACTIVE accounts;
+    ///   total_account_count = all ACTIVE accounts in the group)
     /// - `redis`: None means skip quota checks (keep all comments)
+    ///
+    /// Empty-group semantics (preserved from pre-M4):
+    ///   - group truly empty (total_account_count == 0) → keep comment (legacy passthrough)
+    ///   - group has accounts but none match campaign platform → DROP comment + warn
     fn enforce_daily_limits_inner(
         comments: Vec<UnifiedCommentWithConfigDto>,
-        campaign_to_group: &HashMap<i32, i32>,
-        group_accounts: &HashMap<i32, Vec<AccountQuotaEntry>>,
+        campaign_to_group_platform: &HashMap<i32, (i32, i32)>,
+        group_ctx_map: &HashMap<(i32, i32), GroupAssemblyCtx>,
         redis: Option<&RedisService>,
     ) -> Vec<UnifiedCommentWithConfigDto> {
         let redis = match redis {
@@ -172,56 +215,76 @@ impl AgentService {
 
         let mut result = Vec::with_capacity(comments.len());
         for mut comment in comments {
-            let group_id = comment
+            let group_platform = comment
                 .campaign_id
-                .and_then(|cid| campaign_to_group.get(&cid).copied());
+                .and_then(|cid| campaign_to_group_platform.get(&cid).copied());
 
-            let group_id = match group_id {
-                Some(gid) => gid,
+            let (group_id, platform_id) = match group_platform {
+                Some(gp) => gp,
                 None => {
+                    // No group assigned to campaign — keep comment (passthrough)
                     result.push(comment);
                     continue;
                 }
             };
 
-            let accounts = match group_accounts.get(&group_id) {
-                Some(a) if !a.is_empty() => a,
+            let ctx = group_ctx_map.get(&(group_id, platform_id));
+
+            match ctx {
+                Some(c) if !c.matched_accounts.is_empty() => {
+                    // Normal path: platform-matched accounts exist — do quota assignment
+                    let mut shuffled = c.matched_accounts.clone();
+                    shuffled.shuffle(&mut rand::rng());
+
+                    let mut assigned = false;
+                    let cmt_id_for_log = comment.comment_id.clone();
+                    for (account_id, profile_name, daily_limit) in &shuffled {
+                        match redis.try_reserve(*account_id, &today, *daily_limit) {
+                            Ok(true) => {
+                                comment.profile_name = profile_name.clone();
+                                result.push(comment);
+                                assigned = true;
+                                break;
+                            }
+                            Ok(false) => continue,
+                            Err(e) => {
+                                tracing::warn!("Redis reserve error for account {account_id}: {e}");
+                                result.push(comment);
+                                assigned = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if !assigned {
+                        tracing::debug!(
+                            "All accounts in group {} exhausted daily quota, dropping comment {}",
+                            group_id,
+                            cmt_id_for_log
+                        );
+                    }
+                }
+                Some(c) if c.total_account_count > 0 => {
+                    // Group has ACTIVE accounts but none match the campaign platform.
+                    // This is a misconfiguration: EXCLUDE the comment and warn.
+                    tracing::warn!(
+                        campaign_id = comment.campaign_id,
+                        group_id = group_id,
+                        platform_id = platform_id,
+                        skipped_account_count = c.total_account_count,
+                        "Dropping comment: group has {} ACTIVE account(s) but none match \
+                         campaign platform_id={}; check account platform assignments",
+                        c.total_account_count,
+                        platform_id
+                    );
+                    // comment dropped — not pushed to result
+                }
                 _ => {
+                    // Truly empty group (0 ACTIVE accounts total) or ctx missing:
+                    // keep comment — legacy passthrough semantics preserved.
                     result.push(comment);
                     continue;
                 }
-            };
-
-            // Shuffle accounts so load is distributed fairly across them
-            let mut shuffled = accounts.clone();
-            shuffled.shuffle(&mut rand::rng());
-
-            let mut assigned = false;
-            let cmt_id_for_log = comment.comment_id.clone();
-            for (account_id, profile_name, daily_limit) in &shuffled {
-                match redis.try_reserve(*account_id, &today, *daily_limit) {
-                    Ok(true) => {
-                        comment.profile_name = profile_name.clone();
-                        result.push(comment);
-                        assigned = true;
-                        break;
-                    }
-                    Ok(false) => continue,
-                    Err(e) => {
-                        tracing::warn!("Redis reserve error for account {account_id}: {e}");
-                        result.push(comment);
-                        assigned = true;
-                        break;
-                    }
-                }
-            }
-
-            if !assigned {
-                tracing::debug!(
-                    "All accounts in group {} exhausted daily quota, dropping comment {}",
-                    group_id,
-                    cmt_id_for_log
-                );
             }
         }
 
@@ -416,6 +479,16 @@ mod tests {
         assert_eq!(result[2].id, 4);
     }
 
+    // Helper: build a GroupAssemblyCtx with matched accounts == total accounts
+    // (i.e. no platform mismatch, standard case for most tests)
+    fn make_ctx(accounts: Vec<AccountQuotaEntry>) -> GroupAssemblyCtx {
+        let total = accounts.len() as i64;
+        GroupAssemblyCtx {
+            matched_accounts: accounts,
+            total_account_count: total,
+        }
+    }
+
     // ========================================================================
     // 3. test_profile_reassignment
     // ========================================================================
@@ -429,18 +502,18 @@ mod tests {
             }
         };
 
-        // Group 8001 has 3 accounts
-        let group_accounts: HashMap<i32, Vec<(i32, Option<String>, i32)>> = [(
-            8001,
-            vec![
+        // campaign 200 → group 8001, platform 3 (facebook)
+        // Group 8001 has 3 platform-matched accounts
+        let campaign_to_group_platform: HashMap<i32, (i32, i32)> = [(200, (8001, 3))].into();
+        let group_ctx_map: HashMap<(i32, i32), GroupAssemblyCtx> = [(
+            (8001, 3),
+            make_ctx(vec![
                 (7001, Some("Profile A".to_string()), 50),
                 (7002, Some("Profile B".to_string()), 50),
                 (7003, Some("Profile C".to_string()), 50),
-            ],
+            ]),
         )]
         .into();
-
-        let campaign_to_group: HashMap<i32, i32> = [(200, 8001)].into();
 
         flush_keys(&svc, &[7001, 7002, 7003]);
 
@@ -452,8 +525,8 @@ mod tests {
 
         let result = AgentService::enforce_daily_limits_inner(
             comments,
-            &campaign_to_group,
-            &group_accounts,
+            &campaign_to_group_platform,
+            &group_ctx_map,
             Some(&svc),
         );
 
@@ -484,11 +557,13 @@ mod tests {
             }
         };
 
-        // Group 8002 has 1 account with limit=1
-        let group_accounts: HashMap<i32, Vec<(i32, Option<String>, i32)>> =
-            [(8002, vec![(7010, Some("Solo Profile".to_string()), 1)])].into();
-
-        let campaign_to_group: HashMap<i32, i32> = [(300, 8002)].into();
+        // campaign 300 → group 8002, platform 3; 1 account with limit=1
+        let campaign_to_group_platform: HashMap<i32, (i32, i32)> = [(300, (8002, 3))].into();
+        let group_ctx_map: HashMap<(i32, i32), GroupAssemblyCtx> = [(
+            (8002, 3),
+            make_ctx(vec![(7010, Some("Solo Profile".to_string()), 1)]),
+        )]
+        .into();
 
         flush_keys(&svc, &[7010]);
 
@@ -500,8 +575,8 @@ mod tests {
 
         let result = AgentService::enforce_daily_limits_inner(
             comments,
-            &campaign_to_group,
-            &group_accounts,
+            &campaign_to_group_platform,
+            &group_ctx_map,
             Some(&svc),
         );
 
@@ -526,11 +601,17 @@ mod tests {
         };
 
         // Two campaigns → two separate groups, each with 1 account (limit=1)
-        let campaign_to_group: HashMap<i32, i32> = [(400, 8003), (401, 8004)].into();
-
-        let group_accounts: HashMap<i32, Vec<(i32, Option<String>, i32)>> = [
-            (8003, vec![(7020, Some("Group A Profile".to_string()), 1)]),
-            (8004, vec![(7021, Some("Group B Profile".to_string()), 1)]),
+        let campaign_to_group_platform: HashMap<i32, (i32, i32)> =
+            [(400, (8003, 3)), (401, (8004, 3))].into();
+        let group_ctx_map: HashMap<(i32, i32), GroupAssemblyCtx> = [
+            (
+                (8003, 3),
+                make_ctx(vec![(7020, Some("Group A Profile".to_string()), 1)]),
+            ),
+            (
+                (8004, 3),
+                make_ctx(vec![(7021, Some("Group B Profile".to_string()), 1)]),
+            ),
         ]
         .into();
 
@@ -545,8 +626,8 @@ mod tests {
 
         let result = AgentService::enforce_daily_limits_inner(
             comments,
-            &campaign_to_group,
-            &group_accounts,
+            &campaign_to_group_platform,
+            &group_ctx_map,
             Some(&svc),
         );
 
@@ -565,9 +646,12 @@ mod tests {
     #[test]
     fn test_redis_unavailable_fallback() {
         // No Redis → dedup applied, but all comments kept (no quota filtering)
-        let campaign_to_group: HashMap<i32, i32> = [(500, 8005)].into();
-        let group_accounts: HashMap<i32, Vec<(i32, Option<String>, i32)>> =
-            [(8005, vec![(7030, Some("Fallback Profile".to_string()), 1)])].into();
+        let campaign_to_group_platform: HashMap<i32, (i32, i32)> = [(500, (8005, 3))].into();
+        let group_ctx_map: HashMap<(i32, i32), GroupAssemblyCtx> = [(
+            (8005, 3),
+            make_ctx(vec![(7030, Some("Fallback Profile".to_string()), 1)]),
+        )]
+        .into();
 
         let comments = vec![
             mock_comment(1, "fb_1", Some(500)),
@@ -583,8 +667,8 @@ mod tests {
         // Inner with redis=None
         let result = AgentService::enforce_daily_limits_inner(
             deduped,
-            &campaign_to_group,
-            &group_accounts,
+            &campaign_to_group_platform,
+            &group_ctx_map,
             None, // Redis unavailable
         );
 
@@ -627,12 +711,12 @@ mod tests {
             }
         };
 
-        let group_accounts: HashMap<i32, Vec<(i32, Option<String>, i32)>> = [(
-            8010,
-            vec![(7050, Some("Zero Limit Account".to_string()), 0)],
+        let campaign_to_group_platform: HashMap<i32, (i32, i32)> = [(700, (8010, 3))].into();
+        let group_ctx_map: HashMap<(i32, i32), GroupAssemblyCtx> = [(
+            (8010, 3),
+            make_ctx(vec![(7050, Some("Zero Limit Account".to_string()), 0)]),
         )]
         .into();
-        let campaign_to_group: HashMap<i32, i32> = [(700, 8010)].into();
 
         let comments = vec![
             mock_comment(1, "z1", Some(700)),
@@ -641,8 +725,8 @@ mod tests {
 
         let result = AgentService::enforce_daily_limits_inner(
             comments,
-            &campaign_to_group,
-            &group_accounts,
+            &campaign_to_group_platform,
+            &group_ctx_map,
             Some(&svc),
         );
 
@@ -667,16 +751,16 @@ mod tests {
         };
 
         let account_ids = [7060, 7061, 7062];
-        let group_accounts: HashMap<i32, Vec<(i32, Option<String>, i32)>> = [(
-            8020,
-            vec![
+        let campaign_to_group_platform: HashMap<i32, (i32, i32)> = [(800, (8020, 3))].into();
+        let group_ctx_map: HashMap<(i32, i32), GroupAssemblyCtx> = [(
+            (8020, 3),
+            make_ctx(vec![
                 (7060, Some("A".to_string()), 200),
                 (7061, Some("B".to_string()), 200),
                 (7062, Some("C".to_string()), 200),
-            ],
+            ]),
         )]
         .into();
-        let campaign_to_group: HashMap<i32, i32> = [(800, 8020)].into();
 
         flush_keys(&svc, &account_ids);
 
@@ -685,8 +769,8 @@ mod tests {
             let comments = vec![mock_comment(i, &format!("shuffle_{}", i), Some(800))];
             let result = AgentService::enforce_daily_limits_inner(
                 comments,
-                &campaign_to_group,
-                &group_accounts,
+                &campaign_to_group_platform,
+                &group_ctx_map,
                 Some(&svc),
             );
             if let Some(c) = result.first() {
@@ -724,8 +808,8 @@ mod tests {
         };
 
         // campaign 600 has no group mapping
-        let campaign_to_group: HashMap<i32, i32> = HashMap::new();
-        let group_accounts: HashMap<i32, Vec<(i32, Option<String>, i32)>> = HashMap::new();
+        let campaign_to_group_platform: HashMap<i32, (i32, i32)> = HashMap::new();
+        let group_ctx_map: HashMap<(i32, i32), GroupAssemblyCtx> = HashMap::new();
 
         let comments = vec![
             mock_comment(1, "ng_1", Some(600)),
@@ -735,8 +819,8 @@ mod tests {
 
         let result = AgentService::enforce_daily_limits_inner(
             comments,
-            &campaign_to_group,
-            &group_accounts,
+            &campaign_to_group_platform,
+            &group_ctx_map,
             Some(&svc),
         );
 
@@ -749,5 +833,94 @@ mod tests {
         for c in &result {
             assert_eq!(c.profile_name.as_deref(), Some("OriginalProfile"));
         }
+    }
+
+    // ========================================================================
+    // 11. test_platform_mismatch_drops_comment (M4 new behavior)
+    // ========================================================================
+    #[test]
+    fn test_platform_mismatch_drops_comment() {
+        let svc = match get_test_redis() {
+            Some(s) => s,
+            None => {
+                eprintln!("Skipping test_platform_mismatch_drops_comment: Redis not available");
+                return;
+            }
+        };
+
+        // campaign 900 → group 8030, platform 3 (facebook).
+        // Group has 1 ACTIVE account but it is on platform 1 (reddit) — zero platform-matched.
+        // total_account_count=1 means the "non-empty mismatch" branch fires → DROP comment.
+        let campaign_to_group_platform: HashMap<i32, (i32, i32)> = [(900, (8030, 3))].into();
+        let group_ctx_map: HashMap<(i32, i32), GroupAssemblyCtx> = [(
+            (8030, 3),
+            GroupAssemblyCtx {
+                matched_accounts: vec![], // zero platform-matched accounts
+                total_account_count: 1,   // group has 1 account total (wrong platform)
+            },
+        )]
+        .into();
+
+        let comments = vec![
+            mock_comment(1, "pm_1", Some(900)),
+            mock_comment(2, "pm_2", Some(900)),
+        ];
+
+        let result = AgentService::enforce_daily_limits_inner(
+            comments,
+            &campaign_to_group_platform,
+            &group_ctx_map,
+            Some(&svc),
+        );
+
+        assert_eq!(
+            result.len(),
+            0,
+            "Comments must be dropped when group has accounts but none match campaign platform (M4)"
+        );
+    }
+
+    // ========================================================================
+    // 12. test_truly_empty_group_keeps_comment (M4 passthrough preserved)
+    // ========================================================================
+    #[test]
+    fn test_truly_empty_group_keeps_comment() {
+        let svc = match get_test_redis() {
+            Some(s) => s,
+            None => {
+                eprintln!("Skipping test_truly_empty_group_keeps_comment: Redis not available");
+                return;
+            }
+        };
+
+        // campaign 901 → group 8031, platform 3.
+        // Group is truly empty (0 ACTIVE accounts total) → legacy passthrough → keep comment.
+        let campaign_to_group_platform: HashMap<i32, (i32, i32)> = [(901, (8031, 3))].into();
+        let group_ctx_map: HashMap<(i32, i32), GroupAssemblyCtx> = [(
+            (8031, 3),
+            GroupAssemblyCtx {
+                matched_accounts: vec![],
+                total_account_count: 0, // truly empty
+            },
+        )]
+        .into();
+
+        let comments = vec![
+            mock_comment(1, "te_1", Some(901)),
+            mock_comment(2, "te_2", Some(901)),
+        ];
+
+        let result = AgentService::enforce_daily_limits_inner(
+            comments,
+            &campaign_to_group_platform,
+            &group_ctx_map,
+            Some(&svc),
+        );
+
+        assert_eq!(
+            result.len(),
+            2,
+            "Comments must be kept for truly empty groups (legacy passthrough)"
+        );
     }
 }

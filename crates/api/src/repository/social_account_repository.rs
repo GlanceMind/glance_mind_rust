@@ -270,24 +270,4 @@ impl SocialAccountRepository {
             .load(&mut conn)?;
         Ok(rows.into_iter().flatten().collect())
     }
-
-    /// Batch update accounts by profile_name to add them to a group
-    pub async fn batch_update_group_by_profile_names(
-        &self,
-        user_id: i32,
-        group_id: i32,
-        profile_names: &[String],
-    ) -> Result<usize, DieselError> {
-        let mut conn = self.pool.get().expect("Connection error");
-
-        let updated = diesel::update(
-            social_accounts::table
-                .filter(social_accounts::user_id.eq(user_id))
-                .filter(social_accounts::profile_name.eq_any(profile_names)),
-        )
-        .set(social_accounts::group_id.eq(Some(group_id)))
-        .execute(&mut conn)?;
-
-        Ok(updated)
-    }
 }

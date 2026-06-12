@@ -5,6 +5,8 @@ use crate::dto::social_account_dto::{
 };
 use crate::error::{api_error::ApiError, business_error::BusinessError};
 use crate::repository::social_account_repository::SocialAccountRepository;
+use crate::repository::social_group_repository::SocialGroupRepository;
+use crate::service::validation::group_platform::load_and_check_group;
 use glance_mind_db::entity::social_account::{NewSocialAccount, SocialAccount};
 use std::sync::Arc;
 use tracing::{error, info};
@@ -12,12 +14,14 @@ use tracing::{error, info};
 #[derive(Clone)]
 pub struct SocialAccountService {
     repo: SocialAccountRepository,
+    group_repo: SocialGroupRepository,
 }
 
 impl SocialAccountService {
     pub fn new(db: &Arc<Database>) -> Self {
         Self {
             repo: SocialAccountRepository::new(db.pool.clone()),
+            group_repo: SocialGroupRepository::new(db.pool.clone()),
         }
     }
 
@@ -128,6 +132,7 @@ impl SocialAccountService {
             if gid == 0 {
                 updated.group_id = None;
             } else {
+                load_and_check_group(&self.group_repo, gid, user_id, account.platform_id).await?;
                 updated.group_id = Some(gid);
             }
         }
@@ -272,6 +277,13 @@ impl SocialAccountService {
             ));
         }
 
+        // Normalize the 0-sentinel: treat group_id=0 as "no group" (NULL in DB).
+        // Validate via load_and_check_group only when a real group id is provided.
+        let group_id = dto.group_id.filter(|&g| g != 0);
+        if let Some(gid) = group_id {
+            load_and_check_group(&self.group_repo, gid, user_id, dto.platform_id).await?;
+        }
+
         info!(
             "Batch creating {} accounts for user {} with prefix '{}' from {} to {}",
             total_count, user_id, prefix, start_num, end_num
@@ -287,7 +299,7 @@ impl SocialAccountService {
             candidates.push(NewSocialAccount {
                 user_id,
                 platform_id: dto.platform_id,
-                group_id: dto.group_id,
+                group_id,
                 username,
                 cookie: String::new(),
                 proxy_url: None,

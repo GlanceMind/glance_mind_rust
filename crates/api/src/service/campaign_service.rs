@@ -10,6 +10,7 @@ use crate::repository::social_group_repository::SocialGroupRepository;
 use crate::repository::template_repository::TemplateRepository;
 use crate::repository::wallet_repository::WalletRepository;
 use crate::service::campaign_social_group_validation::validate_campaign_social_group;
+use crate::service::validation::group_platform::load_and_check_group;
 use chrono::Utc;
 use diesel::result::Error as DieselError;
 use glance_mind_db::entity::campaign::{Campaign, NewCampaign};
@@ -47,10 +48,32 @@ impl CampaignService {
         validate_schedule_type(&dto.schedule_type)?;
         validate_schedule_config(&dto.schedule_type, &dto.schedule_config)?;
 
+        // M4: when a group id is supplied, validate ownership + platform match
+        // FIRST. This runs before the #46 required-group check so a foreign
+        // group id keeps returning 404 GroupNotFound (anti-enumeration, see
+        // validation::group_platform) instead of being collapsed into the
+        // 400 required-group rejection below.
+        if let Some(gid) = dto.social_group_id {
+            load_and_check_group(&self.social_group_repo, gid, user_id, dto.platform_id)
+                .await
+                .map_err(|e| match e {
+                    ApiError::BusinessError(BusinessError::GroupPlatformMismatch {
+                        group_platform_id,
+                        expected_platform_id,
+                    }) => ApiError::BadRequest(format!(
+                        "Group platform {} does not match required platform {}",
+                        group_platform_id, expected_platform_id
+                    )),
+                    other => other,
+                })?;
+        }
+
         // An account group is unconditionally required at create and must be
-        // valid (exists, owned by this user). No platform check — decision E1.
+        // valid (exists, owned by this user) — decision E1 (#46).
         // Incident: prod campaign 271 activated with a null group and generated
         // 50 AI suggestions that could never be sent.
+        // Platform consistency is additionally enforced by the M4 check above
+        // (premised on the M5 backfill that repairs gm_social_groups.platform_id).
         self.validate_social_group(user_id, dto.social_group_id)
             .await?;
 
@@ -300,6 +323,8 @@ impl CampaignService {
         // cannot be cleared through this endpoint. Editing any field on a legacy
         // null-group campaign must succeed; a missing/invalid group is caught at
         // activation instead (see update_status ACTIVE branch).
+        // Note: platform consistency IS validated when the group or platform
+        // changes (M4 effective-value check below) — E2 only relaxes presence.
 
         // Build changeset
         let should_replace_reply_template_ids = dto.reply_template_ids.is_some();
@@ -311,6 +336,37 @@ impl CampaignService {
         } else {
             existing.reply_template_ids.clone()
         };
+
+        // M4: effective-value validation for social_group_id + platform_id.
+        // Must happen BEFORE the changeset is constructed so we work with the
+        // pre-merge DTO values and the existing row values.
+        //
+        // Validate only when something relevant changed:
+        //   - dto.social_group_id is Some (caller explicitly changed the group), OR
+        //   - dto.platform_id is Some AND differs from existing (caller changed platform,
+        //     making the existing group's platform potentially mismatched → IT6h bypass)
+        {
+            let eff_pid = dto.platform_id.unwrap_or(existing.platform_id);
+            let eff_gid = dto.social_group_id.or(existing.social_group_id);
+            let platform_changed = dto.platform_id.is_some_and(|p| p != existing.platform_id);
+
+            if let Some(gid) = eff_gid {
+                if dto.social_group_id.is_some() || platform_changed {
+                    load_and_check_group(&self.social_group_repo, gid, user_id, eff_pid)
+                        .await
+                        .map_err(|e| match e {
+                            ApiError::BusinessError(BusinessError::GroupPlatformMismatch {
+                                group_platform_id,
+                                expected_platform_id,
+                            }) => ApiError::BadRequest(format!(
+                                "Group platform {} does not match required platform {}",
+                                group_platform_id, expected_platform_id
+                            )),
+                            other => other,
+                        })?;
+                }
+            }
+        }
 
         let changeset = NewCampaign {
             user_id: existing.user_id,

@@ -1353,12 +1353,13 @@ impl AgentRepository {
         Ok(PageResponse::new(list, total, page, per_page))
     }
 
-    /// Batch-query campaign_id → social_group_id for a set of campaign IDs.
-    /// Returns (campaign_id, social_group_id) pairs only for campaigns that have a group.
+    /// Batch-query campaign_id → (social_group_id, platform_id) for a set of campaign IDs.
+    /// Returns (campaign_id, social_group_id, platform_id) triples only for campaigns that
+    /// have a group assigned.
     pub fn get_campaign_group_ids(
         &self,
         campaign_ids: &[i32],
-    ) -> Result<Vec<(i32, i32)>, diesel::result::Error> {
+    ) -> Result<Vec<(i32, i32, i32)>, diesel::result::Error> {
         use glance_mind_db::schema::gm_campaigns;
 
         if campaign_ids.is_empty() {
@@ -1370,22 +1371,30 @@ impl AgentRepository {
             .get()
             .map_err(|_| diesel::result::Error::NotFound)?;
 
-        let rows: Vec<(i32, Option<i32>)> = gm_campaigns::table
+        let rows: Vec<(i32, Option<i32>, i32)> = gm_campaigns::table
             .filter(gm_campaigns::id.eq_any(campaign_ids))
-            .select((gm_campaigns::id, gm_campaigns::social_group_id))
+            .select((
+                gm_campaigns::id,
+                gm_campaigns::social_group_id,
+                gm_campaigns::platform_id,
+            ))
             .load(&mut conn)?;
 
         Ok(rows
             .into_iter()
-            .filter_map(|(cid, gid)| gid.map(|g| (cid, g)))
+            .filter_map(|(cid, gid, pid)| gid.map(|g| (cid, g, pid)))
             .collect())
     }
 
-    /// Get ACTIVE accounts in a social group with their quota-relevant fields.
+    /// Get ACTIVE accounts in a social group filtered by platform, with quota-relevant fields.
     /// Returns (account_id, profile_name, daily_max_replies) tuples.
+    ///
+    /// Only accounts whose `platform_id` matches the campaign platform are returned —
+    /// this is the M4 platform-filter guard for agent assembly.
     pub fn get_group_active_accounts(
         &self,
         group_id: i32,
+        platform_id: i32,
     ) -> Result<Vec<(i32, Option<String>, i32)>, diesel::result::Error> {
         use glance_mind_db::schema::gm_social_accounts;
 
@@ -1397,12 +1406,31 @@ impl AgentRepository {
         gm_social_accounts::table
             .filter(gm_social_accounts::group_id.eq(group_id))
             .filter(gm_social_accounts::status.eq("ACTIVE"))
+            .filter(gm_social_accounts::platform_id.eq(platform_id))
             .select((
                 gm_social_accounts::id,
                 gm_social_accounts::profile_name,
                 gm_social_accounts::daily_max_replies,
             ))
             .load(&mut conn)
+    }
+
+    /// Get total count of ACTIVE accounts in a social group (regardless of platform).
+    /// Used to distinguish "group truly empty" (0 total) from "group has accounts but
+    /// none match campaign platform" (non-zero total, zero platform-matched).
+    pub fn get_group_account_count(&self, group_id: i32) -> Result<i64, diesel::result::Error> {
+        use glance_mind_db::schema::gm_social_accounts;
+
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|_| diesel::result::Error::NotFound)?;
+
+        gm_social_accounts::table
+            .filter(gm_social_accounts::group_id.eq(group_id))
+            .filter(gm_social_accounts::status.eq("ACTIVE"))
+            .count()
+            .get_result(&mut conn)
     }
 
     /// Helper to convert i16 status to string

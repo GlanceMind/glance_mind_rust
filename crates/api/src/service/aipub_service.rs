@@ -8,6 +8,7 @@ use crate::error::api_error::ApiError;
 use crate::error::business_error::BusinessError;
 use crate::error::db_error::DbError;
 use crate::repository::aipub_repository::AipubRepository;
+use crate::repository::social_group_repository::SocialGroupRepository;
 use crate::service::{
     behavior_validation, image_generation_validation, reddit_validation, schedule_validation,
     seedance_validation, vidu_validation,
@@ -25,12 +26,14 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct AipubService {
     pub repo: AipubRepository,
+    group_repo: SocialGroupRepository,
 }
 
 impl AipubService {
     pub fn new(db_conn: &Arc<Database>) -> Self {
         Self {
             repo: AipubRepository::new(db_conn.pool.clone()),
+            group_repo: SocialGroupRepository::new(db_conn.pool.clone()),
         }
     }
 
@@ -254,6 +257,52 @@ impl AipubService {
             _ => {}
         }
 
+        // Group-platform guard: verify group ownership + platform match before
+        // creating the plan row.  Applies to all plan_types that carry group_id.
+        if let Some(gid) = dto.group_id {
+            let _g = crate::service::validation::group_platform::load_and_check_group(
+                &self.group_repo,
+                gid,
+                user_id,
+                dto.platform_id,
+            )
+            .await?;
+        }
+
+        // =====================================================================
+        // Pre-insert 0-match guard: reject if group has accounts but none match
+        // the plan's platform.  Runs BEFORE plan insert to avoid the insert+
+        // delete race and swallowed delete errors of the old post-insert guard.
+        // Gate: total > 0 && matched == 0 → plain 400 (no insert, no delete).
+        // Empty groups (total == 0) pass through unchanged (IT5j locked behaviour).
+        // =====================================================================
+        if let Some(gid) = dto.group_id {
+            let total_ids = self
+                .repo
+                .get_group_account_ids(gid)
+                .await
+                .map_err(|e| ApiError::from(DbError::SomethingWentWrong(e.to_string())))?;
+            if !total_ids.is_empty() {
+                let matched_ids = self
+                    .repo
+                    .get_group_account_ids_for_platform(gid, dto.platform_id)
+                    .await
+                    .map_err(|e| ApiError::from(DbError::SomethingWentWrong(e.to_string())))?;
+                if matched_ids.is_empty() {
+                    tracing::warn!(
+                        user_id,
+                        group_id = gid,
+                        total = total_ids.len(),
+                        plan_platform = dto.platform_id,
+                        "pre-insert 0-match guard: rejecting plan creation (no matching accounts)"
+                    );
+                    return Err(ApiError::BusinessError(BusinessError::InvalidInput(
+                        "no accounts matching plan platform".into(),
+                    )));
+                }
+            }
+        }
+
         // Determine initial status based on whether AI tasks are needed
         let initial_status = if dto.ai_task_types.is_some() && dto.content.is_none() {
             PlanStatus::Pending.as_str() // Will transition to ai_processing when AI tasks are created
@@ -381,9 +430,13 @@ impl AipubService {
             let freeze_result = match plan_type_enum {
                 Some(PlanType::AccountGrooming) => {
                     // 1 chat (batch name+bio) + N images (one avatar per account)
+                    // Only count accounts matching the plan's platform (filters legacy dirty rows).
                     let account_ids = self
                         .repo
-                        .get_group_account_ids(plan.group_id.unwrap_or(0))
+                        .get_group_account_ids_for_platform(
+                            plan.group_id.unwrap_or(0),
+                            plan.platform_id,
+                        )
                         .await
                         .unwrap_or_default();
                     let n = account_ids.len() as i32;
@@ -413,9 +466,13 @@ impl AipubService {
                     // the plan carries a V2 image spec (multi-image carousel
                     // posts for FB/IG/Reddit). Without image_generations[],
                     // billing stays at N chats + 0 images.
+                    // Only count platform-matched accounts to exclude legacy dirty rows.
                     let account_ids = self
                         .repo
-                        .get_group_account_ids(plan.group_id.unwrap_or(0))
+                        .get_group_account_ids_for_platform(
+                            plan.group_id.unwrap_or(0),
+                            plan.platform_id,
+                        )
                         .await
                         .unwrap_or_default();
                     let n = account_ids.len() as i32;
@@ -611,9 +668,13 @@ impl AipubService {
                     // total image count = sum(spec.count) per account so
                     // multi-image carousels pre-bill correctly. Otherwise
                     // fall back to legacy "1 image per account" rule.
+                    // Only count platform-matched accounts (filters legacy dirty rows).
                     let account_ids = self
                         .repo
-                        .get_group_account_ids(plan.group_id.unwrap_or(0))
+                        .get_group_account_ids_for_platform(
+                            plan.group_id.unwrap_or(0),
+                            plan.platform_id,
+                        )
                         .await
                         .unwrap_or_default();
                     let n = account_ids.len() as i32;
@@ -688,16 +749,20 @@ impl AipubService {
         // If direct content is provided (no AI generation needed), create publish tasks immediately.
         if let (Some(content), None) = (&dto.content, &dto.ai_task_types) {
             // Direct content - create publish tasks immediately
-            self.expand_plan_to_tasks(plan.id, content.clone()).await?;
+            let direct_count = self.expand_plan_to_tasks(plan.id, content.clone()).await?;
 
-            // Update plan status to ready
-            let update = UpdateAipubPlan {
-                status: Some(PlanStatus::Ready.as_str().to_string()),
-                updated_at: Some(Utc::now()),
-                ..Default::default()
-            };
-            self.repo.update_plan(plan.id, update).await.ok();
-            response.status = PlanStatus::Ready.as_str().to_string();
+            // Update plan status to ready only when tasks were created.
+            // expand_plan_to_tasks handles 0-match finalization (failed + refund)
+            // when total>0 && matched==0, so we must not overwrite that.
+            if direct_count > 0 {
+                let update = UpdateAipubPlan {
+                    status: Some(PlanStatus::Ready.as_str().to_string()),
+                    updated_at: Some(Utc::now()),
+                    ..Default::default()
+                };
+                self.repo.update_plan(plan.id, update).await.ok();
+                response.status = PlanStatus::Ready.as_str().to_string();
+            }
         }
         // Otherwise, plan stays in "pending" status and Scheduler will pick it up
 
@@ -1374,16 +1439,21 @@ impl AipubService {
                 .expand_plan_to_tasks(ai_task.plan_id, final_content)
                 .await?;
 
-            // Update plan status to ready
-            let plan_update = UpdateAipubPlan {
-                status: Some(PlanStatus::Ready.as_str().to_string()),
-                updated_at: Some(now),
-                ..Default::default()
-            };
-            self.repo
-                .update_plan(ai_task.plan_id, plan_update)
-                .await
-                .ok();
+            // Update plan status to ready — but ONLY when tasks were actually
+            // created.  When count == 0 the expand path already handled plan
+            // finalization (0-match → finalize_plan("failed") + refund); we
+            // must NOT overwrite that with "ready".
+            if count > 0 {
+                let plan_update = UpdateAipubPlan {
+                    status: Some(PlanStatus::Ready.as_str().to_string()),
+                    updated_at: Some(now),
+                    ..Default::default()
+                };
+                self.repo
+                    .update_plan(ai_task.plan_id, plan_update)
+                    .await
+                    .ok();
+            }
 
             count
         } else {
@@ -1622,6 +1692,17 @@ impl AipubService {
     /// spurious empty typed sub-key — the worker would treat that as
     /// e.g. "override platform defaults to UNSPECIFIED visibility" or
     /// "publish at empty-string time", both wrong).
+    ///
+    /// Return value semantics:
+    ///
+    /// - `> 0`: N publish tasks created; caller MUST set plan status to ready.
+    /// - `= 0`: one of two cases:
+    ///   - billing was `"frozen"` and 0 accounts matched: plan finalized as
+    ///     `"failed"` + refund triggered; caller MUST NOT overwrite status.
+    ///   - billing was not frozen (empty-group / no-billing legacy path):
+    ///     no-op; caller MUST NOT set ready (plan stays pending/un-ready).
+    ///
+    /// Callers must not set plan status to `"ready"` when the return value is 0.
     async fn expand_plan_to_tasks(
         &self,
         plan_id: i32,
@@ -1634,10 +1715,61 @@ impl AipubService {
             .map_err(|e| ApiError::from(DbError::SomethingWentWrong(e.to_string())))?;
 
         let account_ids: Vec<i32> = if let Some(gid) = plan.group_id {
-            self.repo
+            // Use platform-filtered accounts to skip legacy dirty rows.
+            let total_ids = self
+                .repo
                 .get_group_account_ids(gid)
                 .await
-                .map_err(|e| ApiError::from(DbError::SomethingWentWrong(e.to_string())))?
+                .map_err(|e| ApiError::from(DbError::SomethingWentWrong(e.to_string())))?;
+            let matched_ids = self
+                .repo
+                .get_group_account_ids_for_platform(gid, plan.platform_id)
+                .await
+                .map_err(|e| ApiError::from(DbError::SomethingWentWrong(e.to_string())))?;
+
+            let skipped = total_ids.len().saturating_sub(matched_ids.len());
+            if skipped > 0 {
+                tracing::warn!(
+                    plan_id,
+                    group_id = gid,
+                    skipped,
+                    plan_platform = plan.platform_id,
+                    "expand_plan_to_tasks: skipping {} cross-platform accounts",
+                    skipped
+                );
+            }
+
+            // Billing-aware 0-match handling:
+            // When matched_ids is empty for a group-bearing plan we branch on
+            // billing_status to ensure frozen funds are always refunded:
+            //
+            //   "frozen"        → budget is held; we MUST finalize+refund now to
+            //                     prevent stranded funds.  Log error (plan_id,
+            //                     group_id, total, platform) and fail the plan.
+            //   anything else   → legacy empty-group or billing-none path; no
+            //                     budget is at risk.  Keep current no-op behaviour
+            //                     (return 0, leave plan in current status) so
+            //                     IT5j (empty-group regression lock) stays green.
+            if matched_ids.is_empty() {
+                if plan.billing_status == "frozen" {
+                    tracing::error!(
+                        plan_id,
+                        group_id = gid,
+                        total = total_ids.len(),
+                        plan_platform = plan.platform_id,
+                        "expand_plan_to_tasks: 0 accounts match plan platform (billing=frozen) — failing plan with refund"
+                    );
+                    if let Err(e) = self.repo.finalize_plan(plan_id, "failed").await {
+                        // Refund failure must be loud: frozen funds stay stuck
+                        // until this plan is re-finalized manually.
+                        tracing::error!(plan_id, error = %e, "finalize_plan(failed) errored — frozen budget NOT refunded");
+                    }
+                }
+                // Both branches return 0; caller must not set status=ready.
+                return Ok(0);
+            }
+
+            matched_ids
         } else if let Some(aid) = plan.social_account_id {
             vec![aid]
         } else {
