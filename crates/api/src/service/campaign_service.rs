@@ -48,10 +48,32 @@ impl CampaignService {
         validate_schedule_type(&dto.schedule_type)?;
         validate_schedule_config(&dto.schedule_type, &dto.schedule_config)?;
 
+        // M4: when a group id is supplied, validate ownership + platform match
+        // FIRST. This runs before the #46 required-group check so a foreign
+        // group id keeps returning 404 GroupNotFound (anti-enumeration, see
+        // validation::group_platform) instead of being collapsed into the
+        // 400 required-group rejection below.
+        if let Some(gid) = dto.social_group_id {
+            load_and_check_group(&self.social_group_repo, gid, user_id, dto.platform_id)
+                .await
+                .map_err(|e| match e {
+                    ApiError::BusinessError(BusinessError::GroupPlatformMismatch {
+                        group_platform_id,
+                        expected_platform_id,
+                    }) => ApiError::BadRequest(format!(
+                        "Group platform {} does not match required platform {}",
+                        group_platform_id, expected_platform_id
+                    )),
+                    other => other,
+                })?;
+        }
+
         // An account group is unconditionally required at create and must be
-        // valid (exists, owned by this user). No platform check — decision E1.
+        // valid (exists, owned by this user) — decision E1 (#46).
         // Incident: prod campaign 271 activated with a null group and generated
         // 50 AI suggestions that could never be sent.
+        // Platform consistency is additionally enforced by the M4 check above
+        // (premised on the M5 backfill that repairs gm_social_groups.platform_id).
         self.validate_social_group(user_id, dto.social_group_id)
             .await?;
 
@@ -102,22 +124,6 @@ impl CampaignService {
         let reply_template_ids = normalize_reply_template_ids(dto.reply_template_ids)?;
         self.validate_reply_template_ownership(user_id, &reply_template_ids)
             .await?;
-
-        // M4: validate social_group_id ownership + platform match before insert
-        if let Some(gid) = dto.social_group_id {
-            load_and_check_group(&self.social_group_repo, gid, user_id, dto.platform_id)
-                .await
-                .map_err(|e| match e {
-                    ApiError::BusinessError(BusinessError::GroupPlatformMismatch {
-                        group_platform_id,
-                        expected_platform_id,
-                    }) => ApiError::BadRequest(format!(
-                        "Group platform {} does not match required platform {}",
-                        group_platform_id, expected_platform_id
-                    )),
-                    other => other,
-                })?;
-        }
 
         // Create campaign in DRAFT status (budget not frozen yet)
         let new_campaign = NewCampaign {
