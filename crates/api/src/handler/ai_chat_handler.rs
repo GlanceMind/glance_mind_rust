@@ -1,7 +1,7 @@
 use axum::{
     extract::{Extension, Path, Query},
     response::{
-        sse::{Event, Sse},
+        sse::{Event, KeepAlive, Sse},
         IntoResponse,
     },
     Json,
@@ -129,7 +129,13 @@ pub async fn send_message(
             .data(event_data(&event)))
     });
 
-    Ok(Sse::new(stream))
+    // Long tool runs (notably /audientry) can leave this SSE stream idle for ~50s
+    // before the worker flushes its phase/report events in one burst. Without a
+    // keepalive, Cloudflare/HTTP2 severs the idle connection (observed in prod as
+    // net::ERR_HTTP2_PROTOCOL_ERROR) and the client never receives the events.
+    // Emit a comment-frame keepalive (ignored by SSE parsers) to hold the
+    // connection open through the silent window; mirrors the Drama stream heartbeat.
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(10))))
 }
 
 pub async fn confirm_plan(
@@ -162,7 +168,9 @@ pub async fn confirm_plan(
             .data(event_data(&event)))
     });
 
-    Ok(Sse::new(stream))
+    // Same idle-drop protection as send_message: plan confirmation can run tools
+    // for a while between events, so keep the SSE connection alive through silence.
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(10))))
 }
 
 pub async fn cancel_plan(
@@ -265,7 +273,9 @@ pub async fn regenerate_task_template(
             .data(event_data(&event)))
     });
 
-    Ok(Sse::new(stream))
+    // Same idle-drop protection as send_message/confirm_plan: keep the SSE
+    // connection alive through any silent window so the client isn't severed.
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(10))))
 }
 
 /// POST /ai-chat/conversations/:id/task-template/:draft_id/cancel
