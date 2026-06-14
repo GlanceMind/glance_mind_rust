@@ -1,7 +1,7 @@
 use axum::{
     extract::{Extension, Path, Query},
     response::{
-        sse::{Event, Sse},
+        sse::{Event, KeepAlive, Sse},
         IntoResponse,
     },
     Json,
@@ -83,6 +83,25 @@ pub async fn get_messages(
     Ok(api_ok!(messages))
 }
 
+/// Wrap an ai-chat SSE stream with a comment-frame keepalive.
+///
+/// Long tool runs (notably Audientry) leave the SSE stream idle for ~50s before
+/// the worker flushes its phase/report events in one burst. Without a keepalive,
+/// Cloudflare / the HTTP2 layer severs the idle connection (observed in prod as
+/// `net::ERR_HTTP2_PROTOCOL_ERROR`; node fetch sees `UND_ERR_SOCKET: other side
+/// closed`) and the client never receives the events. Axum's default `KeepAlive`
+/// emits a bare `:` comment frame, which SSE parsers ignore, holding the
+/// connection open through the silent window. 10s is safely under typical proxy
+/// idle limits and mirrors the Drama stream's heartbeat approach
+/// (`drama_stream_handler.rs`). We use the default comment frame rather than
+/// `.text(...)` since some parsers mishandle named keepalive data.
+fn sse_with_keepalive<S>(stream: S) -> Sse<S>
+where
+    S: Stream<Item = Result<Event, Infallible>> + Send + 'static,
+{
+    Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(10)))
+}
+
 pub async fn send_message(
     Extension(user): Extension<User>,
     Extension(state): Extension<UserState>,
@@ -129,7 +148,7 @@ pub async fn send_message(
             .data(event_data(&event)))
     });
 
-    Ok(Sse::new(stream))
+    Ok(sse_with_keepalive(stream))
 }
 
 pub async fn confirm_plan(
@@ -162,7 +181,7 @@ pub async fn confirm_plan(
             .data(event_data(&event)))
     });
 
-    Ok(Sse::new(stream))
+    Ok(sse_with_keepalive(stream))
 }
 
 pub async fn cancel_plan(
@@ -265,7 +284,7 @@ pub async fn regenerate_task_template(
             .data(event_data(&event)))
     });
 
-    Ok(Sse::new(stream))
+    Ok(sse_with_keepalive(stream))
 }
 
 /// POST /ai-chat/conversations/:id/task-template/:draft_id/cancel
@@ -316,5 +335,47 @@ fn event_data(event: &SseEvent) -> String {
         data_line.strip_prefix("data: ").unwrap_or("{}").to_string()
     } else {
         "{}".to_string()
+    }
+}
+
+#[cfg(test)]
+mod keepalive_tests {
+    use super::*;
+    use axum::response::IntoResponse;
+    use futures::stream;
+    use hyper::body::HttpBody;
+
+    /// Regression guard for the prod Audientry SSE drop: an ai-chat SSE stream
+    /// that stays idle (the worker is silent for ~50s mid-run) must still emit a
+    /// keepalive comment frame, so Cloudflare / the HTTP2 layer does not sever
+    /// the connection before the burst of events arrives. Uses virtual time so
+    /// the 10s interval does not slow the suite.
+    #[tokio::test(start_paused = true)]
+    async fn idle_stream_emits_keepalive_comment_frame() {
+        // A stream that stays open but never yields — models the silent window.
+        let idle = stream::pending::<Result<Event, Infallible>>();
+        let mut body = sse_with_keepalive(idle).into_response().into_body();
+
+        // With start_paused, virtual time auto-advances past the keepalive
+        // interval while we await. The bounded timeout makes the *absence* of a
+        // keepalive a clean, fast failure (rather than an indefinite hang): a
+        // plain `Sse::new(stream)` over this idle stream never produces a frame.
+        let chunk = tokio::time::timeout(std::time::Duration::from_secs(30), body.data())
+            .await
+            .expect("idle SSE stream must emit a keepalive within the proxy idle window")
+            .expect("idle SSE stream should still produce a keepalive frame")
+            .expect("keepalive frame should be Ok");
+        let text = String::from_utf8(chunk.to_vec()).unwrap();
+
+        // axum's default KeepAlive emits a bare `:` comment line, which SSE
+        // parsers ignore. It must NOT look like a real named event.
+        assert!(
+            text.starts_with(':'),
+            "expected an SSE comment keepalive frame, got: {text:?}"
+        );
+        assert!(
+            !text.starts_with("event:") && !text.starts_with("data:"),
+            "keepalive must be a comment frame, not a named event: {text:?}"
+        );
     }
 }
