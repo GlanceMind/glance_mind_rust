@@ -73,7 +73,15 @@ impl SocialAccountRepository {
         let total: i64 = count_query.count().get_result(&mut conn)?;
 
         let items = items_query
-            .order(social_accounts::created_at.desc())
+            // `created_at` is not unique (batch-created accounts share a
+            // timestamp), so ordering by it alone leaves tied rows in a
+            // database-defined order that can differ between OFFSET pages,
+            // making rows duplicate or vanish across pages. Add the unique
+            // primary key as a tiebreaker for a total, stable ordering.
+            .order((
+                social_accounts::created_at.desc(),
+                social_accounts::id.desc(),
+            ))
             .limit(page_size)
             .offset((page - 1) * page_size)
             .select(SocialAccount::as_select())
@@ -97,8 +105,13 @@ impl SocialAccountRepository {
 
         let items = social_accounts::table
             .filter(social_accounts::group_id.eq(group_id))
+            // Stable, total ordering so paging through a group's accounts does
+            // not duplicate or drop rows (see find_by_user for the rationale).
+            .order((
+                social_accounts::created_at.desc(),
+                social_accounts::id.desc(),
+            ))
             .limit(page_size)
-            .offset((page - 1) * page_size)
             .offset((page - 1) * page_size)
             .select(SocialAccount::as_select())
             .load(&mut conn)?;
