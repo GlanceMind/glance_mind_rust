@@ -79,6 +79,9 @@ fn default_platform_id() -> i32 {
 
 #[derive(Debug, Deserialize, Validate)]
 pub struct UpdateSocialAccountDto {
+    /// Platform ID (1=reddit, 2=tiktok, 3=facebook, etc.). When provided,
+    /// moves the account to a different platform.
+    pub platform_id: Option<i32>,
     pub username: Option<String>,
     pub cookie: Option<String>,
     pub proxy_url: Option<String>,
@@ -165,4 +168,39 @@ pub struct BatchCreateResultDto {
 pub struct BatchAddAccountsToGroupDto {
     pub group_id: i32,
     pub profile_names: Vec<String>, // List of profile names to add
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression guard for the "edit platform doesn't persist" bug: the
+    /// `PUT /accounts/:id` body carries `platform_id`, and the update DTO must
+    /// capture it. Previously the field was absent, so serde silently dropped
+    /// it and the platform never changed.
+    #[test]
+    fn update_account_dto_captures_platform_id() {
+        let dto: UpdateSocialAccountDto = serde_json::from_str(
+            r#"{
+                "platform_id": 3,
+                "username": "acct",
+                "group_id": 0,
+                "device_id": "550e8400-e29b-41d4-a716-446655440000",
+                "profile_name": "account_1"
+            }"#,
+        )
+        .expect("valid account update payload");
+
+        assert_eq!(dto.platform_id, Some(3));
+    }
+
+    /// When the body omits `platform_id`, the field stays `None` so the service
+    /// leaves the account's platform untouched.
+    #[test]
+    fn update_account_dto_platform_id_is_optional() {
+        let dto: UpdateSocialAccountDto =
+            serde_json::from_str(r#"{"username": "acct"}"#).expect("valid partial update payload");
+
+        assert_eq!(dto.platform_id, None);
+    }
 }
