@@ -119,6 +119,11 @@ impl SocialAccountService {
         }
 
         let mut updated = account.clone();
+        // Apply the platform change first so any group provided in the same
+        // request is validated against the NEW platform, not the old one.
+        if let Some(pid) = dto.platform_id {
+            updated.platform_id = pid;
+        }
         if let Some(username) = dto.username {
             updated.username = username;
         }
@@ -132,12 +137,13 @@ impl SocialAccountService {
             if gid == 0 {
                 updated.group_id = None;
             } else {
-                load_and_check_group(&self.group_repo, gid, user_id, account.platform_id).await?;
+                load_and_check_group(&self.group_repo, gid, user_id, updated.platform_id).await?;
                 updated.group_id = Some(gid);
             }
         }
 
         let changeset = glance_mind_db::entity::social_account::UpdateSocialAccount {
+            platform_id: Some(updated.platform_id),
             group_id: Some(updated.group_id),
             username: Some(updated.username.clone()),
             cookie: Some(updated.cookie),

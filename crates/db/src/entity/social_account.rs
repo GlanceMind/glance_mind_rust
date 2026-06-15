@@ -25,6 +25,7 @@ pub struct SocialAccount {
 #[derive(AsChangeset, Deserialize, Serialize, Debug, Clone)]
 #[diesel(table_name = gm_social_accounts)]
 pub struct UpdateSocialAccount {
+    pub platform_id: Option<i32>,
     pub group_id: Option<Option<i32>>,
     pub username: Option<String>,
     pub cookie: Option<String>,

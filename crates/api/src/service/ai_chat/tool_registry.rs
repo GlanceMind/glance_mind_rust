@@ -2321,6 +2321,10 @@ impl ToolRegistry {
                     .ok_or_else(|| ApiError::BadRequest("account_id required".into()))?
                     as i32;
                 let dto = crate::dto::social_account_dto::UpdateSocialAccountDto {
+                    platform_id: params
+                        .get("platform_id")
+                        .and_then(|v| v.as_i64())
+                        .map(|v| v as i32),
                     username: params
                         .get("username")
                         .and_then(|v| v.as_str())
