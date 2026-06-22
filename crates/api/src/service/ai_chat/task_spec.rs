@@ -188,7 +188,8 @@ fn publish_plan_fields(draft: &DraftConfig) -> Vec<FieldSpec> {
         fields.push(field("group_id", "群组", "targeting", Required, Int));
     }
 
-    let needs_social_account = matches!(plan_type, "single_video" | "direct_publish");
+    let needs_social_account =
+        matches!(plan_type, "single_video" | "direct_publish" | "page_manage");
     if needs_social_account {
         fields.push(field(
             "social_account_id",
@@ -286,6 +287,26 @@ mod tests {
             sorted(spec.required_keys()),
             expected,
             "single_video plan required set must resolve to the 4 documented keys"
+        );
+    }
+
+    /// For aipub with `plan_type == page_manage`, the required set resolves to
+    /// {platform_id, content_type, social_account_id}. page_manage operates a
+    /// single page (single account), so it needs social_account_id — NOT
+    /// group_id — and carries no video model.
+    #[test]
+    fn aipub_required_resolves_page_manage() {
+        let spec = TaskConfigSpec::for_kind(
+            TaskKind::PublishPlan,
+            &draft(json!({ "plan_type": "page_manage" })),
+        );
+
+        let expected = sorted(vec!["platform_id", "content_type", "social_account_id"]);
+
+        assert_eq!(
+            sorted(spec.required_keys()),
+            expected,
+            "page_manage plan required set must resolve to the 3 documented keys"
         );
     }
 }

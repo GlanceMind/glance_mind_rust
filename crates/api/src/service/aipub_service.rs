@@ -56,7 +56,7 @@ impl AipubService {
         // Validate plan_type
         if PlanType::parse(&plan_type).is_none() {
             return Err(ApiError::BusinessError(BusinessError::InvalidInput(
-                format!("Invalid plan_type: {}. Supported: batch_text, single_video, account_grooming, reddit_text, reddit_image, reddit_link, direct_publish", plan_type),
+                format!("Invalid plan_type: {}. Supported: batch_text, single_video, account_grooming, reddit_text, reddit_image, reddit_link, direct_publish, page_manage", plan_type),
             )));
         }
 
@@ -254,6 +254,28 @@ impl AipubService {
                     )));
                 }
             }
+            Some(PlanType::PageManage) => {
+                // page_manage operates ONE page, managed by a single account.
+                if dto.social_account_id.is_none() {
+                    return Err(ApiError::BusinessError(BusinessError::InvalidInput(
+                        "page_manage plan requires social_account_id (the account that manages the page)".to_string(),
+                    )));
+                }
+                if dto.group_id.is_some() {
+                    return Err(ApiError::BusinessError(BusinessError::InvalidInput(
+                        "page_manage plan cannot have group_id, use social_account_id instead"
+                            .to_string(),
+                    )));
+                }
+                // The AI generates the page operating plan (profile + a calendar
+                // of posts) from this brief, so ai_input is mandatory.
+                if dto.ai_input.is_none() {
+                    return Err(ApiError::BusinessError(BusinessError::InvalidInput(
+                        "page_manage plan requires ai_input (the page brief the AI generates from)"
+                            .to_string(),
+                    )));
+                }
+            }
             _ => {}
         }
 
@@ -353,6 +375,11 @@ impl AipubService {
                     }
                 }
                 Some(PlanType::DirectPublish) => None,
+                Some(PlanType::PageManage) => {
+                    // One AI task generates the whole page operating plan; the
+                    // scheduler's process_page_manage expands it into children.
+                    Some(vec![AiTaskType::PageManage.as_str().to_string()])
+                }
                 None => None,
             }
         });
@@ -723,6 +750,27 @@ impl AipubService {
                     }
                 }
                 Some(PlanType::DirectPublish) => None,
+                Some(PlanType::PageManage) => {
+                    // One chat call generates the page operating plan (profile
+                    // + a calendar of posts). Image/video generation for the
+                    // child posts is billed when those child tasks are created
+                    // by the scheduler's expansion, so freeze just 1 chat here.
+                    Some(
+                        self.repo
+                            .freeze_budget(
+                                user_id,
+                                1,
+                                0,
+                                0,
+                                plan.chat_ai_model_id,
+                                None,
+                                None,
+                                "aipub_plan",
+                                plan.id,
+                            )
+                            .await,
+                    )
+                }
                 None => None,
             };
 

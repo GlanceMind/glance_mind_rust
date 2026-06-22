@@ -169,6 +169,10 @@ pub enum PlanType {
     RedditLink,
     /// Direct publish: skip AI, directly create publish tasks for existing media
     DirectPublish,
+    /// Page management: AI-orchestrated page operating plan. One page_manage
+    /// plan is expanded (at scheduler enqueue time) into existing child task
+    /// types (account_grooming + batch_text), each scheduled independently.
+    PageManage,
 }
 
 impl PlanType {
@@ -181,6 +185,7 @@ impl PlanType {
             PlanType::RedditImage => "reddit_image",
             PlanType::RedditLink => "reddit_link",
             PlanType::DirectPublish => "direct_publish",
+            PlanType::PageManage => "page_manage",
         }
     }
 
@@ -193,6 +198,7 @@ impl PlanType {
             "reddit_image" => Some(PlanType::RedditImage),
             "reddit_link" => Some(PlanType::RedditLink),
             "direct_publish" => Some(PlanType::DirectPublish),
+            "page_manage" => Some(PlanType::PageManage),
             _ => None,
         }
     }
@@ -280,7 +286,8 @@ pub struct UpdateAipubAiTask {
 }
 
 /// AI Task Type enum
-/// DB CHECK: ('video_gen','content_gen','image_gen','combined','account_grooming')
+/// DB CHECK: ('video_gen','content_gen','image_gen','combined',
+///            'account_grooming','page_manage')
 /// Source of truth: aipub.proto AiTaskType
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -293,6 +300,9 @@ pub enum AiTaskType {
     /// Account grooming: generate name + avatar for profile
     AccountGrooming,
     SeedanceVideo,
+    /// Page management: generate a page operating plan (profile + a calendar
+    /// of posts); the scheduler expands the result into child publish tasks.
+    PageManage,
 }
 
 impl AiTaskType {
@@ -304,6 +314,7 @@ impl AiTaskType {
             AiTaskType::Combined => "combined",
             AiTaskType::AccountGrooming => "account_grooming",
             AiTaskType::SeedanceVideo => "seedance_video",
+            AiTaskType::PageManage => "page_manage",
         }
     }
 
@@ -315,6 +326,7 @@ impl AiTaskType {
             "combined" => Some(AiTaskType::Combined),
             "account_grooming" => Some(AiTaskType::AccountGrooming),
             "seedance_video" => Some(AiTaskType::SeedanceVideo),
+            "page_manage" => Some(AiTaskType::PageManage),
             _ => None,
         }
     }
@@ -530,5 +542,42 @@ impl ContentType {
 impl std::fmt::Display for ContentType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plan_type_page_manage_roundtrips() {
+        assert_eq!(PlanType::PageManage.as_str(), "page_manage");
+        assert_eq!(PlanType::parse("page_manage"), Some(PlanType::PageManage));
+        // page_manage operates ONE page (single account), so it is NOT a
+        // group-targeted plan type.
+        assert!(!PlanType::PageManage.targets_group());
+        assert!(!PlanType::PageManage.is_reddit());
+        assert!(!PlanType::PageManage.needs_video());
+    }
+
+    #[test]
+    fn ai_task_type_page_manage_roundtrips() {
+        assert_eq!(AiTaskType::PageManage.as_str(), "page_manage");
+        assert_eq!(
+            AiTaskType::parse("page_manage"),
+            Some(AiTaskType::PageManage)
+        );
+        // The out-of-band seedance value must still parse (regression guard for
+        // the CHECK-constraint set this migration re-states).
+        assert_eq!(
+            AiTaskType::parse("seedance_video"),
+            Some(AiTaskType::SeedanceVideo)
+        );
+    }
+
+    #[test]
+    fn unknown_plan_and_task_types_still_reject() {
+        assert_eq!(PlanType::parse("not_a_plan"), None);
+        assert_eq!(AiTaskType::parse("not_a_task"), None);
     }
 }
