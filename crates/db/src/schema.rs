@@ -1571,6 +1571,7 @@ diesel::table! {
         device_id -> Nullable<Varchar>,
         #[max_length = 255]
         profile_name -> Nullable<Varchar>,
+        fb_pages_id -> Nullable<Text>,
     }
 }
 

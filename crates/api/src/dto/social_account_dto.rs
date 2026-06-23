@@ -1,3 +1,4 @@
+use super::fb_page::FbPage;
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 use validator::Validate;
@@ -71,6 +72,10 @@ pub struct CreateSocialAccountDto {
     pub device_id: Option<String>,
     #[serde(default)]
     pub profile_name: Option<String>,
+    /// Facebook Pages managed by this account (platform 3). Optional; absent or
+    /// empty ⇒ no pages. Invalid ids are dropped server-side (lenient).
+    #[serde(default)]
+    pub fb_pages_id: Option<Vec<FbPage>>,
 }
 
 fn default_platform_id() -> i32 {
@@ -91,6 +96,10 @@ pub struct UpdateSocialAccountDto {
     pub daily_max_replies: Option<i32>,
     pub device_id: Option<String>,
     pub profile_name: Option<String>,
+    /// Facebook Pages for this account. Absent ⇒ leave unchanged; `[]` ⇒ clear
+    /// all pages (stored as NULL). Invalid ids are dropped server-side.
+    #[serde(default)]
+    pub fb_pages_id: Option<Vec<FbPage>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -108,6 +117,9 @@ pub struct SocialAccountDto {
     pub daily_max_replies: i32,
     pub device_id: Option<String>,
     pub profile_name: Option<String>,
+    /// Facebook Pages for this account. Always present; `[]` when none.
+    #[serde(default)]
+    pub fb_pages_id: Vec<FbPage>,
 }
 
 // Account Statistics DTO
@@ -202,5 +214,44 @@ mod tests {
             serde_json::from_str(r#"{"username": "acct"}"#).expect("valid partial update payload");
 
         assert_eq!(dto.platform_id, None);
+    }
+
+    /// The create body carries `fb_pages_id` as a typed array of `{id,name}`;
+    /// serde must capture it (the field-drop class this feature guards against).
+    #[test]
+    fn create_dto_parses_fb_pages_array() {
+        let dto: CreateSocialAccountDto = serde_json::from_str(
+            r#"{
+                "platform_id": 3,
+                "username": "acct",
+                "fb_pages_id": [
+                    {"id": "100082341853837", "name": "Shop"},
+                    {"id": "61556000000000"}
+                ]
+            }"#,
+        )
+        .expect("valid create payload with pages");
+
+        let pages = dto.fb_pages_id.expect("fb_pages_id present");
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].id, "100082341853837");
+        assert_eq!(pages[0].name.as_deref(), Some("Shop"));
+        assert_eq!(pages[1].id, "61556000000000");
+        assert_eq!(pages[1].name, None);
+    }
+
+    /// The update body carries `fb_pages_id`; absent ⇒ `None` (leave unchanged).
+    #[test]
+    fn update_dto_parses_fb_pages_array() {
+        let with_pages: UpdateSocialAccountDto =
+            serde_json::from_str(r#"{"fb_pages_id": [{"id": "100082341853837", "name": "Shop"}]}"#)
+                .expect("valid update payload with pages");
+        let pages = with_pages.fb_pages_id.expect("fb_pages_id present");
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].id, "100082341853837");
+
+        let absent: UpdateSocialAccountDto =
+            serde_json::from_str(r#"{"username": "acct"}"#).expect("valid partial update payload");
+        assert_eq!(absent.fb_pages_id, None);
     }
 }

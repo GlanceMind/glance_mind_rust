@@ -12,6 +12,7 @@ pub mod crawler_dto;
 pub mod dm_dto;
 pub mod drama_dto;
 pub mod email_verification_dto;
+pub mod fb_page;
 pub mod google_auth_dto;
 pub mod jimeng_dto;
 pub mod laozhang_dto;
