@@ -57,6 +57,32 @@ fn page_manage_image_count(ai_input: Option<&serde_json::Value>) -> i32 {
     per_post * post_count
 }
 
+/// Conservative video budget for a `page_manage` plan: up to `post_count`
+/// videos when the brief opts into videos (a non-null `video_config`, or
+/// `want_videos=true`); 0 otherwise. The AI chooses `media_kind` per post, so
+/// this is a cap — unused freeze is refunded at plan finalization.
+fn page_manage_video_count(ai_input: Option<&serde_json::Value>) -> i32 {
+    let ai = match ai_input {
+        Some(v) => v,
+        None => return 0,
+    };
+    let wants = ai
+        .get("video_config")
+        .map(|v| !v.is_null())
+        .unwrap_or(false)
+        || ai
+            .get("want_videos")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+    if !wants {
+        return 0;
+    }
+    ai.get("post_count")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(5)
+        .max(1) as i32
+}
+
 #[derive(Clone)]
 pub struct AipubService {
     pub repo: AipubRepository,
@@ -792,13 +818,23 @@ impl AipubService {
                 }
                 Some(PlanType::DirectPublish) => None,
                 Some(PlanType::PageManage) => {
-                    // One chat call generates the page operating plan, plus one
-                    // image per post when the brief opts into post images
-                    // (post_count × Σ image_generations[].count). The scheduler
-                    // consumes 1 AI_ANALYZE + 1 IMAGE per generated image.
+                    // One chat call generates the page operating plan, plus media
+                    // when the brief opts in:
+                    //  · images: post_count × Σ image_generations[].count
+                    //  · videos: up to post_count (the AI picks media_kind per
+                    //    post, so this is a conservative cap; unused freeze is
+                    //    refunded at plan finalization).
+                    // The scheduler/monitor consume 1 AI_ANALYZE + 1 IMAGE/image +
+                    // 1 VIDEO/video as they are produced.
                     let image_count = page_manage_image_count(plan.ai_input.as_ref());
+                    let video_count = page_manage_video_count(plan.ai_input.as_ref());
                     let image_model_id = if image_count > 0 {
                         plan.image_ai_model_id
+                    } else {
+                        None
+                    };
+                    let video_model_id = if video_count > 0 {
+                        plan.video_ai_model_id
                     } else {
                         None
                     };
@@ -808,10 +844,10 @@ impl AipubService {
                                 user_id,
                                 1,
                                 image_count,
-                                0,
+                                video_count,
                                 plan.chat_ai_model_id,
                                 image_model_id,
-                                None,
+                                video_model_id,
                                 "aipub_plan",
                                 plan.id,
                             )
@@ -2024,6 +2060,32 @@ mod tests {
                 "image_generations": [{"count": 0}]
             }))),
             2
+        );
+    }
+
+    #[test]
+    fn page_manage_video_count_zero_unless_opted_in() {
+        assert_eq!(page_manage_video_count(None), 0);
+        assert_eq!(page_manage_video_count(Some(&json!({"post_count": 4}))), 0);
+        assert_eq!(
+            page_manage_video_count(Some(&json!({"post_count": 4, "video_config": null}))),
+            0
+        );
+    }
+
+    #[test]
+    fn page_manage_video_count_caps_at_post_count_when_opted_in() {
+        // video_config present ⇒ up to post_count videos.
+        assert_eq!(
+            page_manage_video_count(Some(
+                &json!({"post_count": 3, "video_config": {"duration": 5}})
+            )),
+            3
+        );
+        // want_videos flag also opts in; default post_count = 5.
+        assert_eq!(
+            page_manage_video_count(Some(&json!({"want_videos": true}))),
+            5
         );
     }
 
