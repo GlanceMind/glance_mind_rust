@@ -1830,6 +1830,7 @@ impl ToolRegistry {
                     proxy_url: None,
                     daily_max_replies: None,
                     profile_name: None,
+                    fb_pages_id: None, // AI-chat account creation does not set FB pages
                 };
                 let account = state
                     .social_account_service
@@ -2345,6 +2346,7 @@ impl ToolRegistry {
                         .and_then(|v| v.as_str())
                         .map(String::from),
                     profile_name: None,
+                    fb_pages_id: None, // AI-chat account update leaves FB pages unchanged
                 };
                 let account = state
                     .social_account_service

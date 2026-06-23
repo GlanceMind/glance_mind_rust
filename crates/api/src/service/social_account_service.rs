@@ -1,4 +1,5 @@
 use crate::config::database::Database;
+use crate::dto::fb_page::{normalize_pages, parse_pages, serialize_pages};
 use crate::dto::social_account_dto::{
     BatchCreateAccountsDto, BatchCreateResultDto, CreateSocialAccountDto, SocialAccountDto,
     UpdateSocialAccountDto,
@@ -89,6 +90,7 @@ impl SocialAccountService {
             daily_max_replies: dto.daily_max_replies.unwrap_or(50),
             device_id: dto.device_id,
             profile_name: dto.profile_name,
+            fb_pages_id: serialize_pages(&normalize_pages(dto.fb_pages_id.unwrap_or_default())),
         };
 
         let account =
@@ -154,6 +156,11 @@ impl SocialAccountService {
             daily_max_replies: dto.daily_max_replies,
             device_id: dto.device_id.map(Some),
             profile_name: dto.profile_name.map(Some),
+            // absent ⇒ None ⇒ leave unchanged; `[]` ⇒ Some(None) ⇒ clear (NULL);
+            // non-empty ⇒ Some(Some(json)). Normalize drops invalid/dup ids.
+            fb_pages_id: dto
+                .fb_pages_id
+                .map(|pages| serialize_pages(&normalize_pages(pages))),
         };
 
         let result =
@@ -241,6 +248,7 @@ impl SocialAccountService {
             daily_max_replies: account.daily_max_replies,
             device_id: account.device_id,
             profile_name: account.profile_name,
+            fb_pages_id: parse_pages(account.fb_pages_id.as_deref()),
         }
     }
 
@@ -314,6 +322,7 @@ impl SocialAccountService {
                 daily_max_replies: dto.daily_max_replies,
                 device_id: dto.device_id.clone(),
                 profile_name: Some(profile_name.clone()),
+                fb_pages_id: None, // batch create does not attach FB pages (OOS1)
             });
             candidate_profiles.push(profile_name);
         }

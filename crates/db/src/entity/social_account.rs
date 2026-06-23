@@ -20,6 +20,7 @@ pub struct SocialAccount {
     pub daily_max_replies: i32,
     pub device_id: Option<String>,
     pub profile_name: Option<String>,
+    pub fb_pages_id: Option<String>,
 }
 
 #[derive(AsChangeset, Deserialize, Serialize, Debug, Clone)]
@@ -36,6 +37,7 @@ pub struct UpdateSocialAccount {
     pub daily_max_replies: Option<i32>,
     pub device_id: Option<Option<String>>,
     pub profile_name: Option<Option<String>>,
+    pub fb_pages_id: Option<Option<String>>,
 }
 
 #[derive(Debug, Insertable, AsChangeset)]
@@ -52,4 +54,5 @@ pub struct NewSocialAccount {
     pub daily_max_replies: i32,
     pub device_id: Option<String>,
     pub profile_name: Option<String>,
+    pub fb_pages_id: Option<String>,
 }
