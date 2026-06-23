@@ -23,6 +23,40 @@ use glance_mind_protocol::glance_mind::{ImageGenerationSpec, MediaRole, RedditPo
 use serde_json::json;
 use std::sync::Arc;
 
+/// Image budget for a `page_manage` plan: `post_count × Σ image_generations[].count`.
+/// Returns 0 when the brief carries no (non-empty) `image_generations[]` — i.e.
+/// a text-only page plan. Drives both the `image_gen` ai_task_type inference and
+/// the image budget freeze, so they stay consistent.
+fn page_manage_image_count(ai_input: Option<&serde_json::Value>) -> i32 {
+    let ai = match ai_input {
+        Some(v) => v,
+        None => return 0,
+    };
+    let per_post: i32 = ai
+        .get("image_generations")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|spec| {
+                    spec.get("count")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(1)
+                        .max(1) as i32
+                })
+                .sum::<i32>()
+        })
+        .unwrap_or(0);
+    if per_post == 0 {
+        return 0;
+    }
+    let post_count = ai
+        .get("post_count")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(5)
+        .max(1) as i32;
+    per_post * post_count
+}
+
 #[derive(Clone)]
 pub struct AipubService {
     pub repo: AipubRepository,
@@ -378,7 +412,14 @@ impl AipubService {
                 Some(PlanType::PageManage) => {
                     // One AI task generates the whole page operating plan; the
                     // scheduler's process_page_manage expands it into children.
-                    Some(vec![AiTaskType::PageManage.as_str().to_string()])
+                    // Add image_gen when the brief opts into post images
+                    // (non-empty image_generations[]) so the scheduler runs its
+                    // inline media stage.
+                    let mut types = vec![AiTaskType::PageManage.as_str().to_string()];
+                    if page_manage_image_count(dto.ai_input.as_ref()) > 0 {
+                        types.push(AiTaskType::ImageGen.as_str().to_string());
+                    }
+                    Some(types)
                 }
                 None => None,
             }
@@ -751,19 +792,25 @@ impl AipubService {
                 }
                 Some(PlanType::DirectPublish) => None,
                 Some(PlanType::PageManage) => {
-                    // One chat call generates the page operating plan (profile
-                    // + a calendar of posts). Image/video generation for the
-                    // child posts is billed when those child tasks are created
-                    // by the scheduler's expansion, so freeze just 1 chat here.
+                    // One chat call generates the page operating plan, plus one
+                    // image per post when the brief opts into post images
+                    // (post_count × Σ image_generations[].count). The scheduler
+                    // consumes 1 AI_ANALYZE + 1 IMAGE per generated image.
+                    let image_count = page_manage_image_count(plan.ai_input.as_ref());
+                    let image_model_id = if image_count > 0 {
+                        plan.image_ai_model_id
+                    } else {
+                        None
+                    };
                     Some(
                         self.repo
                             .freeze_budget(
                                 user_id,
                                 1,
-                                0,
+                                image_count,
                                 0,
                                 plan.chat_ai_model_id,
-                                None,
+                                image_model_id,
                                 None,
                                 "aipub_plan",
                                 plan.id,
@@ -1934,6 +1981,51 @@ fn merge_plan_field_into_content(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn page_manage_image_count_zero_without_image_generations() {
+        assert_eq!(page_manage_image_count(None), 0);
+        assert_eq!(page_manage_image_count(Some(&json!({}))), 0);
+        assert_eq!(page_manage_image_count(Some(&json!({"post_count": 4}))), 0);
+        // Empty image_generations[] ⇒ text-only ⇒ 0.
+        assert_eq!(
+            page_manage_image_count(Some(&json!({"post_count": 4, "image_generations": []}))),
+            0
+        );
+    }
+
+    #[test]
+    fn page_manage_image_count_is_post_count_times_per_post() {
+        // 3 posts × 1 image each = 3.
+        assert_eq!(
+            page_manage_image_count(Some(&json!({
+                "post_count": 3,
+                "image_generations": [{"count": 1}]
+            }))),
+            3
+        );
+        // 2 posts × (2+1) images = 6 (sum over specs).
+        assert_eq!(
+            page_manage_image_count(Some(&json!({
+                "post_count": 2,
+                "image_generations": [{"count": 2}, {"count": 1}]
+            }))),
+            6
+        );
+        // Missing per-spec count defaults to 1; missing post_count defaults to 5.
+        assert_eq!(
+            page_manage_image_count(Some(&json!({"image_generations": [{}]}))),
+            5
+        );
+        // count below 1 is clamped to 1.
+        assert_eq!(
+            page_manage_image_count(Some(&json!({
+                "post_count": 2,
+                "image_generations": [{"count": 0}]
+            }))),
+            2
+        );
+    }
 
     #[test]
     fn merge_behavior_into_content_skips_when_behavior_is_none() {
