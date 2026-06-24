@@ -31,6 +31,7 @@ pub struct User {
     pub updated_at: Option<DateTime<Utc>>,
     pub username: Option<String>,
     pub permissions: i64,
+    pub phone: Option<String>,
 }
 
 #[derive(Insertable, Debug, Clone, Serialize, Deserialize)]
@@ -50,4 +51,5 @@ pub struct NewUser {
     pub updated_at: Option<DateTime<Utc>>,
     pub username: Option<String>,
     pub permissions: Option<i64>,
+    pub phone: Option<String>,
 }

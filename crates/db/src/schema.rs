@@ -1693,6 +1693,8 @@ diesel::table! {
         #[max_length = 50]
         username -> Nullable<Varchar>,
         permissions -> Int8,
+        #[max_length = 20]
+        phone -> Nullable<Varchar>,
     }
 }
 

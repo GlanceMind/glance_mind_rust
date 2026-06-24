@@ -45,6 +45,7 @@ fn test_openmontage_router() -> axum::Router {
         updated_at: None,
         username: Some("testuser".to_string()),
         permissions: 0,
+        phone: None,
     };
 
     openmontage::user_routes()
@@ -350,6 +351,7 @@ async fn cancel_running_sets_flag() {
         updated_at: None,
         username: Some("testuser".to_string()),
         permissions: 0,
+        phone: None,
     };
 
     let router = glance_mind_api::routes::openmontage::user_routes()
