@@ -21,6 +21,7 @@ pub trait UserRepositoryTrait {
         password_hash: String,
         invitation_code: Option<String>,
         referred_by: Option<String>,
+        phone: Option<String>,
     ) -> Result<User, diesel::result::Error>;
     async fn update(&self, user: User) -> Result<User, diesel::result::Error>;
 }
@@ -106,6 +107,7 @@ impl UserRepositoryTrait for UserRepository {
         pwd_hash: String,
         invite_code: Option<String>,
         ref_by: Option<String>,
+        phone: Option<String>,
     ) -> Result<User, diesel::result::Error> {
         let pool = self.pool.clone();
         // ID is SERIAL, so we don't set it manually
@@ -124,6 +126,7 @@ impl UserRepositoryTrait for UserRepository {
             created_at: chrono::Utc::now(),
             updated_at: None,
             permissions: None,
+            phone,
         };
 
         task::spawn_blocking(move || {

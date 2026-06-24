@@ -120,6 +120,7 @@ impl<R: UserRepositoryTrait> UserService<R> {
                 password_hash,
                 Some(invite_code),
                 payload.invitation_code,
+                Some(payload.phone),
             )
             .await
             .map_err(|e| ApiError::from(DbError::SomethingWentWrong(e.to_string())))
