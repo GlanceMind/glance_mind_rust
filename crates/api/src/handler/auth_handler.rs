@@ -138,6 +138,7 @@ pub async fn google_auth(
                     hashed_password,
                     None, // invitation_code
                     None, // referred_by
+                    None, // phone — Google SSO users have no contact phone at signup
                 )
                 .await
                 .map_err(|e| {

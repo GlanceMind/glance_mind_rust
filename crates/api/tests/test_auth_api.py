@@ -89,10 +89,11 @@ class TestUserRegistration:
             json={
                 "email": f"test_{unique_id}@example.com",
                 "username": f"user_{unique_id}",
-                "password": "StrongPassword123!"
+                "password": "StrongPassword123!",
+                "phone": "13800138000"
             }
         )
-        
+
         # Should not be 404 (endpoint exists)
         assert resp.status_code != 404, "Register endpoint should exist"
         
@@ -111,10 +112,11 @@ class TestUserRegistration:
             json={
                 "email": "invalid-email",  # Invalid email format
                 "username": f"user_{unique_id}",
-                "password": "StrongPassword123!"
+                "password": "StrongPassword123!",
+                "phone": "13800138000"
             }
         )
-        
+
         # Should return validation error
         assert resp.status_code in [400, 422], \
             f"Expected 400/422 for invalid email, got {resp.status_code}"
@@ -128,13 +130,44 @@ class TestUserRegistration:
             json={
                 "email": f"test_{unique_id}@example.com",
                 "username": f"user_{unique_id}",
+                "phone": "13800138000",
                 # Missing password
             }
         )
-        
+
         # Should return validation error
         assert resp.status_code in [400, 422], \
             f"Expected 400/422 for missing password, got {resp.status_code}"
+
+    def test_register_requires_valid_phone(self, api_client):
+        """Test that registration requires a valid 11-digit China mobile phone."""
+        unique_id = str(uuid.uuid4())[:8]
+
+        # Missing phone entirely -> validation error.
+        resp_missing = api_client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": f"test_{unique_id}@example.com",
+                "username": f"user_{unique_id}",
+                "password": "StrongPassword123!",
+                # Missing phone
+            }
+        )
+        assert resp_missing.status_code in [400, 422], \
+            f"Expected 400/422 for missing phone, got {resp_missing.status_code}"
+
+        # Malformed phone (not an 11-digit CN mobile) -> validation error.
+        resp_bad = api_client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": f"test2_{unique_id}@example.com",
+                "username": f"user2_{unique_id}",
+                "password": "StrongPassword123!",
+                "phone": "12345"  # too short / wrong prefix
+            }
+        )
+        assert resp_bad.status_code in [400, 422], \
+            f"Expected 400/422 for malformed phone, got {resp_bad.status_code}"
 
 
 class TestTokenValidation:

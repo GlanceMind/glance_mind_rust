@@ -384,6 +384,7 @@ mod tests {
             updated_at: None,
             username: Some("tester".to_string()),
             permissions: 0,
+            phone: None,
         };
 
         let token = facade.gateway_token(&user).expect("token should encode");
