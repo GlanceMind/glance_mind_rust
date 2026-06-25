@@ -431,6 +431,11 @@ pub fn routes(
             .merge(crate::routes::aipub::aipub_internal_routes().with_state(user_state.clone()))
             // AI Publish Public Routes (for Executor - no auth for now)
             .merge(crate::routes::aipub::aipub_public_routes().with_state(user_state.clone()))
+            // Public feedback / contact form (no auth — shown on public pages too)
+            .nest(
+                "/feedback",
+                crate::routes::feedback::routes().with_state(user_state.clone()),
+            )
             // DM Group Control Routes (requires auth + permission)
             .nest(
                 "/dm",
