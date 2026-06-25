@@ -1,8 +1,8 @@
 //! Public contact / feedback form handler.
 //!
 //! Accepts `{ email, phone, description }` from any page (no auth required, so it
-//! also works on public/landing pages) and pushes a Telegram notification to the
-//! internal channel. Best-effort: a Telegram failure never fails the submission.
+//! also works on public/landing pages) and pushes a Feishu notification to the
+//! internal channel. Best-effort: a Feishu failure never fails the submission.
 
 use crate::api_ok;
 use crate::error::{api_error::ApiError, business_error::BusinessError};
@@ -21,7 +21,7 @@ pub struct FeedbackDto {
     pub description: String,
 }
 
-/// POST /feedback/submit — public; validates and pushes the feedback to Telegram.
+/// POST /feedback/submit — public; validates and pushes the feedback to Feishu.
 pub async fn submit(
     State(state): State<UserState>,
     headers: HeaderMap,
@@ -51,9 +51,9 @@ pub async fn submit(
         .map(|s| s.split(',').next().unwrap_or(s).trim().to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    // Fire-and-forget Telegram notification (best-effort; never blocks the response).
-    if let Some(tg) = state.telegram_client.clone() {
-        tg.notify(crate::service::telegram_client::format_feedback(
+    // Fire-and-forget Feishu notification (best-effort; never blocks the response).
+    if let Some(tg) = state.feishu_client.clone() {
+        tg.notify(crate::service::feishu_client::format_feedback(
             email,
             phone,
             &description,

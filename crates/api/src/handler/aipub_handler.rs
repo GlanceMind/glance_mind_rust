@@ -32,9 +32,9 @@ pub async fn create_plan(
 
     let result = state.aipub_service.create_plan(user.id, payload).await?;
 
-    // Fire-and-forget internal Telegram notification (best-effort, post-success).
+    // Fire-and-forget internal Feishu notification (best-effort, post-success).
     // Platform name is resolved off the request path inside the spawned task.
-    if let Some(tg) = state.telegram_client.clone() {
+    if let Some(tg) = state.feishu_client.clone() {
         let platform_service = state.platform_service.clone();
         let username = user
             .username
@@ -47,11 +47,11 @@ pub async fn create_plan(
                 .ok()
                 .and_then(|ps| ps.into_iter().find(|p| p.id == platform_id).map(|p| p.name))
                 .unwrap_or_else(|| format!("platform#{platform_id}"));
-            let msg = crate::service::telegram_client::format_plan_created(
+            let msg = crate::service::feishu_client::format_plan_created(
                 &username, &plan_name, &platform,
             );
-            if let Err(e) = tg.send_html(msg).await {
-                tracing::warn!("Telegram plan notify failed: {e}");
+            if let Err(e) = tg.send_card(msg).await {
+                tracing::warn!("Feishu plan notify failed: {e}");
             }
         });
     }

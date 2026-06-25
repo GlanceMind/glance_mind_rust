@@ -13,7 +13,7 @@ pub async fn register(
     Json(payload): Json<UserRegisterDto>,
 ) -> Result<impl IntoResponse, ApiError> {
     // Capture notification fields before `payload` is moved into the service.
-    let notify_ctx = state.telegram_client.clone().map(|tg| {
+    let notify_ctx = state.feishu_client.clone().map(|tg| {
         let ip = headers
             .get("x-forwarded-for")
             .or_else(|| headers.get("x-real-ip"))
@@ -32,9 +32,9 @@ pub async fn register(
     // Create user and generate authentication info
     let user = state.user_service.create_user(payload, &state.db).await?;
 
-    // Fire-and-forget internal Telegram notification (best-effort, post-success).
+    // Fire-and-forget internal Feishu notification (best-effort, post-success).
     if let Some((tg, username, email, phone, ip)) = notify_ctx {
-        tg.notify(crate::service::telegram_client::format_user_registered(
+        tg.notify(crate::service::feishu_client::format_user_registered(
             &username,
             &email,
             &phone,

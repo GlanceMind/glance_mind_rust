@@ -19,13 +19,13 @@ pub async fn create_campaign(
     let campaign_name = dto.name.clone();
     let campaign = campaign_service.create_campaign(user.id, dto).await?;
 
-    // Fire-and-forget internal Telegram notification (best-effort, post-success).
-    if let Some(tg) = state.telegram_client.clone() {
+    // Fire-and-forget internal Feishu notification (best-effort, post-success).
+    if let Some(tg) = state.feishu_client.clone() {
         let username = user
             .username
             .clone()
             .unwrap_or_else(|| format!("user#{}", user.id));
-        tg.notify(crate::service::telegram_client::format_campaign_created(
+        tg.notify(crate::service::feishu_client::format_campaign_created(
             &username,
             &campaign_name,
         ));

@@ -15,6 +15,7 @@ use crate::service::config_service::ConfigService;
 use crate::service::crawler_service::CrawlerService;
 use crate::service::dashboard_service::DashboardService;
 use crate::service::email_verification_service::EmailVerificationService;
+use crate::service::feishu_client::FeishuClient;
 use crate::service::jimeng_client::JimengClient;
 use crate::service::laozhang_client::LaoZhangClient;
 use crate::service::material_folder_service::MaterialFolderService;
@@ -26,7 +27,6 @@ use crate::service::redis_service::RedisService;
 use crate::service::referral_service::ReferralService;
 use crate::service::social_account_service::SocialAccountService;
 use crate::service::social_group_service::SocialGroupService;
-use crate::service::telegram_client::TelegramClient;
 use crate::service::template_service::TemplateService;
 use crate::service::upload_task_service::UploadTaskService;
 use crate::service::user_service::UserService;
@@ -65,9 +65,9 @@ pub struct UserState {
     /// Redis service for daily reply quota (None if Redis is not configured)
     pub redis_service: Option<RedisService>,
     pub ai_chat_service: AiChatService,
-    /// Telegram notifier for internal alerts (None if TELEGRAM_BOT_TOKEN /
-    /// TELEGRAM_CHAT_ID are not configured).
-    pub telegram_client: Option<TelegramClient>,
+    /// Feishu (Lark) notifier for internal alerts (None if FEISHU_WEBHOOK_URL
+    /// is not configured).
+    pub feishu_client: Option<FeishuClient>,
 }
 
 impl UserState {
@@ -98,17 +98,15 @@ impl UserState {
             }
         };
 
-        // Initialize Telegram notifier (optional - only if env vars are set)
-        let telegram_client = {
-            let token = std::env::var("TELEGRAM_BOT_TOKEN").ok();
-            let chat_id = std::env::var("TELEGRAM_CHAT_ID").ok();
-            match (token, chat_id) {
-                (Some(token), Some(chat_id)) if !token.is_empty() && !chat_id.is_empty() => {
-                    tracing::info!("Telegram client initialized");
-                    Some(TelegramClient::new(token, chat_id))
+        // Initialize Feishu notifier (optional - only if the webhook URL is set)
+        let feishu_client = {
+            match std::env::var("FEISHU_WEBHOOK_URL").ok() {
+                Some(url) if !url.is_empty() => {
+                    tracing::info!("Feishu client initialized");
+                    Some(FeishuClient::new(url))
                 }
                 _ => {
-                    tracing::info!("Telegram client not configured (TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set)");
+                    tracing::info!("Feishu client not configured (FEISHU_WEBHOOK_URL not set)");
                     None
                 }
             }
@@ -157,7 +155,7 @@ impl UserState {
             nats_dm_service: None, // Initialized async in lib.rs::run()
             redis_service: None,   // Initialized in lib.rs::run() from REDIS_URL
             ai_chat_service: AiChatService::new(AiChatRepository::new(db_conn.clone())),
-            telegram_client,
+            feishu_client,
         }
     }
 
