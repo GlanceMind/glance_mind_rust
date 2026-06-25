@@ -1,11 +1,25 @@
 name: Harness API DB
 
 on:
+  # PRs targeting main are already covered by Rust CI's full `cargo test
+  # --workspace`, which is a superset of `wallet_billing_harness`. Run the
+  # harness only where Rust CI does NOT: PRs targeting non-main branches
+  # (feature stacks, release branches). No `push: main` — the post-merge
+  # retest was redundant with the PR run.
   pull_request:
-  push:
-    branches:
+    branches-ignore:
       - main
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".githooks/**"
+      - "*.sql"
+      - "*.py"
   workflow_dispatch:
+
+concurrency:
+  group: harness-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

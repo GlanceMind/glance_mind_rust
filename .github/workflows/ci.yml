@@ -1,10 +1,22 @@
 name: Rust CI
 
 on:
-  push:
-    branches: ["main"]
   pull_request:
     branches: ["main"]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".githooks/**"
+      - "*.sql"
+      - "*.py"
+  workflow_dispatch:
+
+# Cancel superseded runs: when a PR branch gets a new push, the in-flight run
+# for the old commit is no longer interesting. Keyed on ref so each PR has its
+# own group. This is the biggest waste cut on the constrained self-hosted runner.
+concurrency:
+  group: rust-ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
