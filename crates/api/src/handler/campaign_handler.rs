@@ -3,6 +3,7 @@ use crate::dto::campaign_dto::{CampaignCreateDto, CampaignStatusUpdateDto, Campa
 use crate::error::api_error::ApiError;
 use crate::response::ApiResult;
 use crate::service::campaign_service::CampaignService;
+use crate::state::user_state::UserState;
 use axum::{
     extract::{Path, Query},
     Extension, Json,
@@ -12,9 +13,24 @@ use glance_mind_db::entity::user::User;
 pub async fn create_campaign(
     Extension(user): Extension<User>,
     Extension(campaign_service): Extension<CampaignService>,
+    Extension(state): Extension<UserState>,
     Json(dto): Json<CampaignCreateDto>,
 ) -> Result<ApiResult<impl serde::Serialize>, ApiError> {
+    let campaign_name = dto.name.clone();
     let campaign = campaign_service.create_campaign(user.id, dto).await?;
+
+    // Fire-and-forget internal Feishu notification (best-effort, post-success).
+    if let Some(tg) = state.feishu_client.clone() {
+        let username = user
+            .username
+            .clone()
+            .unwrap_or_else(|| format!("user#{}", user.id));
+        tg.notify(crate::service::feishu_client::format_campaign_created(
+            &username,
+            &campaign_name,
+        ));
+    }
+
     Ok(api_result!(campaign))
 }
 

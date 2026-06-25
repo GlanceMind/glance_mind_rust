@@ -15,6 +15,7 @@ pub mod drama_handler;
 pub mod drama_stream_handler;
 pub(crate) mod email_verification_handler;
 pub(crate) mod export_handler;
+pub mod feedback_handler;
 pub mod material_folder_handler;
 pub mod material_handler;
 pub mod notification_handler;

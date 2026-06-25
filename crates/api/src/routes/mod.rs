@@ -11,6 +11,7 @@ pub(crate) mod dashboard;
 pub mod dm;
 pub mod drama;
 pub(crate) mod email_verification;
+pub mod feedback;
 pub mod material;
 pub mod notification;
 pub mod novel;
