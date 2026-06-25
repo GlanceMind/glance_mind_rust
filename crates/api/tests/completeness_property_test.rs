@@ -43,6 +43,7 @@ const PLAN_TYPES: &[&str] = &[
     "reddit_link",
     "single_video",
     "direct_publish",
+    "page_manage",
 ];
 
 fn to_set(v: &[String]) -> BTreeSet<String> {

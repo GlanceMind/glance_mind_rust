@@ -23,6 +23,75 @@ use glance_mind_protocol::glance_mind::{ImageGenerationSpec, MediaRole, RedditPo
 use serde_json::json;
 use std::sync::Arc;
 
+/// Image budget for a `page_manage` plan: `post_count × Σ image_generations[].count`
+/// plus 1 for the single profile cover image when the plan opts into the media
+/// stage (i.e. a non-empty `image_generations[]`).
+/// Returns 0 when the brief carries no (non-empty) `image_generations[]` — i.e.
+/// a text-only / video-only page plan with no media stage, so no cover. Drives
+/// both the `image_gen` ai_task_type inference and the image budget freeze, so
+/// they stay consistent.
+fn page_manage_image_count(ai_input: Option<&serde_json::Value>) -> i32 {
+    let ai = match ai_input {
+        Some(v) => v,
+        None => return 0,
+    };
+    let per_post: i32 = ai
+        .get("image_generations")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|spec| {
+                    spec.get("count")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(1)
+                        .max(1) as i32
+                })
+                .sum::<i32>()
+        })
+        .unwrap_or(0);
+    if per_post == 0 {
+        // No media stage (empty/absent image_generations[]) ⇒ no post images and
+        // no profile cover ⇒ 0.
+        return 0;
+    }
+    let post_count = ai
+        .get("post_count")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(5)
+        .max(1) as i32;
+    // +1 for the single profile cover image. The scheduler generates exactly one
+    // cover per plan when the media stage is active (mirrors this gating). It is a
+    // single image TOTAL, not per-post. Conservative: if the AI never emits a
+    // cover prompt, the unused IMAGE freeze is refunded at plan finalization.
+    per_post * post_count + 1
+}
+
+/// Conservative video budget for a `page_manage` plan: up to `post_count`
+/// videos when the brief opts into videos (a non-null `video_config`, or
+/// `want_videos=true`); 0 otherwise. The AI chooses `media_kind` per post, so
+/// this is a cap — unused freeze is refunded at plan finalization.
+fn page_manage_video_count(ai_input: Option<&serde_json::Value>) -> i32 {
+    let ai = match ai_input {
+        Some(v) => v,
+        None => return 0,
+    };
+    let wants = ai
+        .get("video_config")
+        .map(|v| !v.is_null())
+        .unwrap_or(false)
+        || ai
+            .get("want_videos")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+    if !wants {
+        return 0;
+    }
+    ai.get("post_count")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(5)
+        .max(1) as i32
+}
+
 #[derive(Clone)]
 pub struct AipubService {
     pub repo: AipubRepository,
@@ -56,7 +125,7 @@ impl AipubService {
         // Validate plan_type
         if PlanType::parse(&plan_type).is_none() {
             return Err(ApiError::BusinessError(BusinessError::InvalidInput(
-                format!("Invalid plan_type: {}. Supported: batch_text, single_video, account_grooming, reddit_text, reddit_image, reddit_link, direct_publish", plan_type),
+                format!("Invalid plan_type: {}. Supported: batch_text, single_video, account_grooming, reddit_text, reddit_image, reddit_link, direct_publish, page_manage", plan_type),
             )));
         }
 
@@ -254,6 +323,28 @@ impl AipubService {
                     )));
                 }
             }
+            Some(PlanType::PageManage) => {
+                // page_manage operates ONE page, managed by a single account.
+                if dto.social_account_id.is_none() {
+                    return Err(ApiError::BusinessError(BusinessError::InvalidInput(
+                        "page_manage plan requires social_account_id (the account that manages the page)".to_string(),
+                    )));
+                }
+                if dto.group_id.is_some() {
+                    return Err(ApiError::BusinessError(BusinessError::InvalidInput(
+                        "page_manage plan cannot have group_id, use social_account_id instead"
+                            .to_string(),
+                    )));
+                }
+                // The AI generates the page operating plan (profile + a calendar
+                // of posts) from this brief, so ai_input is mandatory.
+                if dto.ai_input.is_none() {
+                    return Err(ApiError::BusinessError(BusinessError::InvalidInput(
+                        "page_manage plan requires ai_input (the page brief the AI generates from)"
+                            .to_string(),
+                    )));
+                }
+            }
             _ => {}
         }
 
@@ -353,6 +444,18 @@ impl AipubService {
                     }
                 }
                 Some(PlanType::DirectPublish) => None,
+                Some(PlanType::PageManage) => {
+                    // One AI task generates the whole page operating plan; the
+                    // scheduler's process_page_manage expands it into children.
+                    // Add image_gen when the brief opts into post images
+                    // (non-empty image_generations[]) so the scheduler runs its
+                    // inline media stage.
+                    let mut types = vec![AiTaskType::PageManage.as_str().to_string()];
+                    if page_manage_image_count(dto.ai_input.as_ref()) > 0 {
+                        types.push(AiTaskType::ImageGen.as_str().to_string());
+                    }
+                    Some(types)
+                }
                 None => None,
             }
         });
@@ -723,6 +826,43 @@ impl AipubService {
                     }
                 }
                 Some(PlanType::DirectPublish) => None,
+                Some(PlanType::PageManage) => {
+                    // One chat call generates the page operating plan, plus media
+                    // when the brief opts in:
+                    //  · images: post_count × Σ image_generations[].count
+                    //  · videos: up to post_count (the AI picks media_kind per
+                    //    post, so this is a conservative cap; unused freeze is
+                    //    refunded at plan finalization).
+                    // The scheduler/monitor consume 1 AI_ANALYZE + 1 IMAGE/image +
+                    // 1 VIDEO/video as they are produced.
+                    let image_count = page_manage_image_count(plan.ai_input.as_ref());
+                    let video_count = page_manage_video_count(plan.ai_input.as_ref());
+                    let image_model_id = if image_count > 0 {
+                        plan.image_ai_model_id
+                    } else {
+                        None
+                    };
+                    let video_model_id = if video_count > 0 {
+                        plan.video_ai_model_id
+                    } else {
+                        None
+                    };
+                    Some(
+                        self.repo
+                            .freeze_budget(
+                                user_id,
+                                1,
+                                image_count,
+                                video_count,
+                                plan.chat_ai_model_id,
+                                image_model_id,
+                                video_model_id,
+                                "aipub_plan",
+                                plan.id,
+                            )
+                            .await,
+                    )
+                }
                 None => None,
             };
 
@@ -1886,6 +2026,95 @@ fn merge_plan_field_into_content(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn page_manage_image_count_zero_without_image_generations() {
+        assert_eq!(page_manage_image_count(None), 0);
+        assert_eq!(page_manage_image_count(Some(&json!({}))), 0);
+        assert_eq!(page_manage_image_count(Some(&json!({"post_count": 4}))), 0);
+        // Empty image_generations[] ⇒ text-only ⇒ 0.
+        assert_eq!(
+            page_manage_image_count(Some(&json!({"post_count": 4, "image_generations": []}))),
+            0
+        );
+    }
+
+    #[test]
+    fn page_manage_image_count_is_post_count_times_per_post() {
+        // ASSERTION-CHANGE-JUSTIFIED: +1 profile cover image (post_count×Σ + 1 cover)
+        // 3 posts × 1 image each = 3 post images, + 1 profile cover = 4.
+        assert_eq!(
+            page_manage_image_count(Some(&json!({
+                "post_count": 3,
+                "image_generations": [{"count": 1}]
+            }))),
+            4
+        );
+        // ASSERTION-CHANGE-JUSTIFIED: +1 profile cover image (post_count×Σ + 1 cover)
+        // 2 posts × (2+1) images = 6 post images (sum over specs), + 1 cover = 7.
+        assert_eq!(
+            page_manage_image_count(Some(&json!({
+                "post_count": 2,
+                "image_generations": [{"count": 2}, {"count": 1}]
+            }))),
+            7
+        );
+        // ASSERTION-CHANGE-JUSTIFIED: +1 profile cover image (post_count×Σ + 1 cover)
+        // Missing per-spec count defaults to 1; missing post_count defaults to 5.
+        // 5 post images + 1 cover = 6.
+        assert_eq!(
+            page_manage_image_count(Some(&json!({"image_generations": [{}]}))),
+            6
+        );
+        // ASSERTION-CHANGE-JUSTIFIED: +1 profile cover image (post_count×Σ + 1 cover)
+        // count below 1 is clamped to 1 ⇒ 2 post images + 1 cover = 3.
+        assert_eq!(
+            page_manage_image_count(Some(&json!({
+                "post_count": 2,
+                "image_generations": [{"count": 0}]
+            }))),
+            3
+        );
+    }
+
+    #[test]
+    fn page_manage_image_count_cover_is_single_total_not_per_post() {
+        // The profile cover is ONE image total for the whole plan, NOT per-post.
+        // 3 posts × 2 images = 6 post images, + 1 cover = 7 (not 6 + 3).
+        assert_eq!(
+            page_manage_image_count(Some(&json!({
+                "post_count": 3,
+                "image_generations": [{"count": 2}]
+            }))),
+            7
+        );
+    }
+
+    #[test]
+    fn page_manage_video_count_zero_unless_opted_in() {
+        assert_eq!(page_manage_video_count(None), 0);
+        assert_eq!(page_manage_video_count(Some(&json!({"post_count": 4}))), 0);
+        assert_eq!(
+            page_manage_video_count(Some(&json!({"post_count": 4, "video_config": null}))),
+            0
+        );
+    }
+
+    #[test]
+    fn page_manage_video_count_caps_at_post_count_when_opted_in() {
+        // video_config present ⇒ up to post_count videos.
+        assert_eq!(
+            page_manage_video_count(Some(
+                &json!({"post_count": 3, "video_config": {"duration": 5}})
+            )),
+            3
+        );
+        // want_videos flag also opts in; default post_count = 5.
+        assert_eq!(
+            page_manage_video_count(Some(&json!({"want_videos": true}))),
+            5
+        );
+    }
 
     #[test]
     fn merge_behavior_into_content_skips_when_behavior_is_none() {
