@@ -26,6 +26,12 @@ on:
       - "Cargo.lock"
       - ".github/workflows/deploy-api.yml"
 
+# Serialize deploys instead of racing them. cancel-in-progress:false queues a
+# newer deploy behind an in-flight one rather than killing a half-done deploy.
+concurrency:
+  group: deploy-api
+  cancel-in-progress: false
+
 jobs:
   check-changes:
     name: Check for DB changes
