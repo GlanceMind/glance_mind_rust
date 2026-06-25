@@ -23,10 +23,13 @@ use glance_mind_protocol::glance_mind::{ImageGenerationSpec, MediaRole, RedditPo
 use serde_json::json;
 use std::sync::Arc;
 
-/// Image budget for a `page_manage` plan: `post_count × Σ image_generations[].count`.
+/// Image budget for a `page_manage` plan: `post_count × Σ image_generations[].count`
+/// plus 1 for the single profile cover image when the plan opts into the media
+/// stage (i.e. a non-empty `image_generations[]`).
 /// Returns 0 when the brief carries no (non-empty) `image_generations[]` — i.e.
-/// a text-only page plan. Drives both the `image_gen` ai_task_type inference and
-/// the image budget freeze, so they stay consistent.
+/// a text-only / video-only page plan with no media stage, so no cover. Drives
+/// both the `image_gen` ai_task_type inference and the image budget freeze, so
+/// they stay consistent.
 fn page_manage_image_count(ai_input: Option<&serde_json::Value>) -> i32 {
     let ai = match ai_input {
         Some(v) => v,
@@ -47,6 +50,8 @@ fn page_manage_image_count(ai_input: Option<&serde_json::Value>) -> i32 {
         })
         .unwrap_or(0);
     if per_post == 0 {
+        // No media stage (empty/absent image_generations[]) ⇒ no post images and
+        // no profile cover ⇒ 0.
         return 0;
     }
     let post_count = ai
@@ -54,7 +59,11 @@ fn page_manage_image_count(ai_input: Option<&serde_json::Value>) -> i32 {
         .and_then(|v| v.as_u64())
         .unwrap_or(5)
         .max(1) as i32;
-    per_post * post_count
+    // +1 for the single profile cover image. The scheduler generates exactly one
+    // cover per plan when the media stage is active (mirrors this gating). It is a
+    // single image TOTAL, not per-post. Conservative: if the AI never emits a
+    // cover prompt, the unused IMAGE freeze is refunded at plan finalization.
+    per_post * post_count + 1
 }
 
 /// Conservative video budget for a `page_manage` plan: up to `post_count`
@@ -2032,34 +2041,52 @@ mod tests {
 
     #[test]
     fn page_manage_image_count_is_post_count_times_per_post() {
-        // 3 posts × 1 image each = 3.
+        // ASSERTION-CHANGE-JUSTIFIED: +1 profile cover image (post_count×Σ + 1 cover)
+        // 3 posts × 1 image each = 3 post images, + 1 profile cover = 4.
         assert_eq!(
             page_manage_image_count(Some(&json!({
                 "post_count": 3,
                 "image_generations": [{"count": 1}]
             }))),
-            3
+            4
         );
-        // 2 posts × (2+1) images = 6 (sum over specs).
+        // ASSERTION-CHANGE-JUSTIFIED: +1 profile cover image (post_count×Σ + 1 cover)
+        // 2 posts × (2+1) images = 6 post images (sum over specs), + 1 cover = 7.
         assert_eq!(
             page_manage_image_count(Some(&json!({
                 "post_count": 2,
                 "image_generations": [{"count": 2}, {"count": 1}]
             }))),
-            6
+            7
         );
+        // ASSERTION-CHANGE-JUSTIFIED: +1 profile cover image (post_count×Σ + 1 cover)
         // Missing per-spec count defaults to 1; missing post_count defaults to 5.
+        // 5 post images + 1 cover = 6.
         assert_eq!(
             page_manage_image_count(Some(&json!({"image_generations": [{}]}))),
-            5
+            6
         );
-        // count below 1 is clamped to 1.
+        // ASSERTION-CHANGE-JUSTIFIED: +1 profile cover image (post_count×Σ + 1 cover)
+        // count below 1 is clamped to 1 ⇒ 2 post images + 1 cover = 3.
         assert_eq!(
             page_manage_image_count(Some(&json!({
                 "post_count": 2,
                 "image_generations": [{"count": 0}]
             }))),
-            2
+            3
+        );
+    }
+
+    #[test]
+    fn page_manage_image_count_cover_is_single_total_not_per_post() {
+        // The profile cover is ONE image total for the whole plan, NOT per-post.
+        // 3 posts × 2 images = 6 post images, + 1 cover = 7 (not 6 + 3).
+        assert_eq!(
+            page_manage_image_count(Some(&json!({
+                "post_count": 3,
+                "image_generations": [{"count": 2}]
+            }))),
+            7
         );
     }
 
