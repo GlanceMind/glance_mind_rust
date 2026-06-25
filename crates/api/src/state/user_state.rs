@@ -26,6 +26,7 @@ use crate::service::redis_service::RedisService;
 use crate::service::referral_service::ReferralService;
 use crate::service::social_account_service::SocialAccountService;
 use crate::service::social_group_service::SocialGroupService;
+use crate::service::telegram_client::TelegramClient;
 use crate::service::template_service::TemplateService;
 use crate::service::upload_task_service::UploadTaskService;
 use crate::service::user_service::UserService;
@@ -64,6 +65,9 @@ pub struct UserState {
     /// Redis service for daily reply quota (None if Redis is not configured)
     pub redis_service: Option<RedisService>,
     pub ai_chat_service: AiChatService,
+    /// Telegram notifier for internal alerts (None if TELEGRAM_BOT_TOKEN /
+    /// TELEGRAM_CHAT_ID are not configured).
+    pub telegram_client: Option<TelegramClient>,
 }
 
 impl UserState {
@@ -89,6 +93,22 @@ impl UserState {
                 }
                 _ => {
                     tracing::info!("Jimeng client not configured (JIMENG_ACCESS_KEY_ID/JIMENG_SECRET_ACCESS_KEY not set)");
+                    None
+                }
+            }
+        };
+
+        // Initialize Telegram notifier (optional - only if env vars are set)
+        let telegram_client = {
+            let token = std::env::var("TELEGRAM_BOT_TOKEN").ok();
+            let chat_id = std::env::var("TELEGRAM_CHAT_ID").ok();
+            match (token, chat_id) {
+                (Some(token), Some(chat_id)) if !token.is_empty() && !chat_id.is_empty() => {
+                    tracing::info!("Telegram client initialized");
+                    Some(TelegramClient::new(token, chat_id))
+                }
+                _ => {
+                    tracing::info!("Telegram client not configured (TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set)");
                     None
                 }
             }
@@ -137,6 +157,7 @@ impl UserState {
             nats_dm_service: None, // Initialized async in lib.rs::run()
             redis_service: None,   // Initialized in lib.rs::run() from REDIS_URL
             ai_chat_service: AiChatService::new(AiChatRepository::new(db_conn.clone())),
+            telegram_client,
         }
     }
 

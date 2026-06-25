@@ -23,7 +23,39 @@ pub async fn create_plan(
     Extension(user): Extension<User>,
     ValidatedRequest(payload): ValidatedRequest<CreatePlanDto>,
 ) -> Result<impl IntoResponse, ApiError> {
+    // Capture notification fields before `payload` is moved into the service.
+    let plan_name = payload
+        .name
+        .clone()
+        .unwrap_or_else(|| "(未命名)".to_string());
+    let platform_id = payload.platform_id;
+
     let result = state.aipub_service.create_plan(user.id, payload).await?;
+
+    // Fire-and-forget internal Telegram notification (best-effort, post-success).
+    // Platform name is resolved off the request path inside the spawned task.
+    if let Some(tg) = state.telegram_client.clone() {
+        let platform_service = state.platform_service.clone();
+        let username = user
+            .username
+            .clone()
+            .unwrap_or_else(|| format!("user#{}", user.id));
+        tokio::spawn(async move {
+            let platform = platform_service
+                .get_all_platforms()
+                .await
+                .ok()
+                .and_then(|ps| ps.into_iter().find(|p| p.id == platform_id).map(|p| p.name))
+                .unwrap_or_else(|| format!("platform#{platform_id}"));
+            let msg = crate::service::telegram_client::format_plan_created(
+                &username, &plan_name, &platform,
+            );
+            if let Err(e) = tg.send_html(msg).await {
+                tracing::warn!("Telegram plan notify failed: {e}");
+            }
+        });
+    }
+
     Ok(api_ok!(result))
 }
 

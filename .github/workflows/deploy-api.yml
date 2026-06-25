@@ -129,3 +129,5 @@ jobs:
         DRAMA_DIRECT_WORKER_MODE=${{ vars.DRAMA_DIRECT_WORKER_MODE || 'false' }}
         DRAMA_CANONICAL_READS=${{ vars.DRAMA_CANONICAL_READS || 'false' }}
         DRAMA_CALLBACK_SECRET=${{ secrets.DRAMA_CALLBACK_SECRET }}
+        TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}
