@@ -3,6 +3,7 @@ pub(crate) mod ai_model_repository;
 pub mod aipub_repository;
 pub(crate) mod campaign_repository;
 pub mod crawler_repository;
+pub mod dm_auto_reply_repository;
 pub mod login_log_repository;
 pub mod material_folder_repository;
 pub mod material_repository;

@@ -35,6 +35,7 @@ pub mod template_service;
 pub mod vidu_pricing;
 pub mod vidu_validation;
 // pub mod tikhub_client; // Replaced by laozhang_client
+pub mod dm_auto_reply_service;
 pub mod drama_billing;
 pub mod drama_facade;
 pub mod drama_private_assets_service;
